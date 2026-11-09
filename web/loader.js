@@ -6,6 +6,7 @@ const copyCommand = document.querySelector('#copy-command');
 const menuItems = [...document.querySelectorAll('.menu-item')];
 const menuHint = document.querySelector('#menu-hint');
 const titleScreen = document.querySelector('.title-screen');
+const inputStatus = document.querySelector('#input-status');
 
 const menuDescriptions = {
   career: 'Build your driver profile and start a career.',
@@ -43,6 +44,57 @@ const wallArt = new Image();
 wallArt.onload = () => titleScreen.classList.add('has-wall-art');
 wallArt.src = 'wall-art';
 
+const KEY_BITS = {
+  ArrowUp: 1, ArrowDown: 2, ArrowLeft: 4, ArrowRight: 8,
+  Enter: 16, Escape: 32, Shift: 64, ' ': 128
+};
+let inputMemory;
+let inputOffset = 0;
+let inputButtons = 0;
+let inputSequence = 0;
+
+function setKey(event, pressed) {
+  const bit = KEY_BITS[event.key];
+  if (!bit) return;
+  event.preventDefault();
+  inputButtons = pressed ? inputButtons | bit : inputButtons & ~bit;
+  writeInput();
+}
+
+function writeInput() {
+  if (!inputMemory) return;
+  const view = new DataView(inputMemory.buffer);
+  view.setUint32(inputOffset, inputButtons, true);
+  view.setUint32(inputOffset + 16, ++inputSequence, true);
+}
+
+window.addEventListener('keydown', (event) => setKey(event, true), { passive: false });
+window.addEventListener('keyup', (event) => setKey(event, false), { passive: false });
+window.addEventListener('blur', () => {
+  inputButtons = 0;
+  writeInput();
+});
+
+function pollGamepad() {
+  if (!inputMemory) return;
+  const pad = navigator.getGamepads?.().find(Boolean);
+  const view = new DataView(inputMemory.buffer);
+  if (!pad) {
+    view.setUint16(inputOffset + 14, 0, true);
+    requestAnimationFrame(pollGamepad);
+    return;
+  }
+  const axis = (value) => Math.max(-1, Math.min(1, value || 0));
+  view.setInt16(inputOffset + 8, axis(pad.axes[0]) * 32767, true);
+  view.setInt16(inputOffset + 10, Math.max(0, -axis(pad.axes[1])) * 32767, true);
+  view.setInt16(inputOffset + 12, Math.max(0, axis(pad.axes[1])) * 32767, true);
+  view.setUint16(inputOffset + 14, 1, true);
+  view.setUint32(inputOffset + 4, pad.buttons.reduce(
+    (bits, button, index) => button.pressed ? bits | (1 << index) : bits, 0), true);
+  view.setUint32(inputOffset + 16, ++inputSequence, true);
+  requestAnimationFrame(pollGamepad);
+}
+
 async function load() {
   try {
     const game = await fetch('game.json');
@@ -56,6 +108,14 @@ async function load() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = await response.arrayBuffer();
     const { instance } = await WebAssembly.instantiate(bytes);
+    if (instance.exports.memory && instance.exports.prostreet_input_ptr) {
+      inputMemory = instance.exports.memory;
+      inputOffset = instance.exports.prostreet_input_ptr();
+      inputStatus.textContent = 'KEYBOARD / GAMEPAD READY';
+      pollGamepad();
+    } else {
+      inputStatus.textContent = 'INPUT BRIDGE UNAVAILABLE';
+    }
     const count = instance.exports.prostreet_diagnostic();
     moduleStatus.textContent = `${count.toLocaleString()} FUNCTIONS LOADED`;
     launch.disabled = false;

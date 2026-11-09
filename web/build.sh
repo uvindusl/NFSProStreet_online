@@ -60,6 +60,7 @@ echo "web/build.sh: compiling browser host"
 "$CC" $CFLAGS -c web/host.c -o "$OBJ/host.o"
 "$CC" $CFLAGS -c runtime/s2_import_dispatch.c -o "$OBJ/s2_import_dispatch.o"
 "$CC" $CFLAGS -c runtime/web/gpu_web.c -o "$OBJ/gpu_web.o"
+"$CC" $CFLAGS -c runtime/web/input_web.c -o "$OBJ/input_web.o"
 
 echo "web/build.sh: linking diagnostic module"
 "$CC" $TARGET $OPT -o "$OUT/prostreet.wasm" \
@@ -67,6 +68,8 @@ echo "web/build.sh: linking diagnostic module"
   -Wl,--no-entry -Wl,--export-memory \
   -Wl,--export=prostreet_diagnostic \
   -Wl,--export=prostreet_status \
+  -Wl,--export=prostreet_input_ptr \
+  -Wl,--export=prostreet_input_size \
   -Wl,--initial-memory=67108864 -Wl,--max-memory=2147483648 \
   -Wl,-z,stack-size=1048576 \
   -lm
