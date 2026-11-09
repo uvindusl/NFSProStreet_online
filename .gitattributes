@@ -1,0 +1,15 @@
+# everything is text unless it is a game/build artifact (which is never tracked)
+* text=auto eol=lf
+
+*.c   text
+*.h   text
+*.py  text
+*.sh  text
+*.md  text
+
+# binary, in case one ever shows up in a test fixture
+*.png  binary
+*.jpg  binary
+*.webp binary
+*.wasm binary
+*.o    binary

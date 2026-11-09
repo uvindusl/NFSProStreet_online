@@ -1,0 +1,23 @@
+# game files: never in git (bring your own copy)
+game/
+*.exe
+*.dll
+*.bff
+*.bin
+
+# generated from the game
+work/
+out/
+gen/
+
+# the pinned reference checkout (scripts/lift.sh clones it)
+ref-nfsu2-web/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# editor / os
+.DS_Store
+*.swp

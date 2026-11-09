@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in the tools, the runtime or the build is wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not attach the game executable, game data, Microsoft DLLs,
+        generated C, or save files.** Describe the input instead: a function
+        address, an instruction, a file name from a trace is enough.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - lift (lifter, seeds, generated C)
+        - CPU / memory / threads
+        - Win32 / CRT import layer
+        - graphics (D3D9 / D3DX / WebGPU / shaders)
+        - audio / input
+        - website / build / packaging
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: |
+        Guest address and instruction for a trap (`sub_xxxxxxxx` frames are
+        ideal), import/file traces, console output, screenshots. No game files.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `git rev-parse --short HEAD`.
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, CPU, browser, clang version — whichever apply.
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: I have not attached any game or Microsoft file, or generated code.
+          required: true
+        - label: I own a copy of the game (needed to reproduce most issues).
+          required: false

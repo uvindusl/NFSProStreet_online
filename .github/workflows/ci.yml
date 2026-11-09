@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  clean:
+    name: no game files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: check tracked files
+        run: ./scripts/check_repo_clean.sh
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyflakes
+      - name: python
+        run: |
+          python -m pyflakes scripts/*.py
+          python -m py_compile tools/*.py
+      - name: shell syntax
+        run: |
+          for f in scripts/*.sh tools/*.sh; do
+            bash -n "$f"
+          done
+      - name: json
+        run: python -c "import json; json.load(open('config/reference.json'))"

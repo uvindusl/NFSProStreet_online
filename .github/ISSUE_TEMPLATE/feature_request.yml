@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose work that moves a stage gate
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [ROADMAP.md](https://github.com/) first: the stages have gates and
+        the order is deliberate (the D3DX effect framework and shader model 3
+        are the risk). Say which gate this moves.
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Stage
+      options:
+        - S1 — lift completeness
+        - S2 — headless CPU bring-up
+        - S3 — graphics (D3D9 / D3DX / shaders)
+        - S4 — audio and input
+        - S5 — the game (front-end, career, race)
+        - S6 — online
+        - tooling / docs / build
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should happen, and how would we know it worked?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "do nothing" — what breaks without this?
+  - type: checkboxes
+    id: rules
+    attributes:
+      label: Rules
+      options:
+        - label: This does not require shipping game files, Microsoft DLLs or generated code.
+          required: true

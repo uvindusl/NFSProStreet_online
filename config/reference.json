@@ -1,0 +1,56 @@
+{
+  "game": "Need for Speed: ProStreet (PC)",
+  "executable": "nfsps.exe",
+  "version": "1.1 (reference build: SecuROM-stripped image, Dec 2007)",
+  "sha256": "ee8a71c7c1e42923deb728e39a89317645cbcf26fc87cc48d3e07ade4dce2f72",
+  "size": 28739656,
+  "pe": {
+    "machine": "i386",
+    "image_base": "0x00400000",
+    "size_of_image": "0x01b687e2",
+    "entry_point_rva": "0x00428c25",
+    "entry_point_va": "0x00828c25",
+    "entry_point_note": "stock MSVC 2005 _WinMainCRTStartup (call __security_init_cookie; jmp __tmainCRTStartup)",
+    "text_va": "0x00401000",
+    "text_size": "0x00566000",
+    "base_relocations": 0,
+    "imports": 371,
+    "import_dlls": 14
+  },
+  "drm": {
+    "product": "SecuROM 7",
+    "sections": ["ars", "est", "artem", "celare", ".securom"],
+    "action": "ignored: never mapped into the guest; the .text image is clear"
+  },
+  "lift": {
+    "lifter": "th0mk/nfsu2-web tools/lift.py + tools/genall.py (MIT)",
+    "lifter_commit": "9e0230212776f6c9a4d0db30c1963e9730138553",
+    "seed_source": "dwords in non-executable sections pointing into .text, 16-byte aligned",
+    "seeds": 13342,
+    "relocations": 0,
+    "options": { "JTSWITCH": "1", "NSHARD": 32, "OVERRIDE": "", "HOOKS": "" }
+  },
+  "lift_result": {
+    "functions": 27097,
+    "instructions": 1800234,
+    "c_size_mb": 98.1,
+    "lift_failures": 0,
+    "unsupported_sites": 234,
+    "unsupported_sites_reachable_from_entry": 0,
+    "entry_point_va": "0x00828c25",
+    "jump_tables": 570
+  },
+  "graphics": {
+    "d3d9": { "import": "Direct3DCreate9", "shader_models": ["2_0", "2_x", "3_0"] },
+    "d3dx9_34": [
+      "D3DXCreateEffectFromResourceA", "D3DXCreateEffectPool",
+      "D3DXGetVertexShaderProfile", "D3DXGetPixelShaderProfile",
+      "D3DXCreateCubeTextureFromFileInMemory",
+      "D3DXCreateVolumeTextureFromFileInMemory",
+      "D3DXSaveSurfaceToFileA", "D3DXSaveSurfaceToFileInMemory",
+      "D3DXMatrixMultiply", "D3DXMatrixMultiplyTranspose",
+      "D3DXMatrixTranspose", "D3DXMatrixInverse",
+      "D3DXVec3Transform", "D3DXVec4Transform"
+    ]
+  }
+}
