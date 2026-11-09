@@ -3,6 +3,45 @@ const moduleStatus = document.querySelector('#module-status');
 const fileCount = document.querySelector('#file-count');
 const launch = document.querySelector('#launch');
 const copyCommand = document.querySelector('#copy-command');
+const menuItems = [...document.querySelectorAll('.menu-item')];
+const menuHint = document.querySelector('#menu-hint');
+const titleScreen = document.querySelector('.title-screen');
+
+const menuDescriptions = {
+  career: 'Build your driver profile and start a career.',
+  race: 'Race-day mode will be connected after runtime bring-up.',
+  quick: 'Jump straight into a quick local match.',
+  leaderboards: 'Online leaderboards are planned for a later stage.',
+  options: 'Configure display, controls and audio.',
+  setup: 'Check local game data and browser runtime status.',
+  about: 'Open the project build status and credits.'
+};
+
+function selectMenu(index) {
+  const next = Math.max(0, Math.min(menuItems.length - 1, index));
+  menuItems.forEach((item, itemIndex) => {
+    item.classList.toggle('active', itemIndex === next);
+  });
+  menuItems[next].focus({ preventScroll: true });
+  menuHint.textContent = menuDescriptions[menuItems[next].dataset.panel] || '';
+}
+
+menuItems.forEach((item, index) => {
+  item.addEventListener('click', () => selectMenu(index));
+  item.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      selectMenu((index + 1) % menuItems.length);
+    } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+      event.preventDefault();
+      selectMenu((index - 1 + menuItems.length) % menuItems.length);
+    }
+  });
+});
+
+const wallArt = new Image();
+wallArt.onload = () => titleScreen.classList.add('has-wall-art');
+wallArt.src = 'wall-art';
 
 async function load() {
   try {

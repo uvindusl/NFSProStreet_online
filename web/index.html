@@ -37,19 +37,20 @@
       <div class="menu-column">
         <div class="menu-heading"><span>MAIN MENU</span><i></i></div>
         <nav class="game-menu" aria-label="Main menu">
-          <button class="menu-item active" type="button">CAREER</button>
-          <button class="menu-item" type="button">RACE DAY</button>
-          <button class="menu-item" type="button">QUICK MATCH</button>
-          <button class="menu-item" type="button">LEADERBOARDS</button>
-          <button class="menu-item" type="button">OPTIONS</button>
-          <button class="menu-item" type="button">SETUP</button>
-          <button class="menu-item" type="button">ABOUT</button>
+            <button class="menu-item active" type="button" data-panel="career">CAREER</button>
+            <button class="menu-item" type="button" data-panel="race">RACE DAY</button>
+            <button class="menu-item" type="button" data-panel="quick">QUICK MATCH</button>
+            <button class="menu-item" type="button" data-panel="leaderboards">LEADERBOARDS</button>
+            <button class="menu-item" type="button" data-panel="options">OPTIONS</button>
+            <button class="menu-item" type="button" data-panel="setup">SETUP</button>
+            <button class="menu-item" type="button" data-panel="about">ABOUT</button>
         </nav>
         <div class="sub-menu">
           <p>LOCAL GARAGE</p>
           <strong id="data-status">CHECKING DATA</strong>
           <small id="file-count">—</small>
         </div>
+        <p id="menu-hint" class="menu-hint">Select a mode to begin.</p>
         <button id="launch" class="launch-button" type="button" disabled>LOADING RUNTIME</button>
       </div>
       <div class="menu-brand">NEED FOR SPEED <b>PROSTREET</b></div>

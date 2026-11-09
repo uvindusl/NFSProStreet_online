@@ -5,7 +5,8 @@ shell and WASM module, then exposes a filtered view of a user-owned game
 directory through HTTP.
 
 ```sh
-web/start.sh --data "/path/to/Need for Speed ProStreet/app"
+web/start.sh --data "/path/to/Need for Speed ProStreet/app" \
+  --wall-art "/path/to/local-wall-art.jpg"
 ```
 
 Open `http://127.0.0.1:8080/`. The server provides:
@@ -13,8 +14,10 @@ Open `http://127.0.0.1:8080/`. The server provides:
 * `/game.json` — a manifest of allowed game files;
 * `/data/<path>` — case-insensitive, read-only game-file access;
 * `/prostreet.wasm` — the module from `out/web/`.
+* `/wall-art` — an optional local image supplied with `--wall-art`.
 
 The current WASM module is still diagnostic and does not execute the game or
 request `/data` files yet. This host is the foundation for the S2 runtime
 integration; later it can be replaced or fronted by a Rust server for HTTPS
-and multiplayer deployment.
+and multiplayer deployment. Wall art is intentionally supplied outside the
+repository and is never committed.

@@ -113,10 +113,11 @@ class Handler(SimpleHTTPRequestHandler):
     server_version = "ProStreetLocal/0.1"
 
     def __init__(self, *args, web_root: Path, runtime_root: Path,
-                 game_root: Path, **kwargs):
+                 game_root: Path, wall_art: Path | None, **kwargs):
         self.web_root = web_root
         self.runtime_root = runtime_root
         self.game_root = game_root
+        self.wall_art = wall_art
         super().__init__(*args, directory=str(web_root), **kwargs)
 
     def do_GET(self) -> None:
@@ -124,6 +125,9 @@ class Handler(SimpleHTTPRequestHandler):
         path = unquote(parsed.path)
         if path == "/game.json":
             self.send_json({"version": 1, "files": walk_game(self.game_root)})
+            return
+        if path == "/wall-art":
+            self.send_wall_art()
             return
         if path.startswith("/data/"):
             self.send_game_file(path[6:])
@@ -179,6 +183,23 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_wall_art(self) -> None:
+        if self.wall_art is None or not self.wall_art.is_file():
+            self.send_error(404, "wall art not configured")
+            return
+        try:
+            body = self.wall_art.read_bytes()
+        except OSError:
+            self.send_error(404, "wall art unavailable")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(self.wall_art.name)[0]
+                        or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, fmt: str, *args: object) -> None:
         print("%s - %s" % (self.address_string(), fmt % args))
 
@@ -190,6 +211,8 @@ def main() -> None:
     parser.add_argument("--web-root", type=Path,
                         default=Path(__file__).resolve().parent)
     parser.add_argument("--http-port", type=int, default=8080)
+    parser.add_argument("--wall-art", type=Path,
+                        help="optional local image served as /wall-art")
     args = parser.parse_args()
 
     game_root = real_path(args.data)
@@ -197,11 +220,14 @@ def main() -> None:
         parser.error("--data must contain nfsps.exe")
     web_root = real_path(args.web_root)
     runtime_root = web_root.parent / "out" / "web"
+    wall_art = real_path(args.wall_art) if args.wall_art else None
+    if wall_art and not wall_art.is_file():
+        parser.error("--wall-art must be an existing image file")
     server = ThreadingHTTPServer(
         ("127.0.0.1", args.http_port),
         lambda *handler_args: Handler(
             *handler_args, web_root=web_root, runtime_root=runtime_root,
-            game_root=game_root
+            game_root=game_root, wall_art=wall_art
         ),
     )
     print(f"Serving ProStreet at http://127.0.0.1:{args.http_port}/")
