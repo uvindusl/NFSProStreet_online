@@ -1,5 +1,100 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>Need for Speed: ProStreet in the browser</title>
-<p id="status">Loading game data…</p>
-<script type="module" src="./loader.js"></script>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#090a0d">
+  <title>ProStreet // Web</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="page-noise" aria-hidden="true"></div>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="ProStreet Web home">
+      <span class="brand-mark">PS</span>
+      <span><strong>PROSTREET</strong><small>WEB RECOMPILATION</small></span>
+    </a>
+    <span class="build-tag">LOCAL BUILD // S2</span>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">THE STREET IS YOURS</p>
+        <h1>Built for speed.<br><em>Rebuilt for the web.</em></h1>
+        <p class="lede">
+          A browser-native reimplementation of Need for Speed: ProStreet.
+          Bring your own game files and run the experience locally.
+        </p>
+        <div class="hero-actions">
+          <button id="launch" class="button button-primary" type="button" disabled>
+            <span class="button-light"></span>Loading runtime
+          </button>
+          <a class="button button-quiet" href="#setup">How to set up <span>↓</span></a>
+        </div>
+      </div>
+      <div class="hero-badge" aria-hidden="true">
+        <span class="badge-ring"></span>
+        <span class="badge-number">08</span>
+        <span class="badge-label">S2<br>BRING-UP</span>
+      </div>
+    </section>
+
+    <section class="status-grid" aria-label="Local server status">
+      <article class="status-card">
+        <span class="status-icon status-icon-live"></span>
+        <div><small>GAME DATA</small><strong id="data-status">Checking local server</strong></div>
+        <span id="file-count" class="status-value">—</span>
+      </article>
+      <article class="status-card">
+        <span class="status-icon"></span>
+        <div><small>WASM RUNTIME</small><strong id="module-status">Waiting for module</strong></div>
+        <span class="status-value">S2</span>
+      </article>
+      <article class="status-card">
+        <span class="status-icon"></span>
+        <div><small>RENDERER</small><strong>WebGPU integration</strong></div>
+        <span class="status-value status-muted">NEXT</span>
+      </article>
+    </section>
+
+    <section id="setup" class="content-grid">
+      <div class="panel setup-panel">
+        <p class="eyebrow">LOCAL GARAGE</p>
+        <h2>Bring your own copy.</h2>
+        <p>
+          The local server reads your legally owned ProStreet installation and
+          exposes only the game data needed by the browser. Nothing is uploaded.
+        </p>
+        <div class="terminal">
+          <span class="terminal-prompt">$</span>
+          <code>web/start.sh --data "/path/to/ProStreet/app"</code>
+          <button id="copy-command" class="copy-button" type="button" title="Copy command">COPY</button>
+        </div>
+        <ol class="steps">
+          <li><span>01</span><div><strong>Point to your install</strong><small>The folder must contain <code>nfsps.exe</code>.</small></div></li>
+          <li><span>02</span><div><strong>Start the local host</strong><small>Open the address printed by the server.</small></div></li>
+          <li><span>03</span><div><strong>Put the pedal down</strong><small>The runtime will launch here as S2 comes online.</small></div></li>
+        </ol>
+      </div>
+      <div class="panel progress-panel">
+        <div class="panel-heading"><p class="eyebrow">PROJECT STATUS</p><span class="pulse"></span></div>
+        <h2>Under construction.<br><em>Already moving.</em></h2>
+        <p>
+          The executable has been lifted to C and is being brought up
+          headlessly before graphics, audio and input are connected.
+        </p>
+        <div class="progress-track"><span></span></div>
+        <div class="progress-meta"><span>S1 // LIFT COMPLETE</span><strong>S2 // RUNTIME</strong><span>S3 // GRAPHICS</span></div>
+        <a class="text-link" href="https://github.com/uvindusl/NFSProStreet_online" target="_blank" rel="noreferrer">View the build log <span>↗</span></a>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>PROSTREET WEB // COMMUNITY PROJECT</span>
+    <span>NOT AFFILIATED WITH ELECTRONIC ARTS</span>
+  </footer>
+  <script type="module" src="./loader.js"></script>
+</body>
+</html>

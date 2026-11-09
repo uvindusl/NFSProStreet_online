@@ -5,7 +5,7 @@ shell and WASM module, then exposes a filtered view of a user-owned game
 directory through HTTP.
 
 ```sh
-web/start.sh --data "/path/to/Need for Speed ProStreet"
+web/start.sh --data "/path/to/Need for Speed ProStreet/app"
 ```
 
 Open `http://127.0.0.1:8080/`. The server provides:

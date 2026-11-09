@@ -13,15 +13,27 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 GAME_ENTRIES = {
     "nfsps.exe",
+    "airacelines",
     "cars",
+    "credits",
+    "dat.bin",
     "frontend",
     "global",
+    "languages",
+    "memcard",
+    "mini_maps",
     "movies",
     "nis",
+    "online",
     "pfdata",
+    "pb",
+    "scripts",
     "sound",
     "speech",
+    "subtitles",
     "tracks",
+    "server.cfg",
+    "server.dll",
 }
 
 
