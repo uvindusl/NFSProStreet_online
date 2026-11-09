@@ -7,6 +7,7 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -154,16 +155,43 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             size = path.stat().st_size
             with path.open("rb") as stream:
-                self.send_response(200)
+                start, end = self.parse_range(self.headers.get("Range"), size)
+                stream.seek(start)
+                length = end - start + 1
+                self.send_response(206 if start or end != size - 1 else 200)
                 self.send_header("Content-Type", mimetypes.guess_type(path.name)[0]
                                  or "application/octet-stream")
-                self.send_header("Content-Length", str(size))
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                if start or end != size - 1:
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
-                while chunk := stream.read(1024 * 1024):
+                remaining = length
+                while remaining and (chunk := stream.read(min(1024 * 1024, remaining))):
                     self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except ValueError:
+            self.send_error(416, "range not satisfiable")
         except OSError:
             self.send_error(404, "game file unavailable")
+
+    @staticmethod
+    def parse_range(value: str | None, size: int) -> tuple[int, int]:
+        if size <= 0 or not value:
+            return 0, max(0, size - 1)
+        match = re.fullmatch(r"bytes=(\d*)-(\d*)", value.strip())
+        if not match:
+            raise ValueError("invalid range")
+        first, last = match.groups()
+        if not first:
+            length = min(int(last), size)
+            return size - length, size - 1
+        start = int(first)
+        end = min(int(last), size - 1) if last else size - 1
+        if start >= size or start > end:
+            raise ValueError("range outside file")
+        return start, end
 
     def send_runtime_file(self, name: str) -> None:
         path = self.runtime_root / name
