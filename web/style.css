@@ -264,6 +264,7 @@ footer { display: flex; justify-content: space-between; padding: 18px 0 30px; bo
   position: absolute; inset: 0; background: repeating-linear-gradient(135deg, transparent 0 56px, #ffffff08 57px 59px); content: "";
 }
 .menu-art { position: relative; min-height: 470px; overflow: hidden; background: radial-gradient(ellipse at 50% 80%, #aeb9c4 0 3%, transparent 30%), linear-gradient(170deg, transparent 42%, #121820 43% 63%, #cbd0d1 64% 67%, #3b4149 68%); }
+.menu-art canvas { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; opacity: .14; pointer-events: none; }
 .menu-art::after { position: absolute; right: -5%; bottom: 16%; width: 80%; height: 3px; background: #a8ef00; box-shadow: 0 12px #fff, 0 24px #242a31; content: ""; transform: rotate(-7deg); }
 .art-grid { position: absolute; inset: 0; background: linear-gradient(115deg, transparent 45%, #e6e8e766 45.3% 45.7%, transparent 46%), linear-gradient(65deg, transparent 53%, #e6e8e744 53.2% 53.5%, transparent 54%); opacity: .7; }
 .art-streak { position: absolute; width: 75%; height: 18px; background: #d7d9d7; opacity: .4; transform: rotate(-20deg); }

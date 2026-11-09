@@ -7,6 +7,9 @@ const menuItems = [...document.querySelectorAll('.menu-item')];
 const menuHint = document.querySelector('#menu-hint');
 const titleScreen = document.querySelector('.title-screen');
 const inputStatus = document.querySelector('#input-status');
+const gameCanvas = document.querySelector('#game-canvas');
+const rendererStatus = document.querySelector('#module-status');
+import { createBrowserRenderer } from './gpu.js';
 
 const menuDescriptions = {
   career: 'Build your driver profile and start a career.',
@@ -97,6 +100,14 @@ function pollGamepad() {
 
 async function load() {
   try {
+    const renderer = await createBrowserRenderer(gameCanvas);
+    if (!renderer.available) {
+      rendererStatus.textContent = 'WEBGPU UNAVAILABLE';
+    } else {
+      renderer.resize();
+      window.addEventListener('resize', renderer.resize);
+      rendererStatus.textContent = 'WEBGPU READY';
+    }
     const game = await fetch('game.json');
     if (!game.ok) throw new Error(`Game data HTTP ${game.status}`);
     const manifest = await game.json();
