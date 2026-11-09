@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include "decls.h"
+#include "host_abi.h"
 #include "s2_import_dispatch.h"
 
 #include <stdint.h>
@@ -15,6 +16,12 @@ guest_fn_t g_dtab[DISPATCH_TEXT_SIZE];
 static uint32_t g_status;
 static CPU g_cpu;
 CPU *g_cur_cpu;
+static uint32_t g_heap = UINT32_C(0x01f70000);
+
+static inline uint8_t *guest_ptr(uint32_t address)
+{
+    return (uint8_t *)(uintptr_t)address;
+}
 
 typedef struct {
     uint32_t iat;
@@ -84,10 +91,109 @@ void import_init(void)
 
 int import_call(CPU *c, uint32_t index)
 {
-    (void)c;
-    (void)index;
-    g_status = 1;
-    return -1;
+    if (!c || index >= g_imp_count)
+        return -1;
+    const ImpEnt *imp = &g_imp[index];
+    uint32_t args[8] = {0};
+    uint32_t argc = imp->nargs < 0 ? 0u : (uint32_t)imp->nargs;
+    if (argc > 8)
+        return -1;
+    for (uint32_t i = 0; i < argc; ++i)
+        args[i] = MR32(c->esp + 4u + i * 4u);
+
+    uint32_t result = 0;
+    if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+        strcmp(imp->name, "GetCurrentProcessId") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetCurrentThreadId") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetCurrentProcess") == 0) {
+        result = UINT32_MAX;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetCurrentThread") == 0) {
+        result = UINT32_MAX - 1u;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetModuleHandleA") == 0) {
+        result = UINT32_C(0x00400000);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetTickCount") == 0) {
+        result = (uint32_t)nfsu2_now_ms();
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "Sleep") == 0) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "QueryPerformanceCounter") == 0 &&
+               argc == 1) {
+        MR64(args[0]) = (uint64_t)(nfsu2_now_ms() * 1000000.0);
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "QueryPerformanceFrequency") == 0 &&
+               argc == 1) {
+        MR64(args[0]) = UINT64_C(1000000000);
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "InterlockedCompareExchange") == 0 &&
+               argc == 3) {
+        result = MR32(args[0]);
+        if (result == args[2])
+            MR32(args[0]) = args[1];
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "InterlockedExchange") == 0 &&
+               argc == 2) {
+        result = MR32(args[0]);
+        MR32(args[0]) = args[1];
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "InterlockedExchangeAdd") == 0 &&
+               argc == 2) {
+        result = MR32(args[0]);
+        MR32(args[0]) += args[1];
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "InterlockedIncrement") == 0 &&
+               argc == 1) {
+        result = ++MR32(args[0]);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "InterlockedDecrement") == 0 &&
+               argc == 1) {
+        result = --MR32(args[0]);
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "_initterm") == 0 ||
+                strcmp(imp->name, "_initterm_e") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "malloc") == 0 ||
+                strcmp(imp->name, "_aligned_malloc") == 0) &&
+               argc == 1) {
+        result = g_heap;
+        g_heap += (args[0] + 15u) & ~15u;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               strcmp(imp->name, "calloc") == 0 && argc == 2) {
+        result = g_heap;
+        uint32_t bytes = args[0] * args[1];
+        memset(guest_ptr(g_heap), 0, bytes);
+        g_heap += (bytes + 15u) & ~15u;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "free") == 0 ||
+                strcmp(imp->name, "_aligned_free") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               strcmp(imp->name, "memset") == 0 && argc == 3) {
+        memset(guest_ptr(args[0]), args[1], args[2]);
+        result = args[0];
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               strcmp(imp->name, "memcpy") == 0 && argc == 3) {
+        memcpy(guest_ptr(args[0]), guest_ptr(args[1]), args[2]);
+        result = args[0];
+    } else {
+        g_status = 1;
+        return -1;
+    }
+
+    c->eax = result;
+    if (s2_import_convention(imp->dll, imp->name) == S2_IMPORT_STDCALL)
+        c->esp += argc * 4u;
+    return 0;
 }
 
 void guest_exit(int code)
