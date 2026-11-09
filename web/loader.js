@@ -118,6 +118,32 @@ function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 }
 
+function loadPeImage(bytes, memory) {
+  const file = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (file.getUint16(0, true) !== 0x5a4d) throw new Error('nfsps.exe is not PE32');
+  const pe = file.getUint32(0x3c, true);
+  if (file.getUint32(pe, true) !== 0x00004550) throw new Error('invalid PE signature');
+  const sections = file.getUint16(pe + 6, true);
+  const optionalSize = file.getUint16(pe + 20, true);
+  const optional = pe + 24;
+  if (file.getUint16(optional, true) !== 0x10b) throw new Error('nfsps.exe is not 32-bit PE');
+  const imageBase = file.getUint32(optional + 28, true);
+  if (imageBase !== 0x00400000) throw new Error('unexpected PE image base');
+  const headerSize = file.getUint32(optional + 60, true);
+  const sectionTable = optional + optionalSize;
+  const target = new Uint8Array(memory.buffer);
+  target.set(bytes.subarray(0, headerSize), imageBase);
+  for (let index = 0; index < sections; ++index) {
+    const section = sectionTable + index * 40;
+    const virtualAddress = file.getUint32(section + 12, true);
+    const rawSize = file.getUint32(section + 16, true);
+    const rawOffset = file.getUint32(section + 20, true);
+    if (rawSize && rawOffset + rawSize <= bytes.length)
+      target.set(bytes.subarray(rawOffset, rawOffset + rawSize),
+        imageBase + virtualAddress);
+  }
+}
+
 async function load() {
   try {
     const renderer = await createBrowserRenderer(gameCanvas);
@@ -150,6 +176,16 @@ async function load() {
     }
     const count = wasmInstance.exports.prostreet_diagnostic();
     moduleStatus.textContent = `${count.toLocaleString()} FUNCTIONS LOADED`;
+    const exe = await fetch('data/nfsps.exe');
+    if (!exe.ok) throw new Error(`Executable HTTP ${exe.status}`);
+    const image = new Uint8Array(await exe.arrayBuffer());
+    loadPeImage(image, wasmInstance.exports.memory);
+    if (wasmInstance.exports.prostreet_boot) {
+      const bootStatus = wasmInstance.exports.prostreet_boot();
+      moduleStatus.textContent = bootStatus === 0
+        ? 'GAME ENTRY STARTED'
+        : `BOOT STOPPED (${bootStatus})`;
+    }
     launch.disabled = false;
     launch.innerHTML = '<span class="button-light"></span>Runtime diagnostic ready';
     launch.addEventListener('click', () => {

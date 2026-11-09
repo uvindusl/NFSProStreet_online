@@ -68,10 +68,12 @@ echo "web/build.sh: linking diagnostic module"
   -Wl,--no-entry -Wl,--export-memory \
   -Wl,--export=prostreet_diagnostic \
   -Wl,--export=prostreet_status \
+  -Wl,--export=prostreet_boot \
   -Wl,--export=prostreet_input_init \
   -Wl,--export=prostreet_input_ptr \
   -Wl,--export=prostreet_input_size \
   -Wl,--initial-memory=67108864 -Wl,--max-memory=2147483648 \
+  -Wl,--global-base=0x02000000 \
   -Wl,-z,stack-size=1048576 \
   -lm
 
