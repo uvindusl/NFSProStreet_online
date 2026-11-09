@@ -25,7 +25,9 @@ int nfsu2_register(int kind, void *ptr, uint32_t size);
 int nfsu2_register(int kind, void *ptr, uint32_t size);
 #endif
 /* now_ms: current time in milliseconds */
+#if defined(__wasm__)
 __attribute__((import_module("nfsu2"), import_name("now_ms")))
+#endif
 double nfsu2_now_ms(void);
 /* blocked_ms: time spent blocked in the host (file I/O, sleeps) */
 #if defined(__wasm__)

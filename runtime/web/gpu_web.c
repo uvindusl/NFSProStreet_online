@@ -50,7 +50,7 @@ static inline int wait32(int32_t *p, int32_t v, double ms){
  * The guest reads/writes g_mem directly; the host handles synchronization. */
 static inline int32_t ald(int32_t *p){ return *p; }
 static inline void ast(int32_t *p, int32_t v){ *p = v; }
-static inline void wake(int32_t *p){ /* no-op in native; host handles notifications */ }
+static inline void wake(int32_t *p){ (void)p; /* no-op in native; host handles notifications */ }
 static inline int wait32(int32_t *p, int32_t v, double ms){
     /* native: just return immediately (host handles synchronization) */
     (void)p; (void)v; (void)ms;
@@ -145,6 +145,7 @@ static int      g_initial_clear_set = 0;
 /* ---- helper: D3D9 blend state → Gw blend ---- */
 static inline uint32_t d3d9_blend(uint32_t src, uint32_t dst)
 {
+    (void)dst;
     /* Map the most common D3DBLEND values; others fall through to src */
     switch (src) {
     case 2: return 2; /* D3DBLEND_ZERO   */
@@ -307,7 +308,8 @@ void gpu_set_state(const GwState *s)
     g_cur_zid = s->stencil;
     g_cur_tex1 = 0; g_cur_tex2 = 0; g_cur_tex3 = 0;
     g_cur_ps = -1;
-    memcpy(g_cur_psc, s->fog ? s->fog : (float[PSC_N][4]){{0}}, sizeof g_cur_psc);
+    memset(g_cur_psc, 0, sizeof g_cur_psc);
+    memcpy(g_cur_psc[0], s->fog, sizeof s->fog);
     g_cur_aref = s->blend ? 0.0f : 1.0f; /* simplified */
 }
 
@@ -337,7 +339,6 @@ void gpu_upload_texture(uint32_t slot, const uint8_t *pixels, unsigned w, unsign
 void gpu_present(void)
 {
     if (!g_on || !g_inited) return;
-    Buf *b = &g_b[g_cur];
     /* update VSYNC state via host */
     /* the page's game-worker will read g_b[g_cur] and present */
     g_frame_clear = 0;

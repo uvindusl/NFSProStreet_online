@@ -59,6 +59,7 @@ done
 echo "web/build.sh: compiling browser host"
 "$CC" $CFLAGS -c web/host.c -o "$OBJ/host.o"
 "$CC" $CFLAGS -c runtime/s2_import_dispatch.c -o "$OBJ/s2_import_dispatch.o"
+"$CC" $CFLAGS -c runtime/web/gpu_web.c -o "$OBJ/gpu_web.o"
 
 echo "web/build.sh: linking diagnostic module"
 "$CC" $TARGET $OPT -o "$OUT/prostreet.wasm" \
