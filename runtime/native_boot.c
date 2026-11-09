@@ -163,6 +163,19 @@ static S2ImportConvention import_convention(const char *dll)
     return S2_IMPORT_STDCALL;
 }
 
+static int is_data_import(const char *dll, const char *name)
+{
+    if (strcmp(dll, "MSVCR80.dll") != 0)
+        return 0;
+    return strcmp(name, "__initenv") == 0 ||
+           strcmp(name, "__p__commode") == 0 ||
+           strcmp(name, "__p__environ") == 0 ||
+           strcmp(name, "__p__fmode") == 0 ||
+           strcmp(name, "__p__mbctype") == 0 ||
+           strcmp(name, "__p__wctype") == 0 ||
+           strcmp(name, "_iob") == 0;
+}
+
 void import_init(void)
 {
     if (g_import_ready)
@@ -184,8 +197,12 @@ void import_init(void)
             .convention = import_convention(g_imp[i].dll),
         };
         if (mem_is_committed(g_imp[i].iat) &&
-            mem_is_committed(g_imp[i].iat + 3u))
-            MR32(g_imp[i].iat) = S2_IMP_MAGIC | i;
+            mem_is_committed(g_imp[i].iat + 3u)) {
+            if (is_data_import(g_imp[i].dll, g_imp[i].name))
+                MR32(g_imp[i].iat) = 0x00300000u;
+            else
+                MR32(g_imp[i].iat) = S2_IMP_MAGIC | i;
+        }
     }
 }
 

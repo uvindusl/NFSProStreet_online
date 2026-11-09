@@ -20,6 +20,7 @@ int main(int argc, char **argv)
     assert(g_mem != NULL);
     mem_commit(0x0ff00000u, 0x100000u);
     mem_commit(0x00200000u, 0x20000u);
+    mem_commit(0x00300000u, 0x10000u);
     mem_fault_handler_install();
     MR32(0x00200018u) = 0x00210000u;
     MR32(0x00210004u) = 0x0ffffff0u;
