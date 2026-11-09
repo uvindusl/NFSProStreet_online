@@ -79,7 +79,7 @@ game/          your nfsps.exe (+ extracted data); ignored by git
 work/          generated C, seeds, logs; ignored by git
 scripts/       recon, seeds, lift pipeline, audits, repo checks
 tools/         forked x86->C lifter (upstream + ProStreet fixes)
-docs/          binary report, S2 bring-up plan
+docs/          binary report, S2 bring-up plan, mod inventory
 config/        reference executable identity and lift options
 ref-nfsu2-web/ pinned MIT checkout of the reference project (ignored by git)
 AGENTS.md      rules for changing the repository (read this first)
@@ -101,6 +101,7 @@ Microsoft DLLs or generated code in the repo, ever) and be decent to people.
 
 * [TODO.md](TODO.md) — what is done and what is next
 * [AGENTS.md](AGENTS.md) — conventions, pipeline, verification
+* [docs/MODS.md](docs/MODS.md) — the stability mods that define "fixed" for this port
 * [SECURITY.md](SECURITY.md) — how to report a vulnerability privately
 * [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 

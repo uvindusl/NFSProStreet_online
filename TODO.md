@@ -32,8 +32,8 @@ Last updated: 2026-11-10.
       0 lift failures, 570 jump tables
 - [x] Reachability audit (`scripts/classify_traps.py`): **0 traps reachable
       from the entry point**; 234 stubs remain only in dead/data functions
-- [ ] Verify every shard compiles with `clang -O1` after the final lift
-      (`scripts/host_compile_check.sh`) — *run in flight*
+- [x] Verify every shard compiles with `clang -O1` after the final lift
+      (`scripts/host_compile_check.sh`) — 38/38 in 334 s, one benign warning
 - [ ] Ghidra 12.2 headless analysis + address diff against the 27,097 entries;
       classify the extras as data seeds / missing entries
 - [x] `git init` and first source-only commit (nothing from `game/` or `work/`)
@@ -53,7 +53,10 @@ Plan: [docs/S2_BRINGUP.md](docs/S2_BRINGUP.md). Gate: boots headless for N
 frames without trapping, with import and file-open traces comparable to a
 Windows run.
 
-- [ ] Extract the full game data (~7.72 GiB `app/` tree) — *run in flight*
+- [x] Extract the full game data (~7.72 GiB `app/` tree) — `innoextract`, exit 0
+- [x] Inventory the stability mods shipped with the reference install and map
+      every Generic Fix option to what the port must do (docs/MODS.md,
+      scripts/mod_inventory.py)
 - [ ] Adapt nfsu2-web's `runtime/cpu.h`; map the image at `0x400000`
       (no relocations needed); reserve the guest arena above it
 - [ ] TEB / `fs` setup: `fs:[0x18]` PEB, `fs:[0]` SEH chain (used by
