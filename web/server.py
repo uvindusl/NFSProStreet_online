@@ -100,8 +100,10 @@ def walk_game(root: Path) -> list[dict[str, object]]:
 class Handler(SimpleHTTPRequestHandler):
     server_version = "ProStreetLocal/0.1"
 
-    def __init__(self, *args, web_root: Path, game_root: Path, **kwargs):
+    def __init__(self, *args, web_root: Path, runtime_root: Path,
+                 game_root: Path, **kwargs):
         self.web_root = web_root
+        self.runtime_root = runtime_root
         self.game_root = game_root
         super().__init__(*args, directory=str(web_root), **kwargs)
 
@@ -115,7 +117,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_game_file(path[6:])
             return
         if path in {"/prostreet.wasm", "/prostreet.json"}:
-            self.path = "/out/web" + path
+            self.send_runtime_file(path[1:])
+            return
         super().do_GET()
 
     def send_json(self, value: object) -> None:
@@ -146,6 +149,24 @@ class Handler(SimpleHTTPRequestHandler):
         except OSError:
             self.send_error(404, "game file unavailable")
 
+    def send_runtime_file(self, name: str) -> None:
+        path = self.runtime_root / name
+        if not path.is_file() or path.is_symlink():
+            self.send_error(404, "runtime file not found")
+            return
+        try:
+            body = path.read_bytes()
+        except OSError:
+            self.send_error(404, "runtime file unavailable")
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mimetypes.guess_type(path.name)[0]
+                        or "application/octet-stream")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, fmt: str, *args: object) -> None:
         print("%s - %s" % (self.address_string(), fmt % args))
 
@@ -163,10 +184,12 @@ def main() -> None:
     if not game_root.is_dir() or resolve_game(game_root, "nfsps.exe") is None:
         parser.error("--data must contain nfsps.exe")
     web_root = real_path(args.web_root)
+    runtime_root = web_root.parent / "out" / "web"
     server = ThreadingHTTPServer(
         ("127.0.0.1", args.http_port),
         lambda *handler_args: Handler(
-            *handler_args, web_root=web_root, game_root=game_root
+            *handler_args, web_root=web_root, runtime_root=runtime_root,
+            game_root=game_root
         ),
     )
     print(f"Serving ProStreet at http://127.0.0.1:{args.http_port}/")
