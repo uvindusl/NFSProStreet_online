@@ -1,4 +1,5 @@
 #include "input_proto.h"
+#include "host_abi.h"
 
 #include <stddef.h>
 
@@ -9,6 +10,18 @@
 #endif
 
 static volatile NfspsInputState g_input;
+
+_Static_assert(sizeof(NfspsInputState) == 20, "input mailbox ABI changed");
+
+void prostreet_input_reset(void);
+
+WASM_EXPORT("prostreet_input_init")
+int prostreet_input_init(void)
+{
+    prostreet_input_reset();
+    return nfsu2_register(HOST_KIND_INPUT, (void *)&g_input,
+                          (uint32_t)sizeof g_input);
+}
 
 WASM_EXPORT("prostreet_input_ptr")
 uintptr_t prostreet_input_ptr(void)

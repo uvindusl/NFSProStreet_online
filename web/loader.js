@@ -55,6 +55,26 @@ let inputMemory;
 let inputOffset = 0;
 let inputButtons = 0;
 let inputSequence = 0;
+let wasmInstance;
+const HOST_KIND_INPUT = 3;
+
+const hostImports = {
+  register(kind, ptr, size) {
+    const memory = wasmInstance?.exports.memory;
+    if (!memory || kind !== HOST_KIND_INPUT || size < 20 ||
+        ptr + size > memory.buffer.byteLength) return -1;
+    inputMemory = wasmInstance.exports.memory;
+    inputOffset = ptr;
+    inputStatus.textContent = 'KEYBOARD / GAMEPAD READY';
+    return 0;
+  },
+  now_ms() {
+    return performance.now();
+  },
+  blocked_ms() {
+    return 0;
+  }
+};
 
 function setKey(event, pressed) {
   const bit = KEY_BITS[event.key];
@@ -118,16 +138,17 @@ async function load() {
     const response = await fetch('prostreet.wasm');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = await response.arrayBuffer();
-    const { instance } = await WebAssembly.instantiate(bytes);
-    if (instance.exports.memory && instance.exports.prostreet_input_ptr) {
-      inputMemory = instance.exports.memory;
-      inputOffset = instance.exports.prostreet_input_ptr();
-      inputStatus.textContent = 'KEYBOARD / GAMEPAD READY';
+    const result = await WebAssembly.instantiate(bytes, { nfsu2: hostImports });
+    wasmInstance = result.instance;
+    if (wasmInstance.exports.memory && wasmInstance.exports.prostreet_input_init) {
+      if (wasmInstance.exports.prostreet_input_init() !== 0) {
+        throw new Error('WASM input mailbox registration failed');
+      }
       pollGamepad();
     } else {
       inputStatus.textContent = 'INPUT BRIDGE UNAVAILABLE';
     }
-    const count = instance.exports.prostreet_diagnostic();
+    const count = wasmInstance.exports.prostreet_diagnostic();
     moduleStatus.textContent = `${count.toLocaleString()} FUNCTIONS LOADED`;
     launch.disabled = false;
     launch.innerHTML = '<span class="button-light"></span>Runtime diagnostic ready';

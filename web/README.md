@@ -21,3 +21,8 @@ request `/data` files yet. This host is the foundation for the S2 runtime
 integration; later it can be replaced or fronted by a Rust server for HTTPS
 and multiplayer deployment. Wall art is intentionally supplied outside the
 repository and is never committed.
+
+The current input slice registers the `NfspsInputState` mailbox through the
+`nfsu2.register` WASM import. Keyboard and gamepad events update that shared
+block; DirectInput8 is not exposed yet because the lifted game has not reached
+the full Win32/COM import layer.
