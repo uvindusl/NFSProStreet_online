@@ -1,10 +1,12 @@
-/* Guest memory: 4 GiB reserved PROT_NONE, the regions in use committed.
+/* Guest memory: 4 GiB reserved in wasm linear memory (base 0), or PROT_NONE
+ * in the native host build.  The wasm linear memory is provided by the host
+ * (wasm-ld --global-base=GUEST_END).  In both builds the guest 32-bit address
+ * a maps to host address g_mem[a] (one instruction: ldr w0, [x_a]).
  *
- * The image is mapped at its preferred base 0x00400000.  ProStreet has no
- * base relocations, so nothing ever has to move.  Section contents are copied
- * from the file; pages are committed per section, which means the holes
- * between sections (and the SecuROM sections, see below) stay unmapped and a
- * stray pointer into them faults at once instead of reading zeros.
+ * DRM sections (ars, est, artem, celare, .securom) are never committed; they
+ * stay PROT_NONE and a stray pointer into them faults at once instead of reading
+ * zeros.  This list must stay in step with docs/BINARY_REPORT.md and
+ * config/reference.json.
  */
 #define _GNU_SOURCE
 
@@ -15,9 +17,11 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
+/* ---------- wasm / native shared ---------- */
 uint8_t *g_mem;
 uint8_t g_cbits[1u << 15];
 CPU *g_cur_cpu;
@@ -44,7 +48,7 @@ static uint8_t g_signal_stack[64u << 10];
  * copies, commits, reads or executes them.  Keep this list in step with
  * docs/BINARY_REPORT.md and config/reference.json. */
 static const char *const g_drm_sections[] = {
-    "ars", "est", "artem", "celare", "securom", NULL
+    "ars", "est", "artem", "celare", ".securom", NULL
 };
 
 static int is_drm_section(const char *name)
@@ -53,7 +57,6 @@ static int is_drm_section(const char *name)
         name++;
     for (const char *const *p = g_drm_sections; *p; p++) {
         const char *a = name, *b = *p;
-        /* exact match, case-insensitive, leading dots ignored */
         while (*a && *b) {
             char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
             char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
@@ -82,6 +85,18 @@ static void fail(const char *what)
     fprintf(stderr, "[mem] %s: %s\n", what, strerror(errno));
 }
 
+/* ---------- wasm: reserve the wasm linear memory ---------- */
+#ifdef __wasm__
+void mem_init(void)
+{
+    if (g_mem_reserved)
+        return;
+    /* g_mem is already wired by the wasm host to point at the linear memory.
+     * We just mark it reserved so subsequent commits are allowed. */
+    g_mem_reserved = 1;
+}
+#else
+/* Native: mmap 4 GiB PROT_NONE, then mprotect committed pages. */
 void mem_init(void)
 {
     if (g_mem_reserved)
@@ -98,7 +113,9 @@ void mem_init(void)
     memset(g_cbits, 0, sizeof(g_cbits));
     g_mem_reserved = 1;
 }
+#endif
 
+/* ---------- commit guest pages ---------- */
 void mem_commit(uint32_t addr, uint32_t size)
 {
     static int warned;
@@ -106,25 +123,34 @@ void mem_commit(uint32_t addr, uint32_t size)
         fprintf(stderr, "[mem] mem_commit before mem_init\n");
         abort();
     }
-    if ((uint64_t)addr + size > GSZ) {
+    /* In wasm, mprotect on linear memory just makes pages RW; in native it
+     * changes PROT_NONE pages to PROT_READ|PROT_WRITE. */
+    uint32_t lo = addr & ~(MEM_PAGE_SIZE - 1u);
+    uint64_t hi = ((uint64_t)addr + size + MEM_PAGE_SIZE - 1) & ~(uint64_t)(MEM_PAGE_SIZE - 1);
+#ifdef __wasm__
+    /* wasm: just record the bitmap; the memory is already RW-zero. */
+    if (hi > GSZ)
+        hi = GSZ;
+    for (uint64_t page = lo >> MEM_PAGE_SHIFT; page < hi >> MEM_PAGE_SHIFT; ++page)
+        g_cbits[page >> 3] |= (uint8_t)(1u << (page & 7));
+#else
+    if (hi > GSZ) {
         if (!warned++) {
             fprintf(stderr, "[mem] commit 0x%08x+%u beyond the guest address space: ignored\n",
                     addr, size);
         }
         return;
     }
-    uint32_t lo = addr & ~(MEM_PAGE_SIZE - 1u);
-    uint64_t hi = ((uint64_t)addr + size + MEM_PAGE_SIZE - 1) & ~(uint64_t)(MEM_PAGE_SIZE - 1);
-    if (hi > GSZ)
-        hi = GSZ;
     if (mprotect(g_mem + lo, (size_t)(hi - lo), PROT_READ | PROT_WRITE) != 0) {
         fail("unable to commit guest memory");
         abort();
     }
     for (uint64_t page = lo >> MEM_PAGE_SHIFT; page < hi >> MEM_PAGE_SHIFT; ++page)
         g_cbits[page >> 3] |= (uint8_t)(1u << (page & 7));
+#endif
 }
 
+/* ---------- read the PE file ---------- */
 static int read_file(const char *path, uint8_t **data_out, size_t *size_out)
 {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
@@ -166,15 +192,22 @@ static int read_file(const char *path, uint8_t **data_out, size_t *size_out)
     return 0;
 }
 
+/* ---------- load a PE32 image at 0x00400000 ---------- */
 int mem_load_pe(const char *path)
 {
     uint8_t *file = NULL;
     size_t file_size = 0;
     if (!path)
         return -1;
+#ifdef __wasm__
     mem_init();
     if (!g_mem_reserved)
         return -1;
+#else
+    mem_init();
+    if (!g_mem_reserved)
+        return -1;
+#endif
     if (read_file(path, &file, &file_size) != 0)
         return -1;
 
@@ -203,7 +236,7 @@ int mem_load_pe(const char *path)
         }
         const uint8_t *opt = nt + 24;
         if (rd16(opt) != PE32) {
-            fprintf(stderr, "[mem] %s: PE32+ image rejected\n", path);
+            fprintf(stderr, "[mem] %s: PE32 image rejected\n", path);
             break;
         }
         uint32_t preferred = rd32(opt + 28);
@@ -228,11 +261,12 @@ int mem_load_pe(const char *path)
             break;
         }
 
+        /* In wasm the image is copied into the wasm linear memory at IMAGE_BASE.
+         * In native it is copied into the mmap'd g_mem at IMAGE_BASE. */
         mem_commit(IMAGE_BASE, headers_size);
         memcpy(g_mem + IMAGE_BASE, file, headers_size);
 
         const uint8_t *section = opt + optional_size;
-        uint32_t loaded_end = IMAGE_BASE + headers_size;
         unsigned loaded = 0, skipped = 0;
         for (uint16_t i = 0; i < sections; ++i, section += SECTION_HEADER_SIZE) {
             char name[9];
@@ -262,14 +296,10 @@ int mem_load_pe(const char *path)
             memset(g_mem + IMAGE_BASE + va, 0, span);
             if (raw_size)
                 memcpy(g_mem + IMAGE_BASE + va, file + raw, raw_size);
-            if (IMAGE_BASE + va + span > loaded_end)
-                loaded_end = IMAGE_BASE + va + span;
             loaded++;
             fprintf(stderr, "[mem]   loaded %-8s -> 0x%08x  %u bytes\n",
                     name[0] ? name : "<unnamed>", IMAGE_BASE + va, raw_size);
         }
-        if (loaded_end > IMAGE_BASE + image_size)
-            loaded_end = IMAGE_BASE + image_size;
         result = 0;
         fprintf(stderr, "[mem] loaded %s: base 0x%08x, image %u bytes, %u sections "
                         "committed, %u DRM sections skipped\n",
@@ -280,6 +310,7 @@ done:
     return result;
 }
 
+/* ---------- fault handler ---------- */
 static void mem_fault(int sig, siginfo_t *info, void *context)
 {
     (void)context;
@@ -308,6 +339,7 @@ static void mem_fault(int sig, siginfo_t *info, void *context)
     _exit(128 + sig);
 }
 
+/* ---------- alternate signal stack ---------- */
 void mem_altstack_install(void)
 {
     stack_t stack = {
@@ -319,6 +351,7 @@ void mem_altstack_install(void)
         fail("unable to install signal alternate stack");
 }
 
+/* ---------- fault handler installation ---------- */
 void mem_fault_handler_install(void)
 {
     struct sigaction action;
