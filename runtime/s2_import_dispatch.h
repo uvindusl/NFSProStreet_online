@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define S2_IMP_MAGIC UINT32_C(0xF0000000)
+#define S2_IMPORT_MAX_ARGS 64u
 
 typedef enum {
     S2_IMPORT_CDECL,
@@ -17,6 +18,10 @@ typedef struct {
     uint32_t arity;
     S2ImportConvention convention;
 } S2ImportEntry;
+
+/* The PE import directory does not carry arity or calling convention.  Keep
+ * this policy in the ABI layer so native and wasm bind the same 371 imports. */
+S2ImportConvention s2_import_convention(const char *dll, const char *name);
 
 typedef struct {
     uint32_t esp;

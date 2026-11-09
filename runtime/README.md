@@ -8,7 +8,9 @@ Current pieces:
 
 * `cpu.h` — CPU and guest-memory contract shared with the lifted C.
 * `mem.c` — sparse native guest address space and PE image loader.
-* `s2_import_dispatch.*` — import ABI validation and dispatch boundary.
+* `s2_import_dispatch.*` — wasm-safe import ABI validation and dispatch
+  boundary; it binds the 371-entry table's arity and DLL calling-convention
+  policy, and logs unsupported imports without pretending to implement them.
 * `file_layer.*` — safe case-insensitive game-data paths and open tracing.
 * `native_boot.c` — diagnostic native entry-point harness.
 

@@ -153,16 +153,6 @@ static void import_log(void *opaque, const char *message)
     fprintf(stderr, "%s\n", message);
 }
 
-static S2ImportConvention import_convention(const char *dll)
-{
-    if (!dll)
-        return S2_IMPORT_CDECL;
-    if (strcmp(dll, "MSVCR80.dll") == 0 ||
-        strcmp(dll, "MSVCP80.dll") == 0)
-        return S2_IMPORT_CDECL;
-    return S2_IMPORT_STDCALL;
-}
-
 static int is_data_import(const char *dll, const char *name)
 {
     if (strcmp(dll, "MSVCR80.dll") != 0)
@@ -194,7 +184,7 @@ void import_init(void)
             .dll = g_imp[i].dll,
             .name = g_imp[i].name,
             .arity = (uint32_t)(g_imp[i].nargs < 0 ? 0 : g_imp[i].nargs),
-            .convention = import_convention(g_imp[i].dll),
+            .convention = s2_import_convention(g_imp[i].dll, g_imp[i].name),
         };
         if (mem_is_committed(g_imp[i].iat) &&
             mem_is_committed(g_imp[i].iat + 3u)) {
