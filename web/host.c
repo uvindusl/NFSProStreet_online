@@ -23,6 +23,24 @@ static inline uint8_t *guest_ptr(uint32_t address)
     return (uint8_t *)(uintptr_t)address;
 }
 
+static uint32_t guest_string(uint32_t address, const char *text, uint32_t cap)
+{
+    uint32_t length = (uint32_t)strlen(text);
+    if (length + 1u > cap)
+        length = cap - 1u;
+    memcpy(guest_ptr(address), text, length);
+    guest_ptr(address)[length] = '\0';
+    return length;
+}
+
+static uint32_t guest_alloc(uint32_t size)
+{
+    uint32_t address = (g_heap + 15u) & ~15u;
+    uint32_t bytes = (size + 15u) & ~15u;
+    g_heap = address + bytes;
+    return address;
+}
+
 typedef struct {
     uint32_t iat;
     const char *dll;
@@ -133,6 +151,107 @@ int import_call(CPU *c, uint32_t index)
                argc == 1) {
         MR64(args[0]) = UINT64_C(1000000000);
         result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetLastError") == 0) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "IsDebuggerPresent") == 0) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetCommandLineA") == 0) {
+        result = UINT32_C(0x01f6f000);
+        guest_string(result, "nfsps.exe", 256);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetStartupInfoA") == 0 && argc == 1) {
+        memset(guest_ptr(args[0]), 0, 68);
+        MR32(args[0]) = 68;
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetVersionExA") == 0 && argc == 1) {
+        uint32_t size = MR32(args[0]);
+        memset(guest_ptr(args[0]), 0, size < 148u ? size : 148u);
+        MR32(args[0]) = size;
+        MR32(args[0] + 4u) = 1;
+        MR32(args[0] + 8u) = 5;
+        MR32(args[0] + 12u) = 0;
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetSystemInfo") == 0 && argc == 1) {
+        memset(guest_ptr(args[0]), 0, 36);
+        MR32(args[0]) = 0;
+        MR32(args[0] + 4u) = 0x1000;
+        MR32(args[0] + 16u) = 1;
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetDriveTypeA") == 0) {
+        result = 3;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetLogicalDrives") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetCurrentDirectoryA") == 0 && argc == 2) {
+        result = guest_string(args[1], "C:\\", args[0]);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetSystemDirectoryA") == 0 && argc == 2) {
+        result = guest_string(args[1], "C:\\Windows", args[0]);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "VirtualAlloc") == 0 && argc == 4) {
+        result = guest_alloc(args[1]);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "VirtualProtect") == 0 && argc == 4) {
+        if (args[3])
+            MR32(args[3]) = 0x40;
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "HeapCreate") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "HeapAlloc") == 0 && argc == 3) {
+        result = guest_alloc(args[2]);
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "HeapFree") == 0 ||
+                strcmp(imp->name, "HeapDestroy") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "TlsAlloc") == 0) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "TlsGetValue") == 0) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "TlsSetValue") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "InitializeCriticalSection") == 0 ||
+                strcmp(imp->name, "DeleteCriticalSection") == 0 ||
+                strcmp(imp->name, "EnterCriticalSection") == 0 ||
+                strcmp(imp->name, "LeaveCriticalSection") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "CreateEventA") == 0 ||
+                strcmp(imp->name, "CreateMutexA") == 0 ||
+                strcmp(imp->name, "CreateSemaphoreA") == 0 ||
+                strcmp(imp->name, "CreateThread") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "WaitForSingleObject") == 0 ||
+                strcmp(imp->name, "WaitForMultipleObjects") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "SetEvent") == 0 ||
+                strcmp(imp->name, "ResetEvent") == 0 ||
+                strcmp(imp->name, "ReleaseMutex") == 0 ||
+                strcmp(imp->name, "ReleaseSemaphore") == 0 ||
+                strcmp(imp->name, "CloseHandle") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "MultiByteToWideChar") == 0 &&
+               argc == 6) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "WideCharToMultiByte") == 0 &&
+               argc == 8) {
+        result = 0;
     } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
                strcmp(imp->name, "InterlockedCompareExchange") == 0 &&
                argc == 3) {
