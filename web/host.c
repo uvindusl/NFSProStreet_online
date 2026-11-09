@@ -112,9 +112,9 @@ int import_call(CPU *c, uint32_t index)
     if (!c || index >= g_imp_count)
         return -1;
     const ImpEnt *imp = &g_imp[index];
-    uint32_t args[8] = {0};
+    uint32_t args[16] = {0};
     uint32_t argc = imp->nargs < 0 ? 0u : (uint32_t)imp->nargs;
-    if (argc > 8)
+    if (argc > 16)
         return -1;
     for (uint32_t i = 0; i < argc; ++i)
         args[i] = MR32(c->esp + 4u + i * 4u);
@@ -304,6 +304,67 @@ int import_call(CPU *c, uint32_t index)
                strcmp(imp->name, "memcpy") == 0 && argc == 3) {
         memcpy(guest_ptr(args[0]), guest_ptr(args[1]), args[2]);
         result = args[0];
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "_control87") == 0 ||
+                strcmp(imp->name, "_controlfp_s") == 0 ||
+                strcmp(imp->name, "__setusermatherr") == 0 ||
+                strcmp(imp->name, "_configthreadlocale") == 0 ||
+                strcmp(imp->name, "_setjmp3") == 0 ||
+                strcmp(imp->name, "_lock") == 0 ||
+                strcmp(imp->name, "_unlock") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "__p__fmode") == 0 ||
+                strcmp(imp->name, "__p__commode") == 0)) {
+        result = UINT32_C(0x01f6f100);
+        MR32(result) = 0;
+    } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
+               (strcmp(imp->name, "_amsg_exit") == 0 ||
+                strcmp(imp->name, "_invalid_parameter_noinfo") == 0 ||
+                strcmp(imp->name, "_purecall") == 0 ||
+                strcmp(imp->name, "_crt_debugger_hook") == 0 ||
+                strcmp(imp->name, "_invoke_watson") == 0 ||
+                strcmp(imp->name, "_cexit") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "WINMM.dll") == 0 &&
+               strcmp(imp->name, "timeGetTime") == 0) {
+        result = (uint32_t)nfsu2_now_ms();
+    } else if (strcmp(imp->dll, "WINMM.dll") == 0 &&
+               (strcmp(imp->name, "timeBeginPeriod") == 0 ||
+                strcmp(imp->name, "timeEndPeriod") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "USER32.dll") == 0 &&
+               (strcmp(imp->name, "ShowCursor") == 0 ||
+                strcmp(imp->name, "ShowWindow") == 0 ||
+                strcmp(imp->name, "UpdateWindow") == 0 ||
+                strcmp(imp->name, "SetCursorPos") == 0 ||
+                strcmp(imp->name, "GetCursorPos") == 0 ||
+                strcmp(imp->name, "GetClientRect") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "USER32.dll") == 0 &&
+               (strcmp(imp->name, "RegisterClassA") == 0 ||
+                strcmp(imp->name, "RegisterClassExA") == 0 ||
+                strcmp(imp->name, "UnregisterClassA") == 0 ||
+                strcmp(imp->name, "DestroyWindow") == 0 ||
+                strcmp(imp->name, "ReleaseDC") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "USER32.dll") == 0 &&
+               (strcmp(imp->name, "GetDC") == 0 ||
+                strcmp(imp->name, "CreateWindowExA") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "USER32.dll") == 0 &&
+               (strcmp(imp->name, "PeekMessageA") == 0 ||
+                strcmp(imp->name, "GetMessageA") == 0 ||
+                strcmp(imp->name, "TranslateMessage") == 0 ||
+                strcmp(imp->name, "DispatchMessageA") == 0)) {
+        result = 0;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               (strcmp(imp->name, "LoadLibraryA") == 0 ||
+                strcmp(imp->name, "LoadLibraryW") == 0)) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+               strcmp(imp->name, "GetProcAddress") == 0) {
+        result = 0;
     } else {
         g_status = 1;
         return -1;
