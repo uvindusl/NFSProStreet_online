@@ -36,7 +36,7 @@ Last updated: 2026-11-10.
       (`scripts/host_compile_check.sh`) — *run in flight*
 - [ ] Ghidra 12.2 headless analysis + address diff against the 27,097 entries;
       classify the extras as data seeds / missing entries
-- [ ] `git init` and first source-only commit (nothing from `game/` or `work/`)
+- [x] `git init` and first source-only commit (nothing from `game/` or `work/`)
 
 ## Open-source readiness
 
