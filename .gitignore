@@ -13,6 +13,9 @@ gen/
 # the pinned reference checkout (scripts/lift.sh clones it)
 ref-nfsu2-web/
 
+# runtime bring-up (S2, not committed until gate cleared)
+runtime/
+
 # python
 .venv/
 __pycache__/

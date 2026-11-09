@@ -34,12 +34,17 @@ Last updated: 2026-11-10.
       from the entry point**; 234 stubs remain only in dead/data functions
 - [x] Verify every shard compiles with `clang -O1` after the final lift
       (`scripts/host_compile_check.sh`) — 38/38 in 334 s, one benign warning
-- [ ] Ghidra 12.2 headless analysis + address diff against the 27,097 entries;
-      classify the extras as data seeds / missing entries
+- [x] Ghidra 12.2 headless analysis + address diff against the 27,097 entries;
+      explained: lift-only entries are data seeds from pointer-into-.text
+      discovery (26,719) and Ghidra-only entries are mostly Unwind functions
+      (390 straddling instructions + 8 clean boundary). 0 traps reachable
+      from the entry point confirmed.
 - [x] `git init` and first source-only commit (nothing from `game/` or `work/`)
 
 ## Open-source readiness
 
+- [x] Published at <https://github.com/uvindusl/NFSProStreet_online> (public,
+      topics, CI badge, GitHub private vulnerability reporting enabled)
 - [x] `AGENTS.md` (repo rules for humans and agents) + `tools/AGENTS.md`
 - [x] `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`
 - [x] `.editorconfig`, `.gitattributes`, MIT `LICENSE`, `THIRD_PARTY.md`

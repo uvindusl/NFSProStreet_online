@@ -1,5 +1,7 @@
 # Need for Speed: ProStreet — in the browser
 
+[![ci](https://github.com/uvindusl/NFSProStreet_online/actions/workflows/ci.yml/badge.svg)](https://github.com/uvindusl/NFSProStreet_online/actions/workflows/ci.yml)
+
 A fan project to run the 2007 PC game **Need for Speed: ProStreet** in a modern
 browser, the way [nfsu2-web](https://github.com/th0mk/nfsu2-web) does for
 Underground 2: translate the game's x86 code to C ahead of time, compile that C
