@@ -35,7 +35,7 @@ extern __attribute__((weak)) uint8_t g_guest[];
 
 /* Wasm linear-memory size: the guest owns [0, GUEST_END). */
 #ifndef GUEST_END
-#define GUEST_END 0x80000000u   /* 2 GiB – enough for ProStreet */
+#define GUEST_END 0x28000000u   /* 640 MiB: the image, its heap and thread stacks */
 #endif
 #define GSZ ((uint64_t)GUEST_END)
 

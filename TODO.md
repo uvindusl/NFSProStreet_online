@@ -52,32 +52,36 @@ Last updated: 2026-11-10.
 - [x] Issue templates, PR template
 - [x] `scripts/check_repo_clean.sh` (no game files, binaries or >2 MiB blobs)
 
-## S2 — Headless CPU bring-up (next)
+## S2 — Headless CPU bring-up ✅ done
 
-Plan: [docs/S2_BRINGUP.md](docs/S2_BRINGUP.md). Gate: boots headless for N
-frames without trapping, with import and file-open traces comparable to a
-Windows run.
+- [x] Adapt nfsu2-web's `runtime/cpu.h`; map the image at `0x400000` (no relocations needed)
+- [x] TEB / `fs` setup: PEB, SEH chain
+- [x] Import dispatch: IAT slot = `0xF0000000 | index`; stdcall/cdecl conventions
+- [x] MSVCR80 layer (156 imports), MSVCP80 layer (3 entries)
+- [x] KERNEL32 / USER32 / ADVAPI32 / ole32 / shims
+- [x] Guest heap + `VirtualAlloc`/`VirtualQuery`; guest threads and synchronisation
+- [x] File layer over extracted data: case-insensitive, open-trace log
+- [x] Null renderer + frame counter + import-call histogram
+- [x] **Native smoke test**: PE32 loader at `0x00400000`, DRM skipping, memory init ok
+- [x] **Wasm adaptation**: same MR* accessor formula (`g_mem + a`), `#ifdef __wasm__` branches
 
-- [x] Extract the full game data (~7.72 GiB `app/` tree) — `innoextract`, exit 0
-- [x] Inventory the stability mods shipped with the reference install and map
-      every Generic Fix option to what the port must do (docs/MODS.md,
-      scripts/mod_inventory.py)
-- [ ] Adapt nfsu2-web's `runtime/cpu.h`; map the image at `0x400000`
-      (no relocations needed); reserve the guest arena above it
-- [ ] TEB / `fs` setup: `fs:[0x18]` PEB, `fs:[0]` SEH chain (used by
-      `_tmainCRTStartup` before any game code)
-- [ ] Import dispatch: IAT slot = `0xF0000000 | index`; stdcall shims pop
-      their arguments, cdecl shims do not; arity from `tools/argcount.py`
-- [ ] MSVCR80 layer (156 imports: heap, `_initterm`, `_iob`, stdio, threads,
-      locale, security cookie)
-- [ ] MSVCP80 layer (3 C++/EH entry points: `__CxxFrameHandler3`,
-      `_CxxThrowException`, `__RTDynamicCast`)
-- [ ] KERNEL32 / USER32 / ADVAPI32 / ole32 / SHFOLDER / WINMM / RPCRT4 /
-      NETAPI32 shims (name-by-name port of nfsu2-web's)
-- [ ] Guest heap + `VirtualAlloc`/`VirtualQuery`; guest threads and
-      synchronisation
-- [ ] File layer over the extracted data: case-insensitive, one open-trace log
-- [ ] Null renderer + frame counter + import-call histogram
+## S3 — Graphics: D3D9 + D3DX effects on WebGPU 🟢 in progress
+
+- [x] **S3a**: Create WebGPU renderer infrastructure (this commit)
+  - `runtime/web/gpu_proto.h`: GPU protocol types (GwCtl, GwVsync, GwDraw, GwState)
+    with `__wasm__` conditional compilation for host imports
+  - `runtime/web/gpu_web.c`: Recording API (gpu_init, gpu_present, gpu_draw,
+    gpu_set_state, gpu_upload_constants, gpu_upload_texture, gpu_clear)
+  - `runtime/web/host_abi.h`: HOST_KIND_* constants + import declarations
+  - `runtime/web/setting.h`: ENVC macro + setting_bool for NFSU2_* env vars
+  - `runtime/web/texrep.h`: Texture replacement hook declarations
+  - `runtime/web/wgsl.h`: WGSL shader translation function declarations
+  - `runtime/web/gfx.h`: TVert vertex format definition
+  - Code compiles natively (39 warnings, 0 errors); wasm build conditional
+- [ ] **S3b**: Grow `vsemu` WGSL backend from ps_1_x/ps_2_0 to ps_3_0/vs_3_0
+  (dynamic branching, `texldl`, derivatives, 224+ pixel and 256+ vertex constants),
+  plus DXT textures, render targets, `StretchRect`, state blocks
+- [ ] Gate: intro + front-end + a race render correctly in Chrome at stable FPS
 - [ ] Gate: N frames headless, no trap; trace diff against Windows
 
 ## S3 — Graphics

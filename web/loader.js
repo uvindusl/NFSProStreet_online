@@ -76,6 +76,56 @@ const hostImports = {
   }
 };
 
+// The module is linked against wasi-libc for the host side of the runtime
+// (its printf/clock/fopen go through these).  The page supplies the same
+// stubs web/boot.mjs uses, so the headless harness and the browser exercise
+// one code path.
+let wasmMemory = null;
+
+function memoryData() {
+  return new Uint8Array(wasmMemory.buffer);
+}
+
+function writeConsole(bytes, fd) {
+  const text = new TextDecoder().decode(bytes);
+  for (const line of text.split('\n')) {
+    if (line) console.log(fd === 2 ? `[game] ${line}` : line);
+  }
+}
+
+const wasiImports = {
+  args_sizes_get(argc, size) {
+    const view = new DataView(wasmMemory.buffer);
+    view.setUint32(argc, 0, true);
+    view.setUint32(size, 0, true);
+    return 0;
+  },
+  args_get() { return 0; },
+  clock_time_get(_id, _precision, out) {
+    const view = new DataView(wasmMemory.buffer);
+    view.setBigUint64(out, BigInt(Math.round(performance.now() * 1e6)), true);
+    return 0;
+  },
+  fd_close() { return 0; },
+  fd_seek() { return 0; },
+  fd_write(fd, iovs, count, written) {
+    const view = new DataView(wasmMemory.buffer);
+    let total = 0;
+    for (let index = 0; index < count; index++) {
+      const at = view.getUint32(iovs + index * 8, true);
+      const length = view.getUint32(iovs + index * 8 + 4, true);
+      writeConsole(memoryData().subarray(at, at + length), fd);
+      total += length;
+    }
+    view.setUint32(written, total, true);
+    return 0;
+  },
+  proc_exit(code) {
+    throw new Error(`guest exited (${code})`);
+  },
+  sched_yield() { return 0; }
+};
+
 function setKey(event, pressed) {
   const bit = KEY_BITS[event.key];
   if (!bit) return;
@@ -118,6 +168,11 @@ function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 }
 
+// DRM sections are never mapped or executed (AGENTS.md hard rule 3).  The
+// .text image is already decrypted; the protection sections are not part of
+// the game.
+const DRM_SECTIONS = new Set(['ars', 'est', 'artem', 'celare', 'securom']);
+
 function loadPeImage(bytes, memory) {
   const file = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (file.getUint16(0, true) !== 0x5a4d) throw new Error('nfsps.exe is not PE32');
@@ -135,6 +190,13 @@ function loadPeImage(bytes, memory) {
   target.set(bytes.subarray(0, headerSize), imageBase);
   for (let index = 0; index < sections; ++index) {
     const section = sectionTable + index * 40;
+    let name = '';
+    for (let c = 0; c < 8 && file.getUint8(section + c); c++)
+      name += String.fromCharCode(file.getUint8(section + c));
+    if (DRM_SECTIONS.has(name.replace(/^\./, '').toLowerCase())) {
+      console.log(`[boot] skipping DRM section ${name}`);
+      continue;
+    }
     const virtualAddress = file.getUint32(section + 12, true);
     const rawSize = file.getUint32(section + 16, true);
     const rawOffset = file.getUint32(section + 20, true);
@@ -164,9 +226,14 @@ async function load() {
     const response = await fetch('prostreet.wasm');
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const bytes = await response.arrayBuffer();
-    const result = await WebAssembly.instantiate(bytes, { nfsu2: hostImports });
+    const result = await WebAssembly.instantiate(bytes, {
+      nfsu2: hostImports,
+      wasi_snapshot_preview1: wasiImports
+    });
     wasmInstance = result.instance;
-    if (wasmInstance.exports.memory && wasmInstance.exports.prostreet_input_init) {
+    wasmMemory = wasmInstance.exports.memory;
+    if (!wasmMemory) throw new Error('module does not export memory');
+    if (wasmInstance.exports.prostreet_input_init) {
       if (wasmInstance.exports.prostreet_input_init() !== 0) {
         throw new Error('WASM input mailbox registration failed');
       }
@@ -181,10 +248,29 @@ async function load() {
     const image = new Uint8Array(await exe.arrayBuffer());
     loadPeImage(image, wasmInstance.exports.memory);
     if (wasmInstance.exports.prostreet_boot) {
-      const bootStatus = wasmInstance.exports.prostreet_boot();
-      moduleStatus.textContent = bootStatus === 0
-        ? 'GAME ENTRY STARTED'
-        : `BOOT STOPPED (${bootStatus})`;
+      // An unsupported import traps on purpose; the diagnostic exports still
+      // read, so the page can name the exact shim that stopped the boot.
+      let bootStatus = 6;
+      try {
+        bootStatus = wasmInstance.exports.prostreet_boot();
+      } catch (error) {
+        if (!(error instanceof WebAssembly.RuntimeError)) throw error;
+        bootStatus = wasmInstance.exports.prostreet_status();
+      }
+      let last = '';
+      if (wasmInstance.exports.prostreet_last_import) {
+        const address = wasmInstance.exports.prostreet_last_import();
+        if (address) {
+          const bytesAt = memoryData().subarray(address, address + 192);
+          const end = bytesAt.indexOf(0);
+          last = new TextDecoder().decode(
+            bytesAt.subarray(0, end < 0 ? bytesAt.length : end));
+        }
+      }
+      moduleStatus.textContent = last && last !== 'none'
+        ? `STOPPED AT ${last}`
+        : `BOOT STATUS ${bootStatus}`;
+      console.log(`[boot] status=${bootStatus} stopped at: ${last || 'none'}`);
     }
     launch.disabled = false;
     launch.innerHTML = '<span class="button-light"></span>Runtime diagnostic ready';
@@ -193,7 +279,7 @@ async function load() {
     }, { once: true });
   } catch (error) {
     dataStatus.textContent = 'Start the local host';
-    moduleStatus.textContent = 'Waiting for runtime';
+    moduleStatus.textContent = String(error?.message || error);
     fileCount.textContent = 'OFFLINE';
     launch.innerHTML = '<span class="button-light"></span>Local host required';
     console.error(error);

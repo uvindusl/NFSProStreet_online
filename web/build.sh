@@ -46,12 +46,17 @@ mkdir -p "$OBJ"
 
 TARGET="--target=wasm32-wasip1-threads -pthread"
 OPT="${OPT:--O2}"
-CFLAGS="$TARGET $OPT -msimd128 -mbulk-memory -mnontrapping-fptoint \
-  -fno-delete-null-pointer-checks -Iruntime -Iwork/gen"
+CFLAGS="$TARGET $OPT -msimd128 -mbulk-memory -mnontrapping-fptoint -mtail-call \
+  -fno-delete-null-pointer-checks -Iruntime -Iruntime/web -Iwork/gen"
 
 echo "web/build.sh: compiling lifted shards"
 for src in work/gen/shard_*.c work/gen/fntab.c work/impargs.c; do
   obj="$OBJ/$(basename "$src" .c).o"
+  # Incremental: the lift only changes when scripts/lift.sh runs.
+  if [ "$obj" -nt "$src" ] && [ "$obj" -nt runtime/cpu.h ] &&
+     [ "$obj" -nt work/gen/decls.h ]; then
+    continue
+  fi
   "$CC" $CFLAGS -Wno-unused-label -Wno-parentheses-equality \
     -c "$src" -o "$obj"
 done
@@ -72,8 +77,8 @@ echo "web/build.sh: linking diagnostic module"
   -Wl,--export=prostreet_input_init \
   -Wl,--export=prostreet_input_ptr \
   -Wl,--export=prostreet_input_size \
-  -Wl,--initial-memory=67108864 -Wl,--max-memory=2147483648 \
-  -Wl,--global-base=0x02000000 \
+  -Wl,--initial-memory=738197504 -Wl,--max-memory=2147483648 \
+  -Wl,--global-base=671088640 \
   -Wl,-z,stack-size=1048576 \
   -lm
 

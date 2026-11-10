@@ -28,7 +28,7 @@
  * g_mem + a is plain integer arithmetic and every MR* is one load/store with
  * the guest displacement in the offset immediate. */
 #define g_mem ((uint8_t *)0)
-#define GUEST_END 0x80000000u
+#define GUEST_END 0x28000000u
 #define GSZ ((uint64_t)GUEST_END)
 #else
 /* Native: 4 GiB reserved PROT_NONE, the regions in use get committed page by page. */
@@ -65,7 +65,7 @@ typedef double   gm_f64;
 #define MR32(a)  (*(gm_u32  *)(g_mem + (uint32_t)(a)))
 #define MR64(a)  (*(gm_u64  *)(g_mem + (uint32_t)(a)))
 #define MRF32(a) (*(gm_f32  *)(g_mem + (uint32_t)(a)))
-#define MRF64(a) (*(gm_f64  *)(g_mem + (uint32_t)(a)));
+#define MRF64(a) (*(gm_f64  *)(g_mem + (uint32_t)(a)))
 
 /* ---------- CPU register file ---------- */
 enum { R_EAX=0,R_ECX,R_EDX,R_EBX,R_ESP,R_EBP,R_ESI,R_EDI };
@@ -125,6 +125,17 @@ typedef struct CPU {
 #endif
 
 /* ---------- flag helpers ---------- */
+/* Bit values of the lifter's flag masks (FLAGS_*_M's M argument).  They are
+ * the x86 EFLAGS positions, so a mask can be built from an instruction's
+ * flag effect table. */
+#define F_CF  0x01u
+#define F_PF  0x02u
+#define F_AF  0x04u
+#define F_ZF  0x08u
+#define F_SF  0x10u
+#define F_OF  0x20u
+#define F_ALL (F_CF|F_PF|F_AF|F_ZF|F_SF|F_OF)
+
 static inline uint32_t parity8(uint32_t v){ v&=0xff; v^=v>>4; v^=v>>2; v^=v>>1; return (~v)&1; }
 
 #define SETZSP_M(res,bits,M) do{ \

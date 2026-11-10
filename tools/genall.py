@@ -37,7 +37,24 @@ def discover_all():
         v=rd32(a)
         if v is not None and L.in_text(v): funcs.add(v); relref[v].append(a)
     md=L.md; cov=bytearray(L.TSZ); q=collections.deque(funcs); seen=set(funcs)
-    while q:
+    push_imm=set()
+    # Every dword in a non-executable section that points into .text,
+    # regardless of alignment.  seed_scan keeps only 16-byte-aligned values
+    # (safe to decode first); the CRT initialiser tables in .rdata hold
+    # entries such as 0x828b43 and 0x828fee that are not aligned, so they
+    # are added after the aligned walk when nothing has covered them.
+    data_ptr=set()
+    drm={'.ars','.est','.artem','.celare','.securom','ars','est','artem','celare','securom'}
+    for s in pe.sections:
+        if s.Characteristics & 0x20000000: continue
+        if s.Name.rstrip(b'\0').decode('latin1').lower() in drm:
+            continue          # never touch the DRM sections (AGENTS.md rule 3)
+        d=s.get_data()
+        for off in range(0,len(d)-3,4):
+            v=struct.unpack_from('<I',d,off)[0]
+            if L.in_text(v): data_ptr.add(v)
+    while True:
+      while q:
         va=q.popleft()
         while True:
             if not L.in_text(va): break
@@ -48,6 +65,12 @@ def discover_all():
             for k in range(i.size):
                 if off+k<L.TSZ: cov[off+k]=1
             m=i.mnemonic; o=i.operands[0] if i.operands else None
+            # push imm32 that lands in .text is a function pointer the code
+            # passes to a helper (callback/CRT table), not a direct call, so
+            # upstream's call/jmp walk never sees it.  Collect now; add the
+            # targets the normal walk did not cover after the queue drains.
+            if m=='push' and o is not None and o.type==X86_OP_IMM and L.in_text(o.imm):
+                push_imm.add(o.imm)
             if m=='call':
                 if o is not None and o.type==X86_OP_IMM and L.in_text(o.imm):
                     fixed.add(o.imm)
@@ -62,6 +85,17 @@ def discover_all():
                 va=i.address+i.size; continue
             if m in ('ret','retf','int3','hlt','ud2'): break
             va=i.address+i.size
+      # Uncovered push targets are real entries; a pushed plain number that
+      # happens to fall in .text is normally covered by an already-decoded
+      # instruction here (13 of 2995 on this binary).  The same applies to
+      # data dwords, which include the unaligned CRT initialiser entries.
+      # Iterate: a new function can push more callbacks.
+      extra=sorted(a for a in (push_imm | data_ptr)
+                   if a not in seen and 0 <= a-L.TVA < L.TSZ
+                   and not cov[a-L.TVA])
+      if not extra: break
+      for a in extra:
+          fixed.add(a); seen.add(a); funcs.add(a); q.append(a)
     return sorted(funcs), fixed, relref
 
 # JTSWITCH=1: a pointer whose every fixup slot lies in a jump table the lifter

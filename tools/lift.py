@@ -15,6 +15,10 @@ Fork of nfsu2-web's tools/lift.py (MIT, see LICENSE.nfsu2-web-MIT) at commit
   * `split_reloc.py` no longer carries Underground 2's hard-coded operand
     rewrites: both images have the same 0x400000 base, so those special cases
     could fire on unrelated ProStreet instructions.
+  * SecuROM stubs: ProStreet's packer replaced some `.text` bodies with
+    `jmp dword ptr [<DRM section cell>]` trampolines.  The DRM sections are
+    never mapped (AGENTS.md rule 3), so those transfers are skipped at lift
+    time: a `call` yields `c->eax = 0`, a `jmp` returns 0 to its caller.
 """
 import sys, struct, collections
 import pefile
@@ -406,9 +410,23 @@ class Lifter:
             self.secs.append((nm,self.IB+s.VirtualAddress,s.Misc_VirtualSize,s.get_data()))
         self.TVA,self.TSZ,self.TDATA = next((va,vs,d) for nm,va,vs,d in self.secs if nm=='.text')
         self.md=Cs(CS_ARCH_X86,CS_MODE_32); self.md.detail=True
+        # SecuROM's protected sections (AGENTS.md rule 3: never map or execute).
+        # .text is decrypted, but the packer also left stubs that jump through a
+        # pointer stored in one of these sections; those transfers are skipped
+        # instead of lifted (see DRM_SKIP in the jmp/call handlers).
+        self.drm=[(va,va+vs) for nm,va,vs,_ in self.secs
+                  if nm.lower().lstrip('.') in ('ars','est','artem','celare','securom')]
+        self.drm_skips=0
         # this module's callees from tools/retpast.txt (a call to one may not come back to the next instruction)
         self.retpast={a for a in _retpast() if self.in_text(a)}
     def in_text(self,a): return self.TVA<=a<self.TVA+self.TSZ
+    def in_drm(self,a): return any(lo<=a<hi for lo,hi in self.drm)
+    def drm_operand(self,op):
+        """True when an operand's address is a DRM-section cell (a SecuROM stub)."""
+        if op.type!=X86_OP_MEM: return False
+        m=op.mem
+        return (not m.base and not m.index and not m.segment
+                and self.in_drm(m.disp & 0xffffffff))
 
     # ---------- operand -> C expression ----------
     def ea(self, m, extra=0):
@@ -710,6 +728,15 @@ class Lifter:
         if m=='xchg':
             return [f"{{ uint32_t _t0={E(0)}, _t1={E(1)}; {W(0,'_t1')} {W(1,'_t0')} }}"]
         if m=='call':
+            if self.drm_operand(o[0]):
+                # `call [DRM cell]`: SecuROM's stub is never run, so the call
+                # returns 0 without pushing/popping (the caller's own cleanup
+                # after the call still applies).
+                self.drm_skips += 1
+                return ["c->eax = 0;   /* SecuROM: call into a DRM section skipped */"]
+            if o[0].type==X86_OP_IMM and self.in_drm(o[0].imm & 0xffffffff):
+                self.drm_skips += 1
+                return ["c->eax = 0;   /* SecuROM: call into a DRM section skipped */"]
             if o[0].type==X86_OP_IMM:
                 t=o[0].imm
                 if not self.in_text(t):
@@ -1852,6 +1879,17 @@ class Lifter:
                     body.append(f"    guest_hook(c, 0x{i.address:x}u);")
                 if m=='jmp':
                     o0=i.operands[0]
+                    if self.drm_operand(o0):
+                        # `jmp [DRM cell]`: a SecuROM trampoline.  Never execute
+                        # it; the thunk returns 0 to its caller (the caller did a
+                        # `call`, whose return address is on the stack).
+                        self.drm_skips += 1
+                        body.append("    c->eax = 0; POP32(c->eip); return;   /* SecuROM: DRM stub skipped */")
+                        continue
+                    if o0.type==X86_OP_IMM and self.in_drm(o0.imm & 0xffffffff):
+                        self.drm_skips += 1
+                        body.append("    c->eax = 0; POP32(c->eip); return;   /* SecuROM: DRM stub skipped */")
+                        continue
                     if o0.type==X86_OP_IMM and self.in_text(o0.imm):
                         body.append(f"    goto L_{o0.imm:08x};"); continue
                     if o0.type==X86_OP_IMM:

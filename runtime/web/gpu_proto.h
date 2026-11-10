@@ -60,6 +60,11 @@ typedef struct {
     uint32_t cull;        /* cull mode (0=none, 1=ccw, 2=cw) */
     uint32_t clear_argb;  /* clear colour ARGB */
     float fog[4];         /* fog colour/parameters */
+    /* HUD state */
+    uint32_t hud_speed;    /* current speed km/h */
+    uint32_t hud_gear;     /* current gear */
+    uint32_t hud_lap_time; /* lap time in ms */
+    uint32_t hud_position; /* position on track */
 } GwState;
 
 /* ---- Host import / export signatures ---- */

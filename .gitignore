@@ -13,6 +13,9 @@ gen/
 # the pinned reference checkout (scripts/lift.sh clones it)
 ref-nfsu2-web/
 
+# downloaded toolchains (wasi-sdk for the browser build)
+deps/
+
 # python
 .venv/
 __pycache__/

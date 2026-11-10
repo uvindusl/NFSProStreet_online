@@ -49,6 +49,34 @@ access ever needs to be redirected at lift time.
 | `repz ret` treated as `ret` | MSVC's aligned-return padding (`rep ret`) |
 | `retpast.txt` emptied | upstream's list is Underground 2 callee addresses; wrong addresses here would corrupt returns |
 
+**`genall.py`:** upstream discovers only `call`/`jmp`/`jcc` targets.
+ProStreet passes thousands of callbacks as `push <imm32>` into a helper
+(e.g. `sub_0095b650` pushes `sub_006f8d60` into `sub_00401000`, which calls it
+once per array element), so those bodies were never lifted and the first
+callback call reached `dispatch_indirect` with no function. The walk now
+collects `push` immediates that land in `.text` and, after the normal walk
+drains, adds those that no decoded instruction already covers (on this binary
+2982 of 2995; the other 13 are plain numbers that happen to fall in `.text`).
+It iterates until no new target appears, and records each as a `fixed` entry.
+The same coverage-filtered rule adds unaligned dwords from non-executable
+sections: `scripts/seed_scan.py` keeps only 16-byte-aligned pointers because
+unaligned ones are unsafe to decode before the aligned walk has established
+instruction coverage, but `.rdata`'s CRT initialiser tables hold entries like
+`0x828b43` and `0x828fee` that are not aligned. The DRM sections are never
+scanned.
+
+**`lift.py` — SecuROM stubs are skipped, not lifted.** SecuROM patched some
+`.text` bodies into stubs that jump through a pointer stored in one of its
+protected sections (`jmp dword ptr [0x19f13d8]`; 2,658 such transfers in this
+image, 2,481 of them inside lifted functions). nfsps.exe's `main` is one of
+them: it starts by calling a trampoline that ends up in `.securom`, so lifting
+it made the runtime jump to an unmapped address and trap. The DRM sections are
+never mapped (AGENTS.md rule 3), so a transfer whose operand is a DRM cell is
+emitted as a skip: a `call` becomes `c->eax = 0` (the caller's cleanup after
+the call still applies), a `jmp` becomes `c->eax = 0; POP32(c->eip); return;`.
+The packed `.text` is already decrypted, so the game does not need the stubs to
+run. Count the sites with `grep -c 'SecuROM:' work/gen/shard_*.c`.
+
 The `lock` prefix strip is safe because the runtime executes guest threads
 under one lock, so a plain read-modify-write already has the ordering the
 guest expects.
