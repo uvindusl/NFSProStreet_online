@@ -57,6 +57,7 @@ let inputButtons = 0;
 let inputSequence = 0;
 let wasmInstance;
 const HOST_KIND_INPUT = 3;
+let browserRenderer;
 
 const hostImports = {
   register(kind, ptr, size) {
@@ -72,6 +73,30 @@ const hostImports = {
     return performance.now();
   },
   blocked_ms() {
+    return 0;
+  },
+  gpu_clear(argb) {
+    if (!browserRenderer?.available) return -1;
+    const color = {
+      r: ((argb >>> 16) & 0xff) / 255,
+      g: ((argb >>> 8) & 0xff) / 255,
+      b: (argb & 0xff) / 255,
+      a: ((argb >>> 24) & 0xff) / 255 || 1
+    };
+    const encoder = browserRenderer.device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{
+        view: browserRenderer.context.getCurrentTexture().createView(),
+        clearValue: color,
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]
+    });
+    pass.end();
+    browserRenderer.device.queue.submit([encoder.finish()]);
+    return 0;
+  },
+  gpu_present() {
     return 0;
   }
 };
@@ -213,6 +238,7 @@ function loadPeImage(bytes, memory) {
 async function load() {
   try {
     const renderer = await createBrowserRenderer(gameCanvas);
+    browserRenderer = renderer;
     if (!renderer.available) {
       rendererStatus.textContent = 'WEBGPU UNAVAILABLE';
     } else {

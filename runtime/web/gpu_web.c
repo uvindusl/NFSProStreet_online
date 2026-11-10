@@ -214,7 +214,7 @@ void gpu_init(void)
 {
     if (g_inited) return;
     g_inited = 1;
-    g_on = 0;
+    g_on = 1;
     g_detached = 0;
     g_ctl = NULL;
     g_vs = NULL;
@@ -339,8 +339,7 @@ void gpu_upload_texture(uint32_t slot, const uint8_t *pixels, unsigned w, unsign
 void gpu_present(void)
 {
     if (!g_on || !g_inited) return;
-    /* update VSYNC state via host */
-    /* the page's game-worker will read g_b[g_cur] and present */
+    nfsu2_gpu_present(NULL, 0, 0);
     g_frame_clear = 0;
     g_clear_argb = 0;
 }
@@ -351,6 +350,7 @@ void gpu_clear(uint32_t argb)
     if (!g_on || !g_inited) return;
     g_clear_argb = argb;
     g_frame_clear = 1;
+    nfsu2_gpu_clear(argb);
 }
 
 /* ---- gpu_report: called from the host's dispatch_report ---- */

@@ -95,9 +95,12 @@ int nfsu2_gpu_device(void);
 #if defined(__wasm__)
 __attribute__((import_module("nfsu2"), import_name("gpu_present")))
 int nfsu2_gpu_present(uint32_t *back_buffer_argb, uint32_t width, uint32_t height);
+__attribute__((import_module("nfsu2"), import_name("gpu_clear")))
+int nfsu2_gpu_clear(uint32_t argb);
 #else
 /* Native build: declare as external */
 int nfsu2_gpu_present(uint32_t *back_buffer_argb, uint32_t width, uint32_t height);
+int nfsu2_gpu_clear(uint32_t argb);
 #endif
 
 /* Report frame timing to the page */
