@@ -132,7 +132,14 @@ const wasiImports = {
     return 0;
   },
   fd_close() { return 0; },
+  fd_fdstat_get() { return 0; },
+  fd_fdstat_set_flags() { return 0; },
+  fd_prestat_get() { return 0; },
+  fd_prestat_dir_name() { return 0; },
+  path_open() { return 0; },
   fd_seek() { return 0; },
+  fd_read() { return 0; },
+  fd_pridevent() { return 0; },
   fd_write(fd, iovs, count, written) {
     const view = new DataView(wasmMemory.buffer);
     let total = 0;
@@ -145,6 +152,7 @@ const wasiImports = {
     view.setUint32(written, total, true);
     return 0;
   },
+  random_get() { return 0; },
   proc_exit(code) {
     throw new Error(`guest exited (${code})`);
   },
