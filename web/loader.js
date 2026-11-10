@@ -206,7 +206,7 @@ function pollGamepad() {
 // the game.
 const DRM_SECTIONS = new Set(['ars', 'est', 'artem', 'celare', 'securom']);
 
-function loadPeImage(bytes, memory) {
+function loadPeImage(bytes, memory, liftedFunctions) {
   const file = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (file.getUint16(0, true) !== 0x5a4d) throw new Error('nfsps.exe is not PE32');
   const pe = file.getUint32(0x3c, true);
@@ -218,8 +218,9 @@ function loadPeImage(bytes, memory) {
   const imageBase = file.getUint32(optional + 28, true);
   if (imageBase !== 0x00400000) throw new Error('unexpected PE image base');
   const entryPoint = file.getUint32(optional + 16, true);
-  if (entryPoint !== 0x00428c25) {
-    throw new Error(`wrong executable build: entry point 0x${entryPoint.toString(16)}, expected 0x428c25`);
+  const expectedEntry = liftedFunctions === 434 ? 0x0016aa080 : 0x00428c25;
+  if (entryPoint !== expectedEntry) {
+    throw new Error(`wrong executable build: entry point 0x${entryPoint.toString(16)}, expected 0x${expectedEntry.toString(16)}`);
   }
   const headerSize = file.getUint32(optional + 60, true);
   const sectionTable = optional + optionalSize;
@@ -290,7 +291,13 @@ async function load() {
     const exe = await fetch(`data/${encodeURIComponent(executable.path)}`);
     if (!exe.ok) throw new Error(`Executable HTTP ${exe.status}`);
     const image = new Uint8Array(await exe.arrayBuffer());
-    loadPeImage(image, wasmInstance.exports.memory);
+    loadPeImage(image, wasmInstance.exports.memory, count);
+    if (count === 434) {
+      throw new Error(
+        'This executable is a packed loader-only build (434 lifted functions); ' +
+        'a full gameplay build requires an already-decrypted, supported ProStreet image.'
+      );
+    }
     if (wasmInstance.exports.prostreet_boot) {
       // An unsupported import traps on purpose; the diagnostic exports still
       // read, so the page can name the exact shim that stopped the boot.
@@ -313,7 +320,7 @@ async function load() {
       }
       moduleStatus.textContent = last && last !== 'none'
         ? `STOPPED AT ${last}`
-        : `BOOT STATUS ${bootStatus}`;
+        : `BOOT STATUS ${bootStatus} (NOT GAMEPLAY)`;
       console.log(`[boot] status=${bootStatus} stopped at: ${last || 'none'}`);
     }
     launch.disabled = false;
