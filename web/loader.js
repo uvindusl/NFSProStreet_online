@@ -223,7 +223,8 @@ async function load() {
     const game = await fetch('game.json');
     if (!game.ok) throw new Error(`Game data HTTP ${game.status}`);
     const manifest = await game.json();
-    const files = Array.isArray(manifest.files) ? manifest.files.length : 0;
+    const manifestFiles = Array.isArray(manifest.files) ? manifest.files : [];
+    const files = manifestFiles.length;
     dataStatus.textContent = 'Local data ready';
     fileCount.textContent = `${files} FILES`;
 
@@ -247,7 +248,12 @@ async function load() {
     }
     const count = wasmInstance.exports.prostreet_diagnostic();
     moduleStatus.textContent = `${count.toLocaleString()} FUNCTIONS LOADED`;
-    const exe = await fetch('data/nfsps.exe');
+    const executable = manifestFiles.find((item) => {
+      const path = String(item?.path || '').toLowerCase();
+      return path === 'nfs.exe' || path === 'nfsps.exe';
+    });
+    if (!executable) throw new Error('game executable is missing from the manifest');
+    const exe = await fetch(`data/${encodeURIComponent(executable.path)}`);
     if (!exe.ok) throw new Error(`Executable HTTP ${exe.status}`);
     const image = new Uint8Array(await exe.arrayBuffer());
     loadPeImage(image, wasmInstance.exports.memory);

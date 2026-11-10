@@ -13,6 +13,7 @@ from urllib.parse import unquote, urlsplit
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 GAME_ENTRIES = {
+    "nfs.exe",
     "nfsps.exe",
     "airacelines",
     "cars",
@@ -235,7 +236,7 @@ class Handler(SimpleHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data", required=True, type=Path,
-                        help="user-owned game directory containing nfsps.exe")
+                        help="user-owned game directory containing nfs.exe or nfsps.exe")
     parser.add_argument("--web-root", type=Path,
                         default=Path(__file__).resolve().parent)
     parser.add_argument("--http-port", type=int, default=8080)
@@ -244,8 +245,10 @@ def main() -> None:
     args = parser.parse_args()
 
     game_root = real_path(args.data)
-    if not game_root.is_dir() or resolve_game(game_root, "nfsps.exe") is None:
-        parser.error("--data must contain nfsps.exe")
+    if not game_root.is_dir() or not any(
+        resolve_game(game_root, name) is not None for name in ("nfs.exe", "nfsps.exe")
+    ):
+        parser.error("--data must contain nfs.exe or nfsps.exe")
     web_root = real_path(args.web_root)
     runtime_root = web_root.parent / "out" / "web"
     wall_art = real_path(args.wall_art) if args.wall_art else None

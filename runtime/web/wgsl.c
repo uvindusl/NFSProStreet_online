@@ -49,17 +49,17 @@ int wgsl_tvert_module(char *out, size_t cap)
 /* Pre-built simple pixel shaders for the null renderer.
  * ps_<id> = col0 * tex0 (id 0, cube twin 256 with cubemask 1). */
 
-/* ps_0: simple color */
 int wgsl_ff_module(int id, char *out, size_t cap, unsigned cubemask)
 {
-    (void)id; (void)cubemask;
+    (void)id;
+    (void)cubemask;
     if (!out || cap < 1)
         return 0;
     const char *text =
-        "// ps_0: simple color (col0 * tex0)\n"
+        "// ps_0: simple color\n"
         "@fragment\n"
         "fn main(@location(0) tex: vec2f) -> @location(0) vec4f {\n"
-        "  return vec4f(1.0, 0.0, 0.0, 1.0);  /* red */\n"
+        "  return vec4f(1.0, 0.0, 1.0, 1.0);\n"
         "}\n";
     size_t n = strlen(text);
     if (n >= cap)
@@ -67,30 +67,6 @@ int wgsl_ff_module(int id, char *out, size_t cap, unsigned cubemask)
     memcpy(out, text, n);
     out[n] = '\0';
     return (int)n;
-}
-
-/* ps_1: cube twin color */
-int wgsl_ff_module(int id, char *out, size_t cap, unsigned cubemask)
-{
-    (void)id;
-    if (cubemask & 1) {
-        if (!out || cap < 1)
-            return 0;
-        const char *text =
-            "// ps_1: cube twin (cubemask=1)\n"
-            "@fragment\n"
-            "fn main(@location(0) tex: vec2f) -> @location(0) vec4f {\n"
-            "  return vec4f(0.0, 1.0, 0.0, 1.0);  /* green */\n"
-            "}\n";
-        size_t n = strlen(text);
-        if (n >= cap)
-            return 0;
-        memcpy(out, text, n);
-        out[n] = '\0';
-        return (int)n;
-    }
-    /* fallback to ps_0 */
-    return wgsl_ff_module(id, out, cap, cubemask | 1);
 }
 
 /* ---- wgsl_pull_test_module ---- */

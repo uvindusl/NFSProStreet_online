@@ -43,6 +43,11 @@ static inline uint8_t *guest_ptr(uint32_t address)
     return (uint8_t *)(uintptr_t)address;
 }
 
+static int guest_address_valid(uint32_t address)
+{
+    return address != 0 && address < GUEST_END;
+}
+
 static void fill_process_entry(uint32_t address)
 {
     if (!address)
@@ -50,8 +55,7 @@ static void fill_process_entry(uint32_t address)
     memset(guest_ptr(address), 0, 296u);
     MR32(address + 0u) = 296u;
     MR32(address + 8u) = 1u;
-    MR32(address + 32u) = 1u;
-    guest_string(address + 36u, "nfsps.exe", 260u);
+    memcpy(guest_ptr(address + 32u), "nfsps.exe", sizeof "nfsps.exe");
 }
 
 static uint32_t guest_string(uint32_t address, const char *text, uint32_t cap)
@@ -220,6 +224,8 @@ extern const ImpEnt g_imp[];
 extern const uint32_t g_fn_count;
 extern const uint32_t g_fn_addr[];
 extern const guest_fn_t g_fn_ptr[];
+int com_call(CPU *c, uint32_t magic);
+uint32_t com_direct3dcreate9(void);
 
 void dispatch_init(void)
 {
@@ -235,6 +241,12 @@ int import_call(CPU *c, uint32_t index);
 
 void dispatch_indirect(CPU *c, uint32_t address)
 {
+    if (address >= UINT32_C(0xe0000000) &&
+        address < UINT32_C(0xf0000000)) {
+        if (com_call(c, address) != 0)
+            g_status = 1;
+        return;
+    }
     /* IAT slot: 0xF0000000 | index (docs/S2_BRINGUP.md).  The lifted call
      * site either already cleaned the stack (cdecl) or import_call pops the
      * stdcall arguments; either way the call returns like a guest function. */
@@ -457,12 +469,22 @@ int import_call(CPU *c, uint32_t index)
                 strcmp(imp->name, "ReleaseSemaphore") == 0 ||
                 strcmp(imp->name, "CloseHandle") == 0 ||
                 strcmp(imp->name, "DuplicateHandle") == 0 ||
-                strcmp(imp->name, "CreateToolhelp32Snapshot") == 0 ||
-                strcmp(imp->name, "Process32First") == 0 ||
-                strcmp(imp->name, "Process32Next") == 0 ||
                 strcmp(imp->name, "CreateFileA") == 0 ||
                 strcmp(imp->name, "ReadFile") == 0)) {
         result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+                strcmp(imp->name, "CreateToolhelp32Snapshot") == 0) {
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+                strcmp(imp->name, "Process32First") == 0) {
+        if (g_trace_imports)
+            fprintf(stderr, "[Process32First] snapshot=%08x entry=%08x\n",
+                     args[0], args[1]);
+        fill_process_entry(args[1]);
+        result = 1;
+    } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
+                strcmp(imp->name, "Process32Next") == 0) {
+        result = 0;
     } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
                strcmp(imp->name, "MultiByteToWideChar") == 0 &&
                argc == 6) {
@@ -665,12 +687,10 @@ int import_call(CPU *c, uint32_t index)
                                            args[4], (int)args[5]);
     } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
                strcmp(imp->name, "ExitProcess") == 0) {
-        g_status = 7;
-        __builtin_trap();
+        result = 0;
     } else if (strcmp(imp->dll, "KERNEL32.dll") == 0 &&
                strcmp(imp->name, "TerminateProcess") == 0) {
-        g_status = 7;
-        __builtin_trap();
+        result = 0;
     /* ---- MSVCR80 CRT: strings and memory ---- */
     } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
                strcmp(imp->name, "strlen") == 0) {
@@ -685,6 +705,12 @@ int import_call(CPU *c, uint32_t index)
                                             guest_ptr(A(1)), A(2));
     } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
                strcmp(imp->name, "_stricmp") == 0) {
+        if (g_trace_imports)
+            fprintf(stderr, "[_stricmp] %08x %08x\n", A(0), A(1));
+        if (!guest_address_valid(A(0)) || !guest_address_valid(A(1))) {
+            result = 0;
+            goto import_done;
+        }
         result = (uint32_t)(int32_t)strcasecmp(guest_ptr(A(0)),
                                                guest_ptr(A(1)));
     } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
@@ -712,6 +738,8 @@ int import_call(CPU *c, uint32_t index)
         result = (uint32_t)(uintptr_t)strchr(guest_ptr(A(0)), (int)A(1));
     } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
                strcmp(imp->name, "strrchr") == 0) {
+        if (g_trace_imports)
+            fprintf(stderr, "[strrchr] %08x %08x\n", A(0), A(1));
         result = (uint32_t)(uintptr_t)strrchr(guest_ptr(A(0)), (int)A(1));
     } else if (strcmp(imp->dll, "MSVCR80.dll") == 0 &&
                strcmp(imp->name, "strstr") == 0) {
@@ -1076,6 +1104,9 @@ int import_call(CPU *c, uint32_t index)
                (strcmp(imp->name, "bsearch") == 0 ||
                 strcmp(imp->name, "qsort") == 0)) {
         result = A(0);   /* only called once gameplay sorts something */
+    } else if (strcmp(imp->dll, "d3d9.dll") == 0 &&
+               strcmp(imp->name, "Direct3DCreate9") == 0) {
+        result = com_direct3dcreate9();
     } else if (strcmp(imp->dll, "d3dx9_34.dll") == 0) {
         /* D3DX9 stubs: import table arity is 0 for all functions.
          * These are called during effect/shader initialization.
@@ -1109,6 +1140,7 @@ int import_call(CPU *c, uint32_t index)
         __builtin_trap();
     }
 
+import_done:
     c->eax = result;
     if (set_edx)
         c->edx = result_hi;  /* 64-bit returns use edx:eax on i386 */
@@ -1174,6 +1206,7 @@ uint32_t prostreet_heap_used(void)
 WASM_EXPORT("prostreet_boot")
 uint32_t prostreet_boot(void)
 {
+    g_status = 0;
     if (MR16(UINT32_C(0x00400000)) != UINT16_C(0x5a4d)) {
         g_status = 4;
         return g_status;
@@ -1181,7 +1214,7 @@ uint32_t prostreet_boot(void)
     memset(&g_cpu, 0, sizeof g_cpu);
     g_unknown_imports = 0;
     snprintf(g_last_import, sizeof g_last_import, "none");
-    g_cpu.eip = UINT32_C(0x00828c25);
+    g_cpu.eip = UINT32_C(0x1aaa080);
     g_cpu.esp = UINT32_C(0x01ff0000);
     g_cpu.fcw = UINT16_C(0x027f);
     g_cpu.top = 0;
