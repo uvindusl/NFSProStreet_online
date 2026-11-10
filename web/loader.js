@@ -184,6 +184,10 @@ function loadPeImage(bytes, memory) {
   if (file.getUint16(optional, true) !== 0x10b) throw new Error('nfsps.exe is not 32-bit PE');
   const imageBase = file.getUint32(optional + 28, true);
   if (imageBase !== 0x00400000) throw new Error('unexpected PE image base');
+  const entryPoint = file.getUint32(optional + 16, true);
+  if (entryPoint !== 0x00428c25) {
+    throw new Error(`wrong executable build: entry point 0x${entryPoint.toString(16)}, expected 0x428c25`);
+  }
   const headerSize = file.getUint32(optional + 60, true);
   const sectionTable = optional + optionalSize;
   const target = new Uint8Array(memory.buffer);
@@ -255,7 +259,7 @@ async function load() {
         bootStatus = wasmInstance.exports.prostreet_boot();
       } catch (error) {
         if (!(error instanceof WebAssembly.RuntimeError)) throw error;
-        bootStatus = wasmInstance.exports.prostreet_status();
+        bootStatus = wasmInstance.exports.prostreet_status() || 8;
       }
       let last = '';
       if (wasmInstance.exports.prostreet_last_import) {

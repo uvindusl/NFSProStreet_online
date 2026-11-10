@@ -28,6 +28,9 @@ function peSections(bytes) {
   if (view.getUint16(optional, true) !== 0x10b) throw new Error('not 32-bit PE');
   const imageBase = view.getUint32(optional + 28, true);
   const entry = view.getUint32(optional + 16, true);
+  if (entry !== 0x00428c25) {
+    throw new Error(`wrong executable build: entry point 0x${entry.toString(16)}, expected 0x428c25`);
+  }
   const headerSize = view.getUint32(optional + 60, true);
   const table = optional + optionalSize;
   const sections = [];
@@ -134,7 +137,7 @@ async function main() {
     status = instance.exports.prostreet_boot();
   } catch (error) {
     // An unknown import traps on purpose; the diagnostic exports still read.
-    status = instance.exports.prostreet_status();
+    status = instance.exports.prostreet_status() || 8;
     console.log(`[boot] trap: ${error.stack ?? error.message}`);
   }
   const last = instance.exports.prostreet_last_import();
