@@ -28,8 +28,8 @@ function peSections(bytes) {
   if (view.getUint16(optional, true) !== 0x10b) throw new Error('not 32-bit PE');
   const imageBase = view.getUint32(optional + 28, true);
   const entry = view.getUint32(optional + 16, true);
-  if (entry !== 0x00428c25) {
-    throw new Error(`wrong executable build: entry point 0x${entry.toString(16)}, expected 0x428c25`);
+  if (entry !== 0x0016aa080) {
+    throw new Error(`wrong executable build: entry point 0x${entry.toString(16)}, expected 0x16aa080`);
   }
   const headerSize = view.getUint32(optional + 60, true);
   const table = optional + optionalSize;

@@ -33,8 +33,23 @@ MAXLEN = 15
 def load_text(exe):
     pe = pefile.PE(exe)
     ib = pe.OPTIONAL_HEADER.ImageBase
-    sec = next(s for s in pe.sections if s.Name.startswith(b".text"))
-    return ib + sec.VirtualAddress, sec.get_data()
+
+    # Find the code section: prefer .text, fall back to the section containing
+    # the entry point (supports games like ProStreet that use .IN).
+    code_section = None
+    for s in pe.sections:
+        if s.Name.startswith(b".text"):
+            code_section = s
+            break
+    if code_section is None:
+        ep = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+        for s in pe.sections:
+            if s.VirtualAddress <= ep < s.VirtualAddress + s.Misc_VirtualSize:
+                code_section = s
+                break
+    if code_section is None:
+        raise RuntimeError("cannot find code section in PE")
+    return ib + code_section.VirtualAddress, code_section.get_data()
 
 
 def straddled(md, data, tva, addr):
