@@ -408,7 +408,14 @@ class Lifter:
         for s in pe.sections:
             nm=s.Name.rstrip(b'\x00').decode('latin1').strip() or '<none>'
             self.secs.append((nm,self.IB+s.VirtualAddress,s.Misc_VirtualSize,s.get_data()))
-        self.TVA,self.TSZ,self.TDATA = next((va,vs,d) for nm,va,vs,d in self.secs if nm=='.text')
+        # Find code section: prefer .text, fall back to section containing entry point
+        code_sec = next(((va,vs,d) for nm,va,vs,d in self.secs if nm == '.text'), None)
+        if code_sec is None:
+            ep = pe.OPTIONAL_HEADER.AddressOfEntryPoint
+            code_sec = next(((va,vs,d) for nm,va,vs,d in self.secs if nm != '.text' and va <= ep < va + vs), None)
+        if code_sec is None:
+            raise RuntimeError("cannot find code section in PE")
+        self.TVA,self.TSZ,self.TDATA = code_sec
         self.md=Cs(CS_ARCH_X86,CS_MODE_32); self.md.detail=True
         # SecuROM's protected sections (AGENTS.md rule 3: never map or execute).
         # .text is decrypted, but the packer also left stubs that jump through a

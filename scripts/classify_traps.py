@@ -62,7 +62,18 @@ def main(gen_dir, exe):
     pe = pefile.PE(exe)
     ib = pe.OPTIONAL_HEADER.ImageBase
     ep = ib + pe.OPTIONAL_HEADER.AddressOfEntryPoint
-    text = next(s for s in pe.sections if s.Name.startswith(b".text"))
+    # Find code section: prefer .text, fall back to entry point section
+    code_sec = next(
+        (s for s in pe.sections if s.Name.startswith(b".text")), None)
+    if code_sec is None:
+        ep = ib + pe.OPTIONAL_HEADER.AddressOfEntryPoint
+        code_sec = next(
+            (s for s in pe.sections
+             if s.VirtualAddress <= ep - ib < s.VirtualAddress + s.Misc_VirtualSize),
+            None)
+    if code_sec is None:
+        raise RuntimeError("cannot find code section in PE")
+    text = code_sec
     tva, data = ib + text.VirtualAddress, text.get_data()
     md = Cs(CS_ARCH_X86, CS_MODE_32)
 

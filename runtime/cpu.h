@@ -76,8 +76,8 @@ void dispatch_indirect(struct CPU *c, uint32_t addr);
 void dispatch_tail(struct CPU *c);
 
 /* ---------- dispatch table ---------- */
-#define DISPATCH_TEXT_BASE 0x00401000u
-#define DISPATCH_TEXT_SIZE 0x00566000u
+#define DISPATCH_TEXT_BASE 0x00400000u
+#define DISPATCH_TEXT_SIZE 0x02000000u
 typedef void (*guest_fn_t)(struct CPU *);
 extern guest_fn_t g_dtab[DISPATCH_TEXT_SIZE];
 static inline guest_fn_t dispatch_fast(uint32_t a){
