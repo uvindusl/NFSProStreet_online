@@ -1,5 +1,5 @@
 # Game files: never in git (bring your own copy)
-game/
+game
 artifacts/
 *.exe
 *.dll
