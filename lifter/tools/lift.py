@@ -298,6 +298,10 @@ class Unsupported(Exception): pass
 
 import os as _os_pc
 _X87PC = _os_pc.environ.get('X87PC', '') == '1'   # see "x87 FPU" in lift_insn
+# MAXFUNC_INSNS: give up on a function after this many decoded instructions
+# (0 = no limit).  A safety net for a straight run that never reaches a
+# terminator; see the zero-padding rule in discover() for the actual cause.
+MAXFUNC_INSNS = int(_os_pc.environ.get('MAXFUNC_INSNS', '') or 0)
 
 # ---- X87OPT: x87 register allocation within a block ----------------------
 # ST(n) = c->st[(c->top+n)&7] is indexed at run time: clang can never keep these
@@ -418,6 +422,15 @@ class Lifter:
         if r is None: return b''
         va,sz,d=r; off=a-va
         return d[off:min(off+n,sz)]
+    # A run of 0x00 bytes at an instruction boundary is padding, not code.
+    # diabolus is 97.6% zeros and 00 00 decodes as `add byte [eax], al`, which
+    # never terminates, so a walk that reached it ran to the end of the section:
+    # sub_017d4000 came out as 1,018,494 instructions and 114 MB of C.  This is
+    # the same rule discover() already applies to a run of 0xCC (int3).
+    PAD_ZERO = 8
+    def zero_pad(self,a):
+        b=self.fetch(a,self.PAD_ZERO)
+        return len(b)==self.PAD_ZERO and not any(b)
 
     # ---------- operand -> C expression ----------
     def ea(self, m, extra=0):
@@ -532,14 +545,20 @@ class Lifter:
 
     # ---------- function discovery (CFG) ----------
     def discover(self, entry, maxins=4000):
+        # An entry that sits in zero padding is not a function at all (the
+        # seeds carry data pointers into diabolus).  Trap it instead of lifting
+        # the padding as code; _shard turns the exception into a stub.
+        if self.zero_pad(entry): raise Unsupported("zero-padding")
         blocks={}; q=collections.deque([entry]); seen=set([entry]); calls=set()
         jt = _os_pc.environ.get('JTSWITCH', '') == '1'
-        bounds = {}; self.jtab = {}
+        bounds = {}; self.jtab = {}; ntot = 0; over = False
         while True:
             while q:
                 va=q.popleft(); ins=[]
                 while True:
                     if not self.in_text(va): break
+                    # padding between functions -> stop, as for the 0xCC run below
+                    if self.zero_pad(va): break
                     try: i=next(self.md.disasm(self.fetch(va,16),va))
                     except StopIteration: break
                     ins.append(i); m=i.mnemonic
@@ -587,6 +606,12 @@ class Lifter:
                 if jt and ins:
                     b = self._jt_bound(ins)
                     if b: bounds[b[2]] = b[:2]
+                ntot += len(ins)
+                if MAXFUNC_INSNS and ntot > MAXFUNC_INSNS:
+                    # Runaway run: stop here.  The branch targets still pending
+                    # are emitted as "truncated" stubs by the emitter below.
+                    over = True; break
+            if over: break
             # table jumps whose block's bound is known by now: their targets join
             new = False
             for ba, ins in list(blocks.items()):
@@ -1844,6 +1869,13 @@ class Lifter:
         for ba in addrs:
             body.append(f"L_{ba:08x}:; /* --- block --- */")
             ins=blocks[ba]
+            if not ins:
+                # The block starts in padding (or ran off the end of .text), so
+                # nothing was decoded.  The only way to arrive is a branch or a
+                # jump table aimed at data: trap rather than fall into the next
+                # block by address order.
+                body.append(f'    unsupported_insn(c, 0x{ba:x}u, "padding"); POP32(c->eip); return;')
+                continue
             xb.reset()
             for k,i in enumerate(ins):
                 m=i.mnemonic

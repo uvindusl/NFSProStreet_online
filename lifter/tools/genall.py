@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Translate all 23k functions to C, split them into shards, generate the function table."""
-import sys, os, struct, collections, time, multiprocessing as mp
+import sys, os, json, struct, collections, time, multiprocessing as mp
 sys.path.insert(0,'tools')
 import pefile
 from capstone import *
@@ -20,6 +20,11 @@ os.makedirs(OUT, exist_ok=True)
 RELOCS = os.environ.get('RELOCS', 'out/relocs.txt')
 SEEDS = os.environ.get('SEEDS', '')
 SYMPFX = os.environ.get('SYMPFX', '')
+# JOBS: worker processes (default: one per core).  Discovery and shard generation
+# fork a worker per core, and each fork can hold hundreds of MB once it writes its
+# coverage map, so a full 8-way run peaks around 6 GB.  On a small or busy machine
+# set JOBS (e.g. JOBS=4) to stay under memory pressure instead of being OOM-killed.
+JOBS = int(os.environ.get('JOBS', '0')) or mp.cpu_count()
 
 # ---------- Phase 1: closed function set ----------
 def discover_all():
@@ -100,7 +105,7 @@ def drop_table_targets(funcs, fixed, relref):
     # a table counts only if EVERY function that jumps through it switches: one
     # that dispatches instead still needs the targets as functions
     tabs = set(); left = set()
-    with mp.Pool(mp.cpu_count(), initializer=_init) as pool:
+    with mp.Pool(JOBS, initializer=_init) as pool:
         for sw, lf in pool.imap_unordered(_jt_tables, funcs, chunksize=64): tabs.update(sw); left.update(lf)
     tabs = {d: ents for d, ents in tabs if d not in left}
     slots = set()
@@ -108,6 +113,49 @@ def drop_table_targets(funcs, fixed, relref):
     drop = {v for v in funcs if v not in fixed and v not in OVERRIDES and relref.get(v) and all(a in slots for a in relref[v])}
     print(f"  [jtswitch] {len(tabs)} jump tables; {len(drop)} entries reached only through them are not functions")
     return [v for v in funcs if v not in drop], tabs
+
+# ---------- Phase 1 checkpoint ----------
+# Phase 1 (discovery) is the expensive half -- tens of minutes -- and it is a
+# pure function of the image, the seeds and the relocs, so its result (the
+# function list and the jump tables) is cached to disk.  A later run reuses it
+# and goes straight to Phase 2, which makes a Phase 2 that dies to the OOM
+# killer cheap to retry instead of another full discovery.
+#
+# The cache is keyed on those inputs, so editing seeds-boot.txt, the relocs or
+# the image recomputes it.  P1_FORCE=1 ignores the cache; P1CACHE=off disables
+# it.  Phase 1 also runs in a fresh process when the cache is reused, so Phase 2
+# no longer forks workers from a parent that has just spent 20 minutes building
+# discovery state.
+P1CACHE = os.environ.get('P1CACHE', 'out/genall-phase1.json')
+
+def _p1_key():
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        st = os.stat(EXE); h.update(f"{st.st_size}:{int(st.st_mtime)}".encode())
+    except OSError:
+        h.update(b'-')
+    h.update(f"|jtswitch={os.environ.get('JTSWITCH','')}|seeds={SEEDS}".encode())
+    for p in (SEEDS, RELOCS):
+        h.update(b'|')
+        try: h.update(open(p, 'rb').read())
+        except OSError: h.update(b'-')
+    return h.hexdigest()
+
+def p1_save(key, funcs, jt_tabs):
+    tmp = P1CACHE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump({'key': key, 'funcs': list(funcs),
+                   'jt_tabs': {str(k): list(v) for k, v in jt_tabs.items()}}, f)
+    os.replace(tmp, P1CACHE)
+
+def p1_load(key):
+    try:
+        with open(P1CACHE) as f: d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if d.get('key') != key: return None
+    return d['funcs'], {int(k): tuple(v) for k, v in d['jt_tabs'].items()}
 
 # ---------- Phase 2: parallel generation ----------
 _L=None
@@ -197,11 +245,25 @@ def _shard(args):
 
 if __name__=='__main__':
     t0=time.time()
-    print("Phase 1: discovering the function set...")
-    funcs, _fixed, _relref = discover_all()
-    jt_tabs = {}
-    if os.environ.get('JTSWITCH', '') == '1': funcs, jt_tabs = drop_table_targets(funcs, _fixed, _relref)
-    print(f"  {len(funcs)} functions  ({time.time()-t0:.0f}s)")
+    funcs = jt_tabs = None
+    key = None
+    if P1CACHE != 'off' and os.environ.get('P1_FORCE', '') != '1':
+        key = _p1_key()
+        got = p1_load(key)
+        if got:
+            funcs, jt_tabs = got
+            print(f"Phase 1: reusing {P1CACHE} -- {len(funcs)} functions, "
+                  f"{len(jt_tabs)} jump tables (P1_FORCE=1 to rediscover)")
+    if funcs is None:
+        print("Phase 1: discovering the function set...")
+        funcs, _fixed, _relref = discover_all()
+        jt_tabs = {}
+        if os.environ.get('JTSWITCH', '') == '1': funcs, jt_tabs = drop_table_targets(funcs, _fixed, _relref)
+        print(f"  {len(funcs)} functions  ({time.time()-t0:.0f}s)")
+        if P1CACHE != 'off':
+            if key is None: key = _p1_key()
+            p1_save(key, funcs, jt_tabs)
+            print(f"  [p1cache] saved -> {P1CACHE}")
 
     # extra shards / stubs.c left over from earlier runs must not clash with the new output
     import glob as _glob
@@ -211,19 +273,19 @@ if __name__=='__main__':
     chunks=[(i, funcs[i::NSHARD]) for i in range(NSHARD)]
     hk=os.environ.get('HOOKS',''); wt=os.environ.get('WATCH','')
     if OVERRIDES: print(f"  [override: {[hex(a) for a in sorted(OVERRIDES)]}]")
-    print(f"\nPhase 2: generating {NSHARD} shards on {mp.cpu_count()} cores..."
+    print(f"\nPhase 2: generating {NSHARD} shards on {JOBS} cores..."
           + (f"  [hooks: {hk}]" if hk else "")
           + ("  [COVERAGE measurement]" if os.environ.get('COVERAGE','')=='1' else "") + ("  [WATCHPOINT instrumentation]" if wt=='1' else ""))
     t1=time.time()
     inl = {}
     if INLINE_MAX or INLINE_LIST:
-        with mp.Pool(mp.cpu_count(), initializer=_init) as pool:
+        with mp.Pool(JOBS, initializer=_init) as pool:
             for a, code in pool.imap_unordered(_inlprobe, funcs if INLINE_MAX else [f for f in funcs if f in INLINE_LIST], chunksize=64):
                 if code: inl[a] = code
         print(f"  [inline: {len(inl)} functions: {len(INLINE_LIST & set(inl))} of the {len(INLINE_LIST)} in INLINE_LIST"
               + (f", leaf functions <= {INLINE_MAX} instructions" if INLINE_MAX else "") + f"]  ({time.time()-t1:.0f}s)")
     defined=set(); refs=set(); traps=0; trunc=0; kinds=collections.Counter(); bytes_=0; jt_left=set()
-    with mp.Pool(mp.cpu_count(), initializer=_init, initargs=(inl,)) as pool:
+    with mp.Pool(JOBS, initializer=_init, initargs=(inl,)) as pool:
         for n,(idx,d,r,tp,tr,kk,sz,lf) in enumerate(pool.imap_unordered(_shard, chunks)):
             defined |= set(d); refs |= set(r); traps+=tp; trunc+=tr; jt_left |= set(lf)
             kinds.update(kk); bytes_+=sz
