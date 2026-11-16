@@ -14,6 +14,12 @@ gen/
 # Third-party reference checkouts (cloned separately)
 reference/
 
+# wasi-sdk toolchain: fetched into deps/, never source (632 MB, 17k files)
+deps/
+
+# node
+node_modules/
+
 # python
 __pycache__/
 *.pyc

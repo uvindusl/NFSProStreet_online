@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0d0d0d">
+<title>Underground 2 Revived</title>
+<meta name="description" content="Play Need for Speed: Underground 2 (2004) in Chrome and Firefox with WebGPU graphics, Web Audio, up to 120 fps widescreen, controller support, free roam and Online races with friends. Fan project, not affiliated with Electronic Arts.">
+<meta name="keywords" content="Need for Speed Underground 2, NFSU2, Underground 2 browser, play NFSU2 online, WebAssembly, WebGPU, free roam multiplayer, racing game">
+<meta name="application-name" content="Underground 2 Revived">
+<meta name="robots" content="index, follow">
+<meta name="google-adsense-account" content="ca-pub-5817610257612647">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Underground 2 Revived">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Underground 2 Revived">
+<meta property="og:description" content="Play Need for Speed: Underground 2 (2004) in Chrome and Firefox with WebGPU graphics, Web Audio, up to 120 fps widescreen, controller support, free roam and Online races with friends. Fan project, not affiliated with Electronic Arts.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Underground 2 Revived">
+<meta name="twitter:description" content="Play Need for Speed: Underground 2 (2004) in Chrome and Firefox with WebGPU graphics, Web Audio, up to 120 fps widescreen, controller support, free roam and Online races with friends. Fan project, not affiliated with Electronic Arts.">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="stylesheet" href="/main.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": ["VideoGame", "WebApplication"],
+  "name": "Underground 2 Revived",
+  "alternateName": ["Need for Speed: Underground 2 in the browser", "NFSU2", "Need for Speed Underground 2"],
+  "description": "Need for Speed: Underground 2 (2004), recompiled to WebAssembly to run in Chrome and Firefox with WebGPU graphics, Web Audio, up to 120 fps widescreen, Xbox and PlayStation controller support, free roam and Online multiplayer.",
+  "applicationCategory": "GameApplication",
+  "genre": "Racing",
+  "gamePlatform": "Web browser",
+  "operatingSystem": "Windows, macOS",
+  "playMode": ["SinglePlayer", "MultiPlayer", "CoOp"]
+}
+</script>
+<script defer src="/boot.js"></script>
+<script type="module" src="/main.js"></script>
+</head>
+<body data-phase="boot">
+
+<main class="app" id="app">
+  <header class="top">
+    <div class="top-row">
+      <div class="brand">
+        <h1>Underground 2 Revived</h1>
+        <p class="hint" data-i18n>Fan project. Not affiliated with or endorsed by Electronic Arts.</p>
+      </div>
+      <div class="top-end">
+        <label class="lang-pick"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9M12 3C9.5 5.6 8.2 8.6 8.2 12s1.3 6.4 3.8 9"/></svg><select id="lang-pick" data-i18n-attr="aria-label" aria-label="Language"></select></label>
+        <button type="button" class="btn" id="changelog-btn" aria-haspopup="dialog"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg><span data-i18n>Changelog</span></button>
+        <a class="btn" href="https://discord.gg/25zXmQ2Ua9" target="_blank" rel="noopener noreferrer"><svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189z"/></svg>Discord</a>
+        <button type="button" class="btn donate" id="donate-btn" aria-haspopup="dialog"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-8.5-5.2-8.5-11A4.75 4.75 0 0 1 12 6.6a4.75 4.75 0 0 1 8.5 2.9c0 5.8-8.5 11-8.5 11z"/></svg><span data-i18n>Donate</span></button>
+      </div>
+    </div>
+    <div class="bar" id="progress" role="progressbar" data-i18n-attr="aria-label" aria-label="Game loading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div class="bar-fill" id="progress-fill"></div>
+    </div>
+  </header>
+
+  <div class="side">
+    <section class="panel hero" data-i18n-attr="aria-label" aria-label="Play">
+      <p class="status" id="status" role="status">Loading</p>
+      <p class="status-sub" id="status-sub">Loading the game.</p>
+      <div class="row">
+        <button type="button" class="play" id="play" disabled data-i18n-html>Play <kbd class="key-only">Enter</kbd></button>
+        <button type="button" class="btn" id="retry" hidden data-i18n>Retry</button>
+        <button type="button" class="btn" id="reload" hidden data-i18n>Reload</button>
+        <button type="button" class="text-btn" id="log-btn" hidden data-i18n>Download log</button>
+      </div>
+      <p class="msg" id="lastgame" hidden></p>
+      <p class="msg" id="report" hidden data-i18n-html>Post the log in <a href="https://discord.gg/SSHm5g43gh" target="_blank" rel="noopener noreferrer">#bug-reports on our Discord</a>, with what you were doing.</p>
+      <p class="msg" id="newer" aria-live="polite" hidden></p>
+      <ul class="problems" id="problems" aria-live="polite"></ul>
+      <p class="msg warn" id="override" hidden></p>
+    </section>
+
+    <section class="panel players" id="players" aria-labelledby="players-title">
+      <h2 id="players-title" data-i18n>Playing now</h2>
+      <!-- players.ts PlayersPanel: the numbers, and a line under them (the server full, or not answering) -->
+      <div class="stats">
+        <p class="stat"><b id="players-all">–</b> <span data-i18n>in total</span></p>
+        <p class="stat"><b id="players-roam">–</b> <span data-i18n>in free roam</span></p>
+        <p class="stat"><b id="players-online">–</b> <span id="players-online-label"></span></p>
+      </div>
+      <p class="hint" id="players-note" hidden></p>
+    </section>
+
+    <section class="panel" id="about" data-i18n-attr="aria-label" aria-label="About this project">
+      <div class="tabs big" role="tablist" data-i18n-attr="aria-label" aria-label="About this project">
+        <button type="button" class="tab" role="tab" data-tab="about" data-i18n>About</button>
+        <button type="button" class="tab" role="tab" data-tab="credits" data-i18n>Credits</button>
+        <button type="button" class="tab" role="tab" data-tab="translations" data-i18n>Translations</button>
+      </div>
+      <div class="pane prose" role="tabpanel" data-tab="about">
+        <p data-i18n>The PC game's own code, recompiled for Chrome and Firefox: up to 120 fps in widescreen, free roam and Online races with friends, and controllers, wheels and touch controls.</p>
+        <p data-i18n>My brother and I played this game together about 20 years ago. Because of that I tried porting it to the browser so we could play together again. It worked surprisingly well, and it got a bit out of hand. It's great to see so many people playing it.</p>
+        <p data-i18n-html>To help with hosting and development costs, you can <a href="https://ko-fi.com/nfsu2xyz" target="_blank" rel="noopener noreferrer">buy me a coffee</a>. Everyone gets the same game, with no microtransactions or paid perks. Supporters just get a Discord role.</p>
+        <p data-i18n-html>Help, bugs and questions: <a href="https://discord.gg/25zXmQ2Ua9" target="_blank" rel="noopener noreferrer">our Discord</a>. Rights holders: legal (at) nfsu2.xyz.</p>
+      </div>
+      <div class="pane prose" role="tabpanel" data-tab="credits" hidden>
+        <p data-i18n-html>Source code on <a href="https://github.com/th0mk/nfsu2-web" target="_blank" rel="noopener noreferrer">GitHub</a>. Based on Talha Müderrisoğlu's <a href="https://github.com/TalhaMudo/NFSU2Recomp" target="_blank" rel="noopener noreferrer">NFSU2Recomp</a>, the original x86 → C static recompiler for NFSU2, after <a href="https://github.com/N64Recomp/N64Recomp" target="_blank" rel="noopener noreferrer">N64: Recompiled</a> and <a href="https://github.com/hedge-dev/XenonRecomp" target="_blank" rel="noopener noreferrer">XenonRecomp</a>. This project was forked from NFSU2Recomp's <a href="https://github.com/TalhaMudo/NFSU2Recomp/tree/3d187ce7e5f1b99c0580866da4dbaa6d59dd23c7" target="_blank" rel="noopener noreferrer">MIT-licensed version of 16 October 2026</a> and uses only code from that version.</p>
+        <p data-i18n-html>Mods and their makers: the <a href="#mods">Mods</a> tab.</p>
+      </div>
+      <div class="pane prose" role="tabpanel" data-tab="translations" hidden>
+        <p data-i18n-html>Dubbed voices and movies, and Chinese, Japanese, Russian and Thai text: KyoriAsh's <a href="https://nfsmods.xyz/mod/5749" target="_blank" rel="noopener noreferrer">Multi 13 languages mod</a>, with Lee-Ryo's Thai support.</p>
+        <p data-i18n>Portuguese (Brazil): TraduMix and MixMods (Fyro, Beater, Kerlyston F.; Junior_Djjr, SideWinder, Elyzandro).</p>
+        <p data-i18n>Polish: PLProjekt (Daniel Graszka, MaDeR, Marcin Piech, Nati, Mateusz Wilkowski, alter).</p>
+        <p data-i18n-html>Turkish: <a href="https://samye.li" target="_blank" rel="noopener noreferrer">Samet Samyeli</a>; fonts: <a href="https://www.moddb.com/mods/need-for-speed-underground-2-turkish-translation-patch" target="_blank" rel="noopener noreferrer">muntazam</a>.</p>
+        <p data-i18n-html>Hungarian: <a href="http://www.gamehunter.hu/2010/08/need-for-speed-underground-2-pc.html" target="_blank" rel="noopener noreferrer">GameHunter</a> (L_zooltan).</p>
+        <p data-i18n-html>Ukrainian: <a href="https://kuli.com.ua/need-for-speed-underground-2" target="_blank" rel="noopener noreferrer">Clark X.</a></p>
+        <p data-i18n-html>Czech: <a href="https://www.abcgames.cz/?p=preklady_zobraz&amp;id=7774" target="_blank" rel="noopener noreferrer">ROXOR, PINĎA &amp; syn</a>, with our own edits.</p>
+        <p data-i18n-html>Slovak: <a href="https://www.abcgames.cz/?p=preklady_zobraz&amp;id=7774" target="_blank" rel="noopener noreferrer">MixerX</a>.</p>
+        <p data-i18n-html>Greek: <a href="https://github.com/Corneleto" target="_blank" rel="noopener noreferrer">Corneleto</a>.</p>
+        <p data-i18n-html>English subtitles: VileStuff's <a href="https://nfsmods.xyz/mod/5286" target="_blank" rel="noopener noreferrer">English Subtitles Fixed</a>.</p>
+      </div>
+    </section>
+  </div>
+
+  <div class="content">
+    <!-- the big panel: its tabs are its heading (tabs.ts); the whole of it is SettingsPanel's (settings-ui.ts) -->
+    <section class="panel tabbed" id="settings">
+      <div class="tabs big" role="tablist">
+        <button type="button" class="tab" role="tab" data-tab="saves" data-i18n>Saves</button>
+        <button type="button" class="tab" role="tab" data-tab="online" data-i18n>Online</button>
+        <button type="button" class="tab" role="tab" data-tab="friends"><span data-i18n>Friends &amp; crews</span><span class="tab-new" hidden></span></button>
+        <button type="button" class="tab" role="tab" data-tab="game" data-i18n>Game</button>
+        <button type="button" class="tab" role="tab" data-tab="mods" data-i18n>Mods</button>
+        <button type="button" class="tab" role="tab" data-tab="controls" data-i18n>Controls</button>
+      </div>
+
+      <div class="pane" role="tabpanel" data-tab="saves" id="saves">
+        <div class="panel-head">
+          <h3 data-i18n>Screenshots</h3>
+          <div class="row" id="shots-head">
+            <p class="hint key-only" data-i18n-html>Screenshot with <kbd>F12</kbd></p>
+            <button type="button" class="text-btn" id="shots-clear" hidden data-i18n>Delete all</button>
+          </div>
+        </div>
+        <p class="hint" id="shots-info" hidden data-i18n>None yet.</p>
+        <ul class="shots" id="shots" data-i18n-attr="aria-label" aria-label="Screenshots in this browser"></ul>
+        <div class="panel-head sub" id="profiles-head">
+          <div class="head-title">
+            <h3 data-i18n>Profiles</h3>
+            <p class="hint" id="played" hidden></p>
+          </div>
+          <div class="row">
+            <button type="button" class="btn" id="export" data-i18n>Download backup</button>
+            <label class="btn file-btn" data-i18n-html>Restore<input type="file" id="import"></label>
+          </div>
+        </div>
+        <p class="msg" id="saves-msg" role="status"></p>
+        <ul class="profiles" id="profiles" data-i18n-attr="aria-label" aria-label="Profiles in this browser"></ul>
+        <p class="hint" id="save-how" data-i18n-html>To save while playing: <span class="key-only"><kbd>Esc</kbd> or </span><kbd>Start</kbd> &gt; Garage &gt; Save</p>
+        <div class="vault" id="vault" hidden>
+          <div class="panel-head sub">
+            <h3 data-i18n>Cloud saves</h3>
+            <button type="button" class="btn" id="vault-make" data-i18n>Turn on</button>
+            <p class="hint" id="vault-when" role="status" hidden></p>
+          </div>
+          <form class="vault-row" id="vault-form">
+            <!-- a login form to the browser's passwords: this user name (pwkeep.ts ID, never translated) and the passphrase -->
+            <input type="text" name="username" autocomplete="username" value="Cloud saves" hidden>
+            <div class="keybox masked" id="vault-box">
+              <div class="keyfield">
+                <input type="password" id="vault-input" name="password" placeholder="Enter passphrase" spellcheck="false" autocomplete="current-password" autocapitalize="none" data-i18n-attr="placeholder aria-label" aria-label="Passphrase">
+                <span class="keymask" id="vault-mask" aria-hidden="true"></span>
+              </div>
+              <button type="button" class="icon-btn" id="vault-file" data-i18n-attr="aria-label" aria-label="Download passphrase" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg></button>
+              <button type="button" class="icon-btn eye" id="vault-eye" aria-label="Show passphrase" aria-pressed="false"><svg class="on" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg><svg class="off" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1Q11.3 5 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.3-.5 4.6-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button>
+            </div>
+            <button type="submit" class="btn" id="vault-load" data-i18n>Load</button>
+          </form>
+          <p class="hint" id="vault-about" data-i18n>Loads your saves and username, and syncs them between your devices.</p>
+          <p class="hint" id="vault-claim" hidden></p>
+          <p class="hint warn" id="vault-status" role="status"></p>
+          <div id="vault-sides"></div>
+          <div class="row" id="vault-conflict" hidden>
+            <button type="button" class="btn" id="vault-mine" data-i18n>Keep this browser's</button>
+            <button type="button" class="btn" id="vault-theirs" data-i18n>Use the cloud's</button>
+          </div>
+          <div class="row" id="vault-on" hidden>
+            <button type="button" class="text-btn" id="vault-sync" data-i18n>Sync now</button>
+            <button type="button" class="text-btn" id="vault-earlier" hidden>Go back</button>
+            <button type="button" class="text-btn" id="vault-stop" data-i18n>Stop syncing</button>
+            <button type="button" class="text-btn" id="vault-delete" data-i18n>Delete from cloud</button>
+          </div>
+          <p class="hint" id="vault-replaced" hidden><span id="vault-replaced-text"></span> <button type="button" class="text-btn" id="vault-putback" data-i18n>Put back</button></p>
+          <p class="msg" id="vault-msg" role="status"></p>
+        </div>
+        <p class="msg warn" id="storage-note" hidden></p>
+      </div>
+
+      <div class="pane" role="tabpanel" data-tab="online" id="online" hidden>
+        <p class="hint" id="online-note" hidden></p>
+        <div id="online-body"></div>
+      </div>
+
+      <!-- the Crews setting (settings-ui.ts), then the friends (friends.ts FriendsPanel) -->
+      <div class="pane" role="tabpanel" data-tab="friends" hidden>
+        <div id="crews-body"></div>
+        <div id="friends"></div>
+      </div>
+
+      <!-- the settings (settings-ui.ts), then the game data on this device (saves-ui.ts), the lines without a row and the
+           file as text (settings-ui.ts) -->
+      <div class="pane" role="tabpanel" data-tab="game" hidden>
+        <p class="hint" id="settings-note">Changes apply the next time you press Play.</p>
+        <div id="settings-body"></div>
+        <div id="game-data">
+          <h3 data-i18n>Game data on this device</h3>
+          <p class="hint" id="cache-info">Counting…</p>
+          <div class="bar" id="data-bar" role="progressbar" data-i18n-attr="aria-label" aria-label="Game data preload" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
+            <div class="bar-fill"></div>
+          </div>
+          <div class="row">
+            <button type="button" class="btn" id="fetch-all" hidden>Preload the game data</button>
+            <button type="button" class="btn" id="clear-cache" data-i18n>Delete game data</button>
+          </div>
+          <p class="msg" id="data-msg" role="status"></p>
+        </div>
+        <div id="settings-lines"></div>
+        <div class="raw">
+          <button type="button" class="text-btn" id="settings-reset-all" data-i18n>Reset all settings</button>
+          <details id="settings-raw">
+            <summary data-i18n>Edit settings.ini as text</summary>
+            <textarea id="settings-text" spellcheck="false" rows="20" wrap="off" aria-label="settings.ini"></textarea>
+            <div class="row">
+              <button type="button" class="btn" id="settings-text-save" data-i18n>Save file</button>
+              <span class="hint" id="settings-text-msg" role="status"></span>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- the mods (mods.ts): their rows (mods-ui.ts; a setting's row is settings-ui.ts's) -->
+      <div class="pane" role="tabpanel" data-tab="mods" id="mods" hidden>
+        <p class="hint" id="mods-note">The mods in this game and their makers (translations: the Translations tab). Changes apply the next time you press Play.</p>
+        <div id="mods-body"></div>
+      </div>
+
+      <div class="pane" role="tabpanel" data-tab="controls" id="controls" hidden>
+        <div id="keys">
+          <div class="tabs" role="tablist" data-i18n-attr="aria-label" aria-label="Controls">
+            <button type="button" class="tab" role="tab" data-tab="keys"><span class="key-only" data-i18n>Keyboard</span><span class="touch-only" data-i18n>Touch</span></button>
+            <button type="button" class="tab" role="tab" data-tab="pad" data-i18n>Controller</button>
+            <button type="button" class="tab" role="tab" data-tab="site" data-i18n>Site</button>
+          </div>
+          <div class="tab-panel" role="tabpanel" data-tab="keys">
+            <p class="hint touch-only" data-i18n>Tap the game's menus, or use the arrows, OK and Back beside them. Touch controls show while you drive.</p>
+            <!-- the steering's list, the position's, Nitro's and the level horizon's switches and the sizes: controls.ts -->
+            <div class="set touch-only" data-steer>
+              <label class="set-label" data-i18n>Steering</label>
+              <p class="set-help" data-i18n>The button at the game's top right switches it too.</p>
+              <div class="set-control"><select></select></div>
+            </div>
+            <div class="set touch-only" data-position>
+              <label class="set-label" data-i18n>Position</label>
+              <p class="set-help" data-i18n>Which thumb steers. Moved in keeps the controls off the screen's edges.</p>
+              <div class="set-control"><select></select></div>
+            </div>
+            <div class="set touch-only" data-nitro>
+              <label class="set-label" data-i18n>Nitro on the steering side</label>
+              <p class="set-help" data-i18n>For the thumb that isn't on Gas.</p>
+              <div class="set-control"><span class="val" aria-hidden="true"></span><input type="checkbox" class="switch" role="switch"></div>
+            </div>
+            <div class="set touch-only" data-level>
+              <label class="set-label" data-i18n>Level horizon</label>
+              <p class="set-help" data-i18n>With tilt steering, keeps the horizon level.</p>
+              <div class="set-control"><span class="val" aria-hidden="true"></span><input type="checkbox" class="switch" role="switch"></div>
+            </div>
+            <div class="set touch-only" data-size>
+              <label class="set-label" data-i18n>Control size</label>
+              <p class="set-help" data-i18n>Auto sizes them for this screen.</p>
+              <div class="set-control"><select></select></div>
+            </div>
+            <div class="set touch-only" data-menu-size>
+              <label class="set-label" data-i18n>Menu button size</label>
+              <p class="set-help" data-i18n>The game's menu arrows and bottom buttons. Auto makes the arrows finger-sized and leaves the bottom buttons as they are.</p>
+              <div class="set-control"><select></select></div>
+            </div>
+            <dl class="keys key-only">
+              <div><dt><kbd>↑</kbd> <kbd>↓</kbd></dt><dd data-i18n>Throttle, brake and reverse</dd></div>
+              <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n>Steer (or W S A D)</dd></div>
+              <div><dt><kbd>Alt</kbd></dt><dd data-i18n>Nitrous</dd></div>
+              <div><dt><kbd data-i18n>Space</kbd></dt><dd data-i18n>Handbrake</dd></div>
+              <div><dt><kbd>Shift</kbd> <kbd data-i18n>Ctrl</kbd></dt><dd data-i18n>Shift up, shift down (manual)</dd></div>
+              <div><dt><kbd>C</kbd> <kbd>B</kbd></dt><dd data-i18n>Camera, look back</dd></div>
+              <div><dt><kbd>R</kbd></dt><dd data-i18n>Respawn</dd></div>
+              <div><dt><kbd>H</kbd> <kbd>J</kbd></dt><dd data-i18n>Hydraulics (hold, then the arrows)</dd></div>
+              <!-- this site's own: the keys the player gave them (sitekeys.ts siteKeyList; a row without one hides), set in Site -->
+              <div data-key-of="horn"><dt><kbd>N</kbd></dt><dd data-i18n>Horn (with other players)</dd></div>
+              <div data-key-of="lights"><dt><kbd>G</kbd></dt><dd data-i18n>Headlights off or on; hold for high beam</dd></div>
+              <div data-key-of="drift"><dt><kbd>X</kbd></dt><dd data-i18n>Drift mode (in free roam)</dd></div>
+              <div data-key-of="showoff"><dt><kbd>O</kbd></dt><dd data-i18n>Open hood, then trunk, then doors, then all (parked, in free roam)</dd></div>
+              <div><dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd data-i18n>Quick chat (with other players): group, then phrase</dd></div>
+              <div data-key-of="message"><dt><kbd>I</kbd></dt><dd data-i18n>Message a friend (in free roam)</dd></div>
+              <div><dt><kbd>Enter</kbd></dt><dd data-i18n>Start an event, take an outrun</dd></div>
+              <div><dt><kbd>M</kbd> <kbd>Tab</kbd></dt><dd data-i18n>Map, messages</dd></div>
+              <div><dt><kbd>Esc</kbd> <kbd>P</kbd></dt><dd data-i18n>Pause</dd></div>
+            </dl>
+            <p class="hint key-only" data-i18n>In menus: arrow keys and Enter, Esc goes back. Change keys in the game's Options, Controls.</p>
+          </div>
+          <!-- the controller's drawing: controls.ts; under it the Controller settings (settings-ui.ts), on the page only -->
+          <div class="tab-panel" role="tabpanel" data-tab="pad" hidden><div id="controller-body" data-keep></div></div>
+          <!-- this site's own controls, each with its key and button: sitekeys.ts SiteKeysView (on the start page they are
+               set here by a press; the menu's copy only shows them) -->
+          <div class="tab-panel" role="tabpanel" data-tab="site" hidden>
+            <dl class="keys touch-only">
+              <div><dt><kbd>☰</kbd></dt><dd data-i18n>Menu: full screen, controls, log, quit</dd></div>
+            </dl>
+            <div class="site-box"></div>
+            <dl class="keys site-fixed">
+              <div><dt data-i18n-html><kbd>Home</kbd> or both sticks pressed in</dt><dd data-i18n>The menu, on a controller</dd></div>
+              <div class="key-only"><dt data-i18n-html>Hold <kbd>Esc</kbd></dt><dd data-i18n>Leave full screen</dd></div>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="stage" id="stage" hidden>
+  <button type="button" class="stage-menu" id="stage-menu" tabindex="-1" data-i18n-attr="aria-label" aria-label="Menu" data-nfsu2-ui hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg></button>
+  <div class="hud-fps" id="fps" hidden></div>
+  <div class="toasts">
+    <div class="toast queue" id="queue" hidden></div>
+    <div class="toast" id="toast" hidden></div>
+    <div class="toast" id="toast-also" hidden></div>
+  </div>
+  <div class="toast away" id="away" role="status" hidden></div>
+  <div class="toast away" id="removed" role="alert" hidden></div>
+  <div class="notices" id="notices" role="status" aria-live="polite"></div>
+  <div class="ov-card lobby" id="lobby" role="status" aria-live="polite" hidden></div>
+  <div class="lobby-cover" id="lobby-cover" role="status" aria-live="polite" hidden></div>
+</div>
+
+<div class="page-toast" id="page-toast" role="status" aria-live="polite"></div>
+
+<!-- the page menu (F9): its list, or in its place its World, Crews or Friends (a game in free roam) or its Controls (shell.ts menuPage) -->
+<dialog class="dlg menu" id="menu" aria-labelledby="menu-title">
+  <div class="menu-page" id="menu-main">
+    <div class="menu-head">
+      <h2 id="menu-title" data-i18n>Menu</h2>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <div class="menu-body">
+      <div class="menu-block">
+        <button type="button" class="menu-row go" data-act="offline" hidden data-i18n>Stop waiting: play offline</button>
+        <button type="button" class="menu-row go" data-act="friend" hidden></button>
+        <button type="button" class="menu-row" data-act="worlds" hidden><span data-i18n>World</span><span class="menu-val"></span></button>
+        <button type="button" class="menu-row" data-act="tracks" hidden><span data-i18n>Tracks</span><span class="menu-val"></span></button>
+        <button type="button" class="menu-row" data-act="solid" data-i18n-attr="title" title="Off: collide with every car. Players: drive through other players' cars. Everything: through traffic and tuners too." hidden><span data-i18n>Ghost mode</span><span class="menu-val"></span></button>
+        <button type="button" class="menu-row" data-act="crews" hidden><span data-i18n>Crews</span><span class="menu-val"></span></button>
+        <button type="button" class="menu-row" data-act="friends" hidden><span data-i18n>Friends</span><span class="menu-val menu-dot"></span></button>
+      </div>
+      <div class="menu-block">
+        <div class="menu-radio">
+          <button type="button" class="menu-row" data-act="radio" aria-pressed="false"><span data-i18n>Radio</span><span class="menu-val" id="radio-label"></span></button>
+          <button type="button" class="icon" data-act="radio-folder" data-i18n-attr="aria-label title" aria-label="Music folder" title="Music folder"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3z"/></svg></button>
+          <button type="button" class="icon" data-act="playlist" data-i18n-attr="aria-label title" aria-label="Playlist" title="Playlist"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg></button>
+        </div>
+        <button type="button" class="menu-row" data-act="fullscreen"><span data-i18n>Full screen</span><span class="menu-val"></span></button>
+        <button type="button" class="menu-row" data-act="help" data-i18n>Controls</button>
+        <button type="button" class="menu-row bad" data-act="quit">Quit game</button>
+      </div>
+    </div>
+    <p class="menu-foot"><span id="menu-save"></span><button type="button" class="text-btn" data-act="log" data-i18n>Download log</button></p>
+  </div>
+  <!-- the worlds, each with how many are in free roam there: one picked, the game is in it at once (shell.ts openWorlds) -->
+  <div class="menu-page" id="menu-worlds" hidden>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-act="back" data-i18n-attr="aria-label title" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span id="menu-worlds-title" data-i18n>World</span></button>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <div class="menu-block menu-worlds" id="menu-worlds-box"></div>
+  </div>
+  <!-- the race tracks' maps, each with how many are there, and the way back to the city: one picked, the game goes there
+       (shell.ts openTracks) -->
+  <div class="menu-page" id="menu-tracks" hidden>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-act="back" data-i18n-attr="aria-label title" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span id="menu-tracks-title" data-i18n>Tracks</span></button>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <p class="menu-note" id="menu-tracks-note" hidden></p>
+    <div class="menu-block menu-worlds" id="menu-tracks-box"></div>
+  </div>
+  <!-- the Crews row's control, which changes the game's crews at once; ‹ back to the list -->
+  <div class="menu-page" id="menu-crews" hidden>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-act="back" data-i18n-attr="aria-label title" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span id="menu-crews-title" data-i18n>Crews</span></button>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <p class="menu-note" id="menu-crews-help" data-i18n>Players with the same crew name always see each other in free roam, in the crew's colour. Type a name to start or join a crew (up to 4).</p>
+    <div class="menu-block menu-crews" id="menu-crews-box"></div>
+  </div>
+  <!-- requests, the friends in free roam (Join, Invite), the others, a request by name; the line on Join only where a friend has one -->
+  <div class="menu-page" id="menu-friends" hidden>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-act="back" data-i18n-attr="aria-label title" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span id="menu-friends-title" data-i18n>Friends</span></button>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <p class="menu-note" id="menu-friends-help" data-i18n>Join takes you to your friend: their world, their track and their car.</p>
+    <div class="menu-block menu-friends" id="menu-friends-box"></div>
+  </div>
+  <!-- the start page's Controls sheet, copied (shell.ts openHelp) -->
+  <div class="menu-page" id="menu-controls" hidden>
+    <div class="menu-head">
+      <button type="button" class="menu-back" data-act="back" data-i18n-attr="aria-label title" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span id="menu-controls-title" data-i18n>Controls</span></button>
+      <button type="button" class="text-btn" data-act="resume" data-i18n>Close</button>
+    </div>
+    <div class="menu-sheet" id="help-body"></div>
+  </div>
+</dialog>
+
+<dialog class="dlg playlist" id="playlist" aria-labelledby="playlist-title">
+  <form method="dialog" class="dlg-head">
+    <h2 id="playlist-title" data-i18n>Playlist</h2>
+    <button class="btn" value="close" data-i18n>Back</button>
+  </form>
+  <label class="track" id="playlist-shuffle"><span data-i18n>Shuffle</span><input type="checkbox" class="switch" role="switch"></label>
+  <div id="playlist-body"></div>
+</dialog>
+
+<dialog class="dlg shot-view" id="shot-view" aria-labelledby="shot-title">
+  <form method="dialog" class="dlg-head">
+    <div>
+      <h2 id="shot-title" data-i18n>Screenshot</h2>
+      <p class="hint" id="shot-when"></p>
+    </div>
+    <button class="btn" value="close" data-i18n>Close</button>
+  </form>
+  <img id="shot-img" alt="">
+  <div class="shot-foot">
+    <button type="button" class="btn" data-act="newer" aria-keyshortcuts="ArrowLeft" data-i18n>‹ Newer</button>
+    <button type="button" class="btn" data-act="older" aria-keyshortcuts="ArrowRight" data-i18n>Older ›</button>
+    <span class="hint" id="shot-meta"></span>
+    <button type="button" class="btn" data-act="download" data-i18n>Download</button>
+    <button type="button" class="btn danger" data-act="delete" data-i18n>Delete</button>
+  </div>
+</dialog>
+
+<dialog class="dlg changelog" id="changelog" aria-labelledby="changelog-title">
+  <form method="dialog" class="dlg-head">
+    <h2 id="changelog-title" data-i18n>Changelog</h2>
+    <button class="btn" value="close" data-i18n>Close</button>
+  </form>
+  <div id="changelog-body"></div>
+</dialog>
+
+<!-- a Mods tab row's (i): its mod, both of a shared row, or a group of our changes (mods-ui.ts) -->
+<dialog class="dlg mod-info" id="mod-info" aria-labelledby="mod-info-title">
+  <form method="dialog" class="dlg-head">
+    <div>
+      <h2 id="mod-info-title"></h2>
+      <p class="hint" id="mod-info-by" hidden></p>
+    </div>
+    <button class="btn" value="close" autofocus data-i18n>Close</button>
+  </form>
+  <div id="mod-info-body"></div>
+</dialog>
+
+<dialog class="dlg" id="donate" aria-labelledby="donate-title">
+  <form method="dialog">
+    <h2 id="donate-title" data-i18n>Support the project</h2>
+    <p data-i18n>To help with hosting and development costs, you can buy me a coffee on Ko-fi. Everyone gets the same game, with no microtransactions or paid perks. Supporters just get a Discord role.</p>
+    <div class="row end">
+      <button class="btn" value="close" data-i18n>Not now</button>
+      <a class="btn selected" id="donate-go" href="https://ko-fi.com/nfsu2xyz" target="_blank" rel="noopener noreferrer" data-i18n>Donate on Ko-fi</a>
+    </div>
+  </form>
+</dialog>
+
+<!-- a conversation with a friend (messages.ts ChatDialog), from the Friends tab's envelope -->
+<dialog class="dlg chat" id="chat-pop" aria-labelledby="chat-pop-title">
+  <form method="dialog" class="dlg-head">
+    <h2 id="chat-pop-title"></h2>
+    <button class="btn" value="close" data-i18n>Close</button>
+  </form>
+  <div id="chat-log" aria-live="polite"></div>
+  <div class="dlg-field">
+    <input type="text" id="chat-text" autocomplete="off" enterkeyhint="send" aria-labelledby="chat-pop-title">
+    <button type="button" class="btn selected" id="chat-send" data-i18n>Send</button>
+  </div>
+  <div class="chat-foot"><span id="chat-note"></span><span id="chat-left"></span></div>
+</dialog>
+
+<dialog class="dlg confirm" id="claim-check" aria-labelledby="claim-check-title">
+  <h2 id="claim-check-title"></h2>
+  <p class="claim-about"></p>
+  <div class="claim-check"></div>
+  <div class="row end"><button type="button" class="btn claim-no"></button></div>
+</dialog>
+
+<dialog class="dlg confirm" id="confirm" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <h2 id="confirm-title"></h2>
+    <div id="confirm-body"></div>
+    <div class="row end">
+      <button class="btn" value="cancel" id="confirm-cancel" formnovalidate>Cancel</button>
+      <button class="btn selected" value="ok" id="confirm-ok"></button>
+    </div>
+  </form>
+</dialog>
+
+</body>
+</html>

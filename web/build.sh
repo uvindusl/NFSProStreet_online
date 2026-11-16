@@ -45,11 +45,11 @@ TARGET="--target=wasm32-wasip1-threads -pthread"
 FEAT="-msimd128 -mbulk-memory -mnontrapping-fptoint -mtail-call -mexception-handling -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false"
 DEFS="-D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
 # -fno-delete-null-pointer-checks: guest address 0 is real wasm memory (cpu.h)
-CFLAGS="$TARGET $OPT $FEAT $DEFS -fno-delete-null-pointer-checks -include runtime/web/compat/wasm_plat.h -Iruntime/web/compat -Iruntime -Igen/all"
+CFLAGS="$TARGET $OPT $FEAT $DEFS -fno-delete-null-pointer-checks -include web/runtime/web/compat/wasm_plat.h -Iweb/runtime/web/compat -Ilifter/runtime -Igen/all"
 # the lifted shards only: guest memory as an object of its own (cpu.h, NFSU2_GUEST_OBJ)
 SHARDFLAGS="-DNFSU2_GUEST_OBJ"
 export CC OBJDUMP CFLAGS SHARDFLAGS OUT FULL MEMCHECK OBJCACHE
-HDRSUM="$( (cat runtime/cpu.h runtime/splitscreen_mem.h runtime/web/compat/wasm_plat.h; echo "$CFLAGS $SHARDFLAGS") | shasum | cut -c1-16)"; export HDRSUM
+HDRSUM="$( (cat lifter/runtime/cpu.h lifter/runtime/splitscreen_mem.h web/runtime/web/compat/wasm_plat.h; echo "$CFLAGS $SHARDFLAGS") | shasum | cut -c1-16)"; export HDRSUM
 
 # ---- lifted shards (content-hash incremental, as build.sh) ----
 # gen/all (NFSPROSTREET.EXE) -> out/web/obj, gen/server (server.dll, the LAN server
@@ -88,10 +88,10 @@ HDRSUM="$( (cat runtime/cpu.h runtime/splitscreen_mem.h runtime/web/compat/wasm_
 
 # ---- runtime ----
 # The browser runtime files (web/compat, web/*.c) first, then the shared
-# runtime (runtime/*.c except the native backends).
+# runtime (lifter/runtime/*.c except the native backends).
 RTFILES=$(ls runtime/web/*.c | grep -v "_web.c$" | sort)
 RTFILES="$RTFILES runtime/web/compat/wasm_plat.h"
-RTFILES="$RTFILES runtime/cpu.c runtime/guest.c runtime/setting.c runtime/featurelist.c runtime/features.c runtime/splitscreen.c runtime/gh_alloc.c runtime/threadpool.c"
+RTFILES="$RTFILES lifter/runtime/cpu.c lifter/runtime/guest.c lifter/runtime/setting.c lifter/runtime/featurelist.c lifter/runtime/features.c lifter/runtime/splitscreen.c lifter/runtime/gh_alloc.c lifter/runtime/threadpool.c"
 RTFILES="$RTFILES runtime/web/main_web.c runtime/web/sbrk.c runtime/web/gpu_web.c runtime/web/audio_web.c runtime/web/input_web.c runtime/web/net_lan.c runtime/web/status_web.c runtime/web/thread_exit.c runtime/web/tz.c runtime/web/stackprobe.c runtime/web/memcmp.c runtime/web/sha256.c"
 RTFILES="$RTFILES runtime/web/inflate.c runtime/web/roam_web.c runtime/web/texrep_web.c runtime/web/radio_proto.c runtime/web/photo_icon.c runtime/web/null_platform.c"
 for f in $RTFILES; do

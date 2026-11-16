@@ -1,0 +1,1116 @@
+// The I/O worker: the process's file system.  Game threads post WASI file
+// calls into their RPC slot and block; this worker serves them asynchronously
+// (so a slow read for one thread never holds up another) and writes results
+// straight into the shared wasm memory.
+//
+// Mounts (preopened directories, in this order: fd 3, fd 4):
+//   /data  the NFSU2 install folder on the local server, read-only.  Read in
+//          1 MiB blocks (compressed from a server that offers it, else
+//          HTTP range requests), kept in memory, and
+//          persisted in OPFS ("cache/", datacache.ts) so the next launch reads
+//          locally ("Preload the game data" fills all of it ahead).
+//   /save  the save overlay: OPFS directory, read/write (saves, registry,
+//          settings.ini, logs).  Closing a file the game wrote there tells
+//          the page ({ t: 'saved', path }: "Progress saved", F9's last save).
+import {
+  CTL_IO_BEAT, CTL_IO_DOORBELL, E, IO_SLOW_MS, MAX_THREADS, Op, opName, RPC_DONE, RPC_POSTED, RPC_SLOT, RPC_TAKEN, type BootConfig, type ReadAnswer, type ReadAsk,
+} from './proto';
+import { BLOCK, CACHE_DIR, av1Path, songsPath, blockRuns, cacheKey, cacheOpen, dataUrl, exactUrl, openCacheFile, putBlock, runUrl, type CacheFile, type Manifest } from './datacache';
+import { movieClose, movieDecode, movieOpen } from './movie';
+import { allocMemory, type MemoryTry } from './memory';
+
+// The memory, or the sizes to try for it where the page holds its buffer only (WebKit, memory.ts): then this worker
+// makes it, sends the page its buffer, hands the Memory to each game thread ({ t: 'give', port }) and tells the page
+// each new buffer as the memory grows (memGrew)
+interface Init { memory?: WebAssembly.Memory; tries?: MemoryTry[]; ctl: SharedArrayBuffer; rpc: SharedArrayBuffer; cfg: BootConfig }
+
+const FT_DIR = 3, FT_FILE = 4;
+const td = new TextDecoder(), te = new TextEncoder();
+
+let memory: WebAssembly.Memory, ctl: Int32Array, rpcI32: Int32Array, rpcI64: BigInt64Array, cfg: BootConfig;
+const u8 = () => new Uint8Array(memory.buffer);
+const dv = () => new DataView(memory.buffer);
+
+// ---------------------------------------------------------------- /data ----
+interface DNode { name: string; dir: boolean; size: number; mtime: number; kids?: Map<string, DNode>; byLower?: Map<string, DNode>; path: string; ino: number }
+let dataRoot: DNode;
+let inoNext = 16;
+let runs: { url: string; max: number };     // the server's compressed blocks (datacache.ts blockRuns)
+function mkdirNode(name: string, path: string): DNode { return { name, dir: true, size: 0, mtime: 0, kids: new Map(), byLower: new Map(), path, ino: inoNext++ }; }
+
+async function loadManifest() {
+  const r = await fetch(cfg.manifestUrl, { cache: 'no-cache' });
+  if (!r.ok) throw new Error(`manifest: HTTP ${r.status}`);
+  const m = await r.json() as Manifest;
+  runs = blockRuns(m);
+  dataRoot = mkdirNode('', '');
+  for (const f of m.files) {
+    const parts = f.p.split('/');
+    let cur = dataRoot;
+    for (let i = 0; i < parts.length - 1; i++) cur = cur.kids!.get(parts[i]) ?? addKid(cur, mkdirNode(parts[i], parts.slice(0, i + 1).join('/')));
+    const leaf = parts[parts.length - 1];
+    if (f.d) { if (!cur.kids!.has(leaf)) addKid(cur, mkdirNode(leaf, f.p)); }
+    else addKid(cur, { name: leaf, dir: false, size: f.s ?? 0, mtime: f.m ?? 0, path: f.p, ino: inoNext++ });
+  }
+}
+function addKid(dir: DNode, n: DNode) { dir.kids!.set(n.name, n); if (!dir.byLower!.has(n.name.toLowerCase())) dir.byLower!.set(n.name.toLowerCase(), n); return n; }
+function dataLookup(rel: string): DNode | null {
+  let cur = dataRoot;
+  for (const part of rel.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') return null;
+    if (!cur.dir) return null;
+    const n = cur.kids!.get(part) ?? cur.byLower!.get(part.toLowerCase());
+    if (!n) return null;
+    cur = n;
+  }
+  return cur;
+}
+/** A file the game opens: a movie's AV1 copy in its place where the page plays AV1 (NFSU2_MOVIE_CODEC = av1,
+ *  movie.ts) and the folder has one (tools/movies_av1.py); EA's own songs in place of the music's files with
+ *  settings.ini songs = original (NFSU2_SONGS) where the folder has them (tools/musicpack.py --original); else the
+ *  file itself. */
+function dataFile(rel: string): DNode | null {
+  const n = dataLookup(rel);
+  if (!n || n.dir) return n;
+  const s = cfg.env.NFSU2_SONGS?.trim().toLowerCase() === 'original' ? songsPath(n.path) : null;
+  const o = s ? dataLookup(s) : null;
+  if (o && !o.dir) return o;
+  if (cfg.env.NFSU2_MOVIE_CODEC !== 'av1') return n;
+  const a = av1Path(n.path);
+  return (a && dataLookup(a)) || n;
+}
+
+// block cache: memory LRU over OPFS-persisted blocks over HTTP.  While OPFS keeps the blocks, the memory only saves
+// a read from it (a 1 MB block in 0.14 ms in WebKit, M4 Pro): 64 MB, the blocks being read.  The memory is the only
+// cache without OPFS (no cache folder, or no room left on the disk): 768 MB then.
+const memBlocks = new Map<string, Uint8Array>();
+let memBytes = 0;
+const MEM_KEPT = 64 << 20, MEM_ALONE = 768 << 20;
+const inflight = new Map<string, Promise<Uint8Array>>();
+let cacheDir: FileSystemDirectoryHandle | null = null;
+// The cache files open now, the least recently used first.  WebKit gives a page 251 sync access handles at once
+// (Playwright WebKit 27.2; then "UnknownError: Invalid platform file handle"), and a cache file holds two: kept open
+// for good, the files of a long free roam took them all in 13 min, the game data's cache stopped, and so would have
+// any file of the save folder the game opened after.  So at most CACHE_OPEN stay open, 64 there.  A file opened again
+// is no small thing though: its two handles take ~25 ms to open, and closing them holds up this worker and every read
+// waiting on it, ~8 ms in Firefox and ~2 ms in Chrome (NVMe disk, 2026-10-29; a hard disk takes longer).  Among a
+// free-roam crowd's cars 64 were too few: some 230 files were closed and opened again a minute.  Chrome and Firefox
+// on Windows took 2000 handles at once without a word, so there 512 stay open.
+const CACHE_OPEN = cacheOpen(navigator.userAgent);
+const cacheFiles = new Map<string, Promise<CacheFile | null>>(), cacheSeen = new Set<string>();
+let keeping = true, kept = 0;                              // blocks still go into the cache (keepBlock)
+
+// A cache file that has not opened in OPEN_MS is given up for this game: its reads come from the server, as a file
+// this PC does not keep.  A player's game (Chrome on Linux, 64 files open and some 50 closed and opened again a minute)
+// read nothing more after one of its reads went into this worker and never came out, all from the cache: its free-roam
+// friends' cars stopped coming in, and leaving for the garage waited for good (2026-11-02, game ee850688).  The open
+// is the one step there with no limit (a fetch has STALL_MS); it took up to 15 s on a player's PC that did come back.
+const OPEN_MS = 10000;
+const cacheSkip = new Set<string>();
+let opens = 0;
+// Use the file at once, in the same task: a file that is not among the CACHE_OPEN newest is closed.
+async function cacheFile(n: DNode) {
+  if (!cacheDir) return null;
+  const k = cacheKey(n);
+  if (cacheSkip.has(k)) return null;
+  let p = cacheFiles.get(k);
+  if (p) { cacheFiles.delete(k); cacheFiles.set(k, p); return p; }
+  const t0 = performance.now(), again = cacheSeen.has(k), f = faults(), dir = cacheDir;
+  cacheSeen.add(k);
+  steps.set(`${n.path} (its cache file)`, { t0, at: 'opening its cache file' });
+  // NFSU2_DATA_FAULT open:N: every Nth open never answers
+  const opening = f.open && ++opens % f.open === 0 ? new Promise<CacheFile>(() => {}) : openCacheFile(dir, n);
+  p = new Promise<CacheFile | null>(res => {
+    let over = false;
+    const late = setTimeout(() => {
+      over = true; cacheSkip.add(k); steps.delete(`${n.path} (its cache file)`);
+      note(`[data] ${n.path}: its cache file did not open in ${OPEN_MS / 1000} s; this game reads it from the server`);
+      res(null);
+    }, OPEN_MS);
+    opening.then(cf => {
+      clearTimeout(late); steps.delete(`${n.path} (its cache file)`);
+      const ms = performance.now() - t0;
+      // too late: closed again, the file stays given up
+      if (over) { try { cf.h.close(); cf.haveH.close(); } catch { /* gone */ } note(`[data] ${n.path}: its cache file opened after ${(ms / 1000).toFixed(1)} s, too late`); return; }
+      sum.opened++; sum.openMs += ms; if (ms > sum.openMax) sum.openMax = ms; if (again) sum.reopened++;
+      res(cf);
+    }, e => {
+      clearTimeout(late); steps.delete(`${n.path} (its cache file)`);
+      if (over) return;
+      if (keeping) note(`[data] ${n.path} is not kept on this PC: ${e}`);
+      // the site's data deleted (the cache folder with it): the save folder back before the game's next save needs it
+      // (any error: Firefox answers some calls in a removed folder with UnknownError)
+      void saveGone().then(gone => { if (gone) void recover(); });
+      res(null);
+    });
+  });
+  cacheFiles.set(k, p);
+  for (const [ok, op] of cacheFiles) {
+    if (cacheFiles.size <= CACHE_OPEN) break;
+    cacheFiles.delete(ok);
+    // after the reactions already waiting for it (a reader that just opened it uses it first)
+    void op.then(cf => {
+      if (!cf) return;
+      const t = performance.now();
+      cf.h.flush(); cf.h.close(); cf.haveH.flush(); cf.haveH.close();
+      sum.closed++; sum.closeMs += performance.now() - t;
+    }).catch(() => {});
+  }
+  return p;
+}
+
+function memPut(key: string, b: Uint8Array) {
+  memBlocks.set(key, b); memBytes += b.length;
+  const budget = cacheDir && keeping ? MEM_KEPT : MEM_ALONE;
+  for (const [k, v] of memBlocks) { if (memBytes <= budget) break; memBlocks.delete(k); memBytes -= v.length; }
+}
+/** this worker's global (the libraries type self as a window's) */
+const me = self as unknown as DedicatedWorkerGlobalScope;
+// a line for the game's log (F9 > Download log), as "[data] ...": what a read waited for on the server
+const note = (s: string) => me.postMessage({ t: 'log', s });
+// At most FETCHES block requests in flight (the server holds each client address to 64 requests at once, so a
+// household of players behind one address stays well inside it).  A block comes compressed when the server offers
+// it (the browser undoes the Content-Encoding), else as a byte range of the file.  A try that fails on the way (no
+// connection, a reset, a busy server's 429, 5xx or Cloudflare's 52x) or stalls (no byte for STALL_MS) is made
+// again after a pause, for as long as it takes, as the game's read of a slow disc would wait: the game cannot go
+// on without the bytes, and a failed read reaches it as one of 0 bytes.  Only an answer that cannot change by
+// asking again (another 4xx) fails the read, and a body of the wrong length after three tries.  After two tries
+// with no answer at all, every other try asks for the block as a byte range instead: another address, which no
+// shared cache keeps, uncompressed, from the server itself.  (A player's game waited minutes on one block whose
+// compressed address failed with "Failed to fetch" on every try, while Cloudflare gave it to everyone else.)
+// NFSU2_DATA_FAULT (tests, the web suite's datafault): fail:N fails every Nth try as a lost connection, hang:N
+// leaves every Nth unanswered until its stall timer, stall:MS sets that timer, deny:N loses every try at the
+// compressed address of each file's every Nth block (only its byte range comes), full:N fills this PC's cache
+// at the Nth block this game keeps, open:N leaves every Nth cache file's opening unanswered (cacheFile's OPEN_MS).
+// Blocks waiting for a turn go by priority: the track's stream file first (a section the game waits for in the world
+// is a "Loading" screen in the middle of a drive), then the game's other reads (a friend's car, music, speech), then
+// the reading ahead of the track (readAhead).  That one starts only while the game fetches nothing (on a slow line a
+// block read ahead would share it with the game's), FILL_FETCHES at most, and only once the game has fetched nothing
+// for AHEAD_QUIET_MS: a friend's car is a read after another, each of them a block from the server with an empty
+// cache, and in each gap between them a block read ahead started and took a share of the line for its next ones (on
+// 20 Mbit/s, a meet's first 30 s: 77 blocks read ahead, about half of what the line carried, and 90 % of the cars
+// shown after 34 s).
+const FETCHES = 8, STALL_MS = 20000, SLOW_MS = 5000, AHEAD_QUIET_MS = 2000;
+const P_AHEAD = 0, P_GAME = 1, P_TRACK = 2, FILL_FETCHES = 2;
+interface Ticket { pri: number; ahead?: boolean }
+let fetching = 0, aheadFetching = 0, tries = 0, fault: { fail: number; hang: number; stall: number; deny: number; full: number; open: number } | null = null;
+const fetchWait: { t: Ticket; go: () => void }[] = [];
+// the game's last block from the server started or came in then, and a look again at the waiting ones once
+// AHEAD_QUIET_MS has passed since
+let gameAt = -1e9, quietTimer: ReturnType<typeof setTimeout> | 0 = 0;
+function quiet(): boolean {
+  const w = gameAt + AHEAD_QUIET_MS - performance.now();
+  if (w > 0 && !quietTimer) quietTimer = setTimeout(() => { quietTimer = 0; fetchNext(); }, w + 1);
+  return w <= 0;
+}
+const mayFetch = (t: Ticket) => fetching < FETCHES &&
+  (t.pri > P_AHEAD || fetching === aheadFetching && aheadFetching < FILL_FETCHES && quiet());
+function fetchStart(t: Ticket) { fetching++; if ((t.ahead = t.pri === P_AHEAD)) aheadFetching++; else gameAt = performance.now(); }
+// the waiting blocks that may go now, the most urgent (the earliest of those) first
+function fetchNext() {
+  for (;;) {
+    let best = -1;
+    for (let i = 0; i < fetchWait.length; i++) if (best < 0 || fetchWait[i].t.pri > fetchWait[best].t.pri) best = i;
+    if (best < 0 || !mayFetch(fetchWait[best].t)) return;
+    const w = fetchWait.splice(best, 1)[0];
+    fetchStart(w.t); w.go();
+  }
+}
+function faults() {
+  if (!fault) {
+    const kv = new Map((cfg.env?.NFSU2_DATA_FAULT ?? '').split(',').map(p => p.split(':') as [string, string]));
+    const num = (k: string) => +(kv.get(k) ?? 0) || 0;
+    fault = { fail: num('fail'), hang: num('hang'), stall: num('stall') || STALL_MS, deny: num('deny'), full: num('full'), open: num('open') };
+  }
+  return fault;
+}
+/** one try: the block (as a byte range of the file, or the server's compressed run of it), or why it failed and
+ *  whether asking again can help (lost: no answer at all) */
+async function fetchOnce(url: string, start: number, len: number, ranged: boolean, lose: boolean):
+    Promise<Uint8Array | { why: string; again: boolean; size?: boolean; lost?: boolean }> {
+  const f = faults(), ac = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const alive = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), f.stall); };
+  alive();
+  try {
+    const k = ++tries;
+    if (lose || f.fail && k % f.fail === 0) throw new TypeError('lost connection (NFSU2_DATA_FAULT)');
+    if (f.hang && k % f.hang === 0) await new Promise((_, no) => ac.signal.addEventListener('abort', () => no(new Error('aborted'))));
+    const r = await fetch(url, { headers: ranged ? { Range: `bytes=${start}-${start + len - 1}` } : {}, cache: 'no-store', signal: ac.signal });
+    if (r.status !== 206 && r.status !== 200) {
+      await r.body?.cancel().catch(() => {});
+      return { why: `HTTP ${r.status}`, again: r.status === 408 || r.status === 429 || r.status >= 500 };
+    }
+    // the body as it comes, so that only a stalled one runs into the timer
+    const parts: Uint8Array[] = [];
+    let got = 0;
+    if (r.body) for (const rd = r.body.getReader(); ;) {
+      alive();
+      const { done, value } = await rd.read();
+      if (done) break;
+      parts.push(value); got += value.length;
+    }
+    let b = new Uint8Array(got);
+    for (let i = 0, o = 0; i < parts.length; o += parts[i].length, i++) b.set(parts[i], o);
+    if (r.status === 200 && ranged) b = b.slice(start, start + len);          // a range answered with the whole file: our block of it
+    return b.length === len ? b : { why: `${b.length} of ${len} bytes`, again: true, size: true };
+  } catch (e) {
+    return { why: ac.signal.aborted ? `no answer for ${f.stall / 1000} s` : String((e as Error)?.message ?? e), again: true, lost: true };
+  } finally { clearTimeout(timer); }
+}
+// A line a minute for the log while blocks come from the server (a first game, a new area): how many, how fast, how
+// many had to be asked again, and what this device's cache read meanwhile; also while cache files are closed and
+// opened again (CACHE_OPEN), with what that took.  A game the cache has wholly, its files open, says nothing.
+const SUM_MS = 60_000;
+const sumZero = () => ({ t: 0, fetched: 0, bytes: 0, ms: 0, maxMs: 0, again: 0, local: 0, ahead: 0,
+  opened: 0, openMs: 0, openMax: 0, reopened: 0, closed: 0, closeMs: 0 });
+let sum = sumZero();
+function dataSummary(now: number) {
+  if (!sum.t) { sum.t = now; return; }
+  if (now - sum.t < SUM_MS) return;
+  if (sum.fetched || sum.again || sum.reopened)
+    note(`[data] ${((now - sum.t) / 1000).toFixed(0)} s: ${sum.fetched} blocks from the server (${(sum.bytes / 1048576).toFixed(1)} MB, ` +
+         `${sum.fetched ? (sum.ms / sum.fetched).toFixed(0) : 0} ms on average, the slowest ${sum.maxMs.toFixed(0)} ms${sum.again ? `, ${sum.again} tries again` : ''}${sum.ahead ? `, ${sum.ahead} read ahead` : ''}), ` +
+         `${sum.local} from this device's cache, ${cacheFiles.size} cache files open (${sum.opened} opened, ${sum.reopened} of them again, ` +
+         `${sum.opened ? (sum.openMs / sum.opened).toFixed(0) : 0} ms on average, the slowest ${sum.openMax.toFixed(0)} ms; ${sum.closed} closed, ` +
+         `${sum.closed ? (sum.closeMs / sum.closed).toFixed(1) : 0} ms each), ${(memBytes / 1048576).toFixed(0)} MB in memory${keeping ? '' : ', no longer kept on this device'}`);
+  sum = { ...sumZero(), t: now };
+}
+async function fetchBlock(n: DNode, bi: number, start: number, len: number, t: Ticket): Promise<Uint8Array> {
+  if (!mayFetch(t) || fetchWait.some(w => w.t.pri >= t.pri)) await new Promise<void>(go => fetchWait.push({ t, go }));
+  else fetchStart(t);
+  const what = `${n.path} block ${bi}${t.ahead ? ' (read ahead)' : ''}`, t0 = performance.now();
+  const slow = setTimeout(() => note(`[data] ${what}: waiting for the server for ${SLOW_MS / 1000} s`), SLOW_MS);
+  try {
+    const run = runUrl(runs.url, n.path, bi, 1, n), range = dataUrl(cfg.dataBase, n.path), f = faults();
+    for (let k = 1, wait = 250, sized = 0, lost = 0; ; k++, wait = Math.min(wait * 2, 8000)) {
+      const ranged = lost >= 2 && k % 2 === 1, by = ranged ? ' (as a byte range)' : '';
+      const r = await fetchOnce(ranged ? range : run, start, len, ranged, !ranged && f.deny > 0 && (bi + 1) % f.deny === 0);
+      if (r instanceof Uint8Array) {
+        const s = (performance.now() - t0) / 1000;
+        sum.fetched++; if (t.ahead) sum.ahead++; sum.bytes += r.length; sum.ms += s * 1000; if (s * 1000 > sum.maxMs) sum.maxMs = s * 1000;
+        if (k > 1 || s >= SLOW_MS / 1000) note(`[data] ${what}: in after ${s.toFixed(1)} s${k > 1 ? `, ${k} tries` : ''}${by}`);
+        return r;
+      }
+      if (r.lost) lost++;
+      if (!r.again || (r.size && ++sized >= 3)) throw new Error(`${what}: ${r.why}${by}`);
+      sum.again++;
+      if (k <= 3 || k % 10 === 0) note(`[data] ${what}: ${r.why}${by}; again in ${wait / 1000} s (try ${k + 1})`);
+      await new Promise(res => setTimeout(res, wait));
+    }
+  } finally { clearTimeout(slow); fetching--; if (t.ahead) aheadFetching--; else gameAt = performance.now(); fetchNext(); }
+}
+// A block this PC has no room to keep (a full disk, or the browser's share of it used up: "No space available for
+// this operation") ends the keeping for this game, not the read: the game has the bytes either way.  (Thrown into
+// the read, it gave the game a failed one, and the game crashed.)
+function keepBlock(cf: CacheFile, n: DNode, bi: number, b: Uint8Array) {
+  if (!keeping) return;
+  try {
+    const f = faults();
+    if (f.full && ++kept >= f.full) throw new DOMException('No space available for this operation (NFSU2_DATA_FAULT)', 'QuotaExceededError');
+    putBlock(cf, bi, b);
+  } catch (e) {
+    keeping = false;
+    note(`[data] no room on this PC to keep more of the game data (${n.path} block ${bi}: ${(e as Error)?.message ?? e}); the rest comes from the server`);
+  }
+}
+// the blocks being read: who waits for each (a read of the game asking for a block the reading ahead asked for first
+// raises its priority to its own)
+const tickets = new Map<string, Ticket>();
+// what each block being read waits for, since when (the watchdog's note of a request that does not come back)
+const steps = new Map<string, { t0: number; at: string }>();
+const step = (key: string, at: string) => { const s = steps.get(key); if (s) s.at = at; };
+async function getBlock(n: DNode, bi: number, pri: number): Promise<Uint8Array> {
+  const key = n.path + '#' + bi;
+  dataSummary(performance.now());
+  const hit = memBlocks.get(key);
+  if (hit) { memBlocks.delete(key); memBlocks.set(key, hit); return hit; }
+  let p = inflight.get(key);
+  if (p) {
+    const t = tickets.get(key);
+    if (t && t.pri < pri) { t.pri = pri; fetchNext(); }
+    return p;
+  }
+  const t: Ticket = { pri };
+  p = (async () => {
+    const start = bi * BLOCK, len = Math.min(BLOCK, n.size - start);
+    steps.set(key, { t0: performance.now(), at: 'its cache file' });
+    const cf = await cacheFile(n);
+    if (cf && cf.have[bi]) {
+      try {
+        const b = new Uint8Array(len); cf.h.read(b, { at: start }); memPut(key, b); sum.local++; return b;
+      } catch (e) { note(`[data] ${n.path} block ${bi}: the cache file did not read (${e}); from the server`); }
+    }
+    step(key, 'the server');
+    const b = await fetchBlock(n, bi, start, len, t);
+    // the file again: the one from before the fetch may have been closed meanwhile (CACHE_OPEN)
+    step(key, 'its cache file, to keep it');
+    const cf2 = await cacheFile(n);
+    if (cf2) keepBlock(cf2, n, bi, b);
+    // a block read ahead stays out of the memory while this PC keeps it: the blocks being read stay there
+    if (t.pri > P_AHEAD || !cf2 || !keeping) memPut(key, b);
+    return b;
+  })();
+  inflight.set(key, p); tickets.set(key, t);
+  try { return await p; } finally { inflight.delete(key); tickets.delete(key); steps.delete(key); }
+}
+
+// ------------------------------------------------------- reading ahead ----
+// The world streams in sections of its track's stream file (TRACKS\STREAML4RA.BUN, 113 MB, for the city), read as the
+// car comes near.  From a disc a section takes milliseconds; from the server each of its blocks is a request, and a
+// car on the freeway could reach a section before it came in: a "Loading" screen in the middle of the drive.  So once
+// the game reads a track's stream file, the blocks of it this PC does not have yet come in at the lowest priority
+// (above), the nearest ones to the game's latest read first, until this PC has all of it (40 MB on the network for
+// the city's), and its sections then read from here.  Only while this PC keeps the game data: the memory alone has no
+// room for a whole track.  NFSU2_TRACK_AHEAD=0 turns it off.
+const isTrackStream = (n: DNode) => /^TRACKS\/STREAM[^/]*\.BUN$/i.test(n.path);
+let ahead: { n: DNode; near: number; t0: number; got: number } | null = null, aheadLoops = 0;
+const aheadDone = new Set<DNode>();
+function readAhead(n: DNode, bi: number) {
+  if (cfg.env?.NFSU2_TRACK_AHEAD === '0' || !cacheDir || !keeping || aheadDone.has(n)) return;
+  if (ahead?.n === n) ahead.near = bi;
+  else ahead = { n, near: bi, t0: performance.now(), got: 0 };
+  while (aheadLoops < FILL_FETCHES) { aheadLoops++; void aheadLoop(); }
+}
+async function aheadLoop() {
+  let a = ahead;
+  try {
+    while ((a = ahead) && keeping) {
+      const cf = await cacheFile(a.n);
+      if (!cf) { aheadDone.add(a.n); if (ahead === a) ahead = null; return; }
+      let bi = -1, missing = 0;
+      for (let i = 0; i < cf.have.length; i++) {
+        if (cf.have[i]) continue;
+        missing++;
+        if (!inflight.has(a.n.path + '#' + i) && (bi < 0 || Math.abs(i - a.near) < Math.abs(bi - a.near))) bi = i;
+      }
+      if (!missing) {
+        if (ahead === a) {
+          ahead = null; aheadDone.add(a.n);
+          if (a.got) note(`[data] ${a.n.path}: all of it on this device now, ${a.got} blocks read ahead in ${((performance.now() - a.t0) / 1000).toFixed(0)} s`);
+        }
+        return;
+      }
+      if (bi < 0) return;                        // the rest is on its way already
+      await getBlock(a.n, bi, P_AHEAD); a.got++;
+    }
+  } catch (e) {
+    if (a) { note(`[data] reading ${a.n.path} ahead stopped: ${(e as Error)?.message ?? e}`); aheadDone.add(a.n); if (ahead === a) ahead = null; }
+  } finally { aheadLoops--; }
+}
+
+// In WebKit (offPage) a read whose blocks this device keeps, and the memory does not, goes from the cache file straight
+// into the game's memory, not through a 1 MB block of its own for each: this worker collects next to nothing there (it
+// holds the game's memory: memory.ts), and those blocks were ~250 MB of garbage as a crowded free roam came in
+// (Playwright WebKit, 2026-11-07).  A browser that will not read a file into shared memory (a TypeError) reads
+// through the blocks, as Chrome and Firefox do.
+let readsKept = true;
+function readKept(cf: CacheFile, pos: number, end: number, dst: { ptr: number; len: number }[], first: number, last: number): number {
+  for (let bi = first; bi <= last; bi++) if (!cf.have[bi]) return -1;
+  const mem = u8();
+  let off = pos;
+  try {
+    for (const d of dst) {
+      if (off >= end) break;
+      if (!d.len) continue;                    // (an empty buffer between two others: the next one goes on)
+      const k = Math.min(d.len, end - off);
+      if (cf.h.read(mem.subarray(d.ptr, d.ptr + k), { at: off }) !== k) return -1;
+      off += k;
+    }
+  } catch (e) {
+    if (e instanceof TypeError) { readsKept = false; note(`[data] the cache files are read through blocks of their own (${e.message})`); }
+    return -1;
+  }
+  sum.local += last - first + 1;
+  return end - pos;
+}
+
+/** whether the memory has every block of first..last (a read the blocks serve at once) */
+function blocksInMemory(n: DNode, first: number, last: number): boolean {
+  for (let bi = first; bi <= last; bi++) if (!memBlocks.has(n.path + '#' + bi)) return false;
+  return true;
+}
+async function dataRead(n: DNode, pos: number, dst: { ptr: number; len: number }[]): Promise<number> {
+  const total = dst.reduce((a, d) => a + d.len, 0);
+  const end = Math.min(n.size, pos + total);
+  if (end <= pos) return 0;
+  const first = Math.floor(pos / BLOCK), last = Math.floor((end - 1) / BLOCK), track = isTrackStream(n);
+  if (track) readAhead(n, first);
+  if (readsKept && offPage && cacheDir && !blocksInMemory(n, first, last)) {
+    dataSummary(performance.now());
+    const cf = await cacheFile(n);
+    const r = cf ? readKept(cf, pos, end, dst, first, last) : -1;
+    if (r >= 0) return r;
+  }
+  const blocks = await Promise.all(Array.from({ length: last - first + 1 }, (_, i) => getBlock(n, first + i, track ? P_TRACK : P_GAME)));
+  const mem = u8();
+  let off = pos, di = 0, dOff = 0;
+  while (off < end) {
+    const b = blocks[Math.floor(off / BLOCK) - first], bo = off % BLOCK;
+    const d = dst[di];
+    const k = Math.min(b.length - bo, d.len - dOff, end - off);
+    mem.set(b.subarray(bo, bo + k), d.ptr + dOff);
+    off += k; dOff += k;
+    if (dOff === d.len) { di++; dOff = 0; }
+  }
+  return end - pos;
+}
+
+// ---------------------------------------------------------------- /save ----
+let saveRoot: FileSystemDirectoryHandle;
+async function saveDirAt(parts: string[], create: boolean): Promise<FileSystemDirectoryHandle | null> {
+  if (recovering) await recovering;
+  let d = saveRoot;
+  for (const p of parts) {
+    if (!p || p === '.') continue;
+    if (p === '..') return null;
+    try { d = await d.getDirectoryHandle(p, { create }); } catch { return null; }
+  }
+  return d;
+}
+async function saveEntry(rel: string): Promise<{ parent: FileSystemDirectoryHandle; name: string; kind: 'file' | 'directory' | null; h: FileSystemHandle | null } | null> {
+  const parts = rel.split('/').filter(p => p && p !== '.');
+  if (parts.some(p => p === '..')) return null;
+  if (recovering) await recovering;
+  if (!parts.length) return { parent: saveRoot, name: '', kind: 'directory', h: saveRoot };
+  const parent = await saveDirAt(parts.slice(0, -1), false);
+  if (!parent) return null;
+  const name = parts[parts.length - 1];
+  try { return { parent, name, kind: 'file', h: await parent.getFileHandle(name) }; } catch {}
+  try { return { parent, name, kind: 'directory', h: await parent.getDirectoryHandle(name) }; } catch {}
+  return { parent, name, kind: null, h: null };
+}
+
+// Why a file of the save folder did not open, for the log (a save that fails is a "[file] CANNOT OPEN" line of the
+// game's, which says no more), said once each.  Chrome refuses a sync access handle while the page writes the file
+// (createWritable: NoModificationAllowedError), never for its reads (getFile).
+//
+// A browser that clears the site's data while a game runs (Discord 2026-10-31: in each game, after a while, every new
+// open of a game data cache file or a save failed with NotFoundError, and each next start found the save folder
+// empty) leaves this worker's folder handles on folders that are gone, and every save after it failed.  So when an
+// open or a create in /save, or a cache file's open, finds the save folder gone (recover), this worker makes it and
+// the cache folder again, tells the page ('save-gone'), which writes the saves back into it (the cloud's, else those
+// of the game's start: shell.ts saveGone), and holds every /save call until the page answers ('save-ready'),
+// SAVE_WAIT_MS at most: under the stall watchdog's 15 s (runtime/watchdog.c), as the game's thread waits for it like
+// for any slow disk.  The call that found it then runs again: the game's save lands on what came back.
+//
+// A folder still there whose file does not open is no deleted folder: Firefox 159 on a Mac (Discord 2026-11-04) could
+// not open any file new to its storage from a second into a game ("NotFoundError: Entry not found" on a file it had just
+// made; the next open of it "NoModificationAllowedError": the failed open kept its lock), and the game played on for an
+// hour while its new files failed; the next day every call there failed.  Asking again does not help there (the same
+// answer, on the same entry: Firefox gives a folder made again the entry it had), so the page is told once
+// ('save-trouble'), and says over the game that its saves may not be kept.
+const troubleSaid = new Set<string>();
+let troubleTold = false;
+/** true: the save folder was gone and is made again (the caller tries once more) */
+async function saveTrouble(what: string, err: unknown, again = false): Promise<boolean> {
+  const name = (err as Error)?.name ?? 'Error';
+  // whatever the call answered (Chrome: NotFoundError; Firefox: UnknownError for a create in a removed folder), the
+  // folder itself is looked at: gone, it is made again
+  if (!again && !inMemory() && await saveGone()) { await recover(); return true; }
+  if (!troubleSaid.has(name)) { troubleSaid.add(name); note(`[save] ${what}: ${name}: ${(err as Error)?.message ?? err}`); }
+  if (!troubleTold) { troubleTold = true; me.postMessage({ t: 'save-trouble', error: `${name}: ${(err as Error)?.message ?? err}` }); }
+  return false;
+}
+/** whether this worker's save folder is gone (keys() of a folder deleted under its handle answers NotFoundError, in
+ *  Chrome and Firefox alike) */
+async function saveGone(): Promise<boolean> {
+  try { for await (const _ of (saveRoot as unknown as { keys(): AsyncIterable<string> }).keys()) break; return false; }
+  catch (e) { return (e as Error)?.name === 'NotFoundError'; }
+}
+const SAVE_WAIT_MS = 12_000;
+let recovering: Promise<void> | null = null, saveAnswered: (() => void) | null = null;
+/** a profile's own file: "NFS Underground 2/<NAME>/<NAME>" (any case), not a cover shoot's ("<NAME> DVD 1") */
+const isProfilePath = (p: string[]) => p.length === 3 && p[0] === 'NFS Underground 2' && p[1].toLowerCase() === p[2].toLowerCase() &&
+  !/ (DVD|Magazine) \d+$/.test(p[1]);
+/** the save folder's generation: one more each time it is made again (an Fd's of another was opened in a deleted one) */
+let rootGen = 1;
+/**
+ * A file the game wrote into a save folder the browser deleted since it opened it (its sync handle on a file that is
+ * gone): its bytes, read back from that handle, written again into the folder made again, as the newest of that path.
+ * False: they could not be read back or written, so the save is lost (the game saves again at its next save point).
+ */
+async function salvage(rel: string, bytes: Uint8Array | null): Promise<boolean> {
+  if (await saveGone()) await recover();
+  const p = rel.split('/');
+  // never zeros, nor a profile that is none, over what the refill brought back
+  if (bytes && (bytes.every(b => b === 0) || isProfilePath(p) &&
+      (bytes.length < 8 || bytes[0] !== 0x32 || bytes[1] !== 0x30 || bytes[2] !== 0x43 || bytes[3] !== 0x4d ||
+       new DataView(bytes.buffer, bytes.byteOffset).getUint32(4, true) !== bytes.length))) bytes = null;
+  if (bytes) try {
+    const d = await saveDirAt(p.slice(0, -1), true);
+    if (d) {
+      const sh = await (await d.getFileHandle(p[p.length - 1], { create: true })).createSyncAccessHandle({ mode: 'readwrite-unsafe' });
+      sh.truncate(0); sh.write(bytes, { at: 0 }); sh.flush(); sh.close();
+      note(`[save] a file the game wrote as the browser deleted the save folder: written again into the new one (${bytes.length} bytes)`);
+      return true;
+    }
+  } catch { /* lost */ }
+  note('[save] a file the game wrote as the browser deleted the save folder could not be written again: that save is lost');
+  return false;
+}
+function recover(): Promise<void> {
+  if (inMemory()) return Promise.resolve();       // (playing without saving: the browser's storage is never looked at again)
+  recovering ??= (async () => {
+    const t0 = performance.now();
+    const opfs = await navigator.storage.getDirectory();
+    saveRoot = await opfs.getDirectoryHandle(cfg.saveDir, { create: true });
+    rootGen++;
+    if (cacheDir) {
+      // the cache files open are of the folder that went: opened again in the new one, and kept again
+      cacheFiles.clear(); cacheSeen.clear(); aheadDone.clear(); keeping = true; kept = 0;
+      try { cacheDir = await opfs.getDirectoryHandle(CACHE_DIR, { create: true }); } catch { cacheDir = null; }
+    }
+    const top = fds.get(4);
+    if (top?.mount === 'save') top.dh = saveRoot;            // /save itself, as the game lists it
+    note('[save] the save folder is gone: the browser deleted this site\'s data while the game ran (low disk space, or its settings?); made again, the page puts the saves back');
+    const answered = await new Promise<boolean>(res => {
+      saveAnswered = () => res(true);
+      setTimeout(() => res(false), SAVE_WAIT_MS);
+      me.postMessage({ t: 'save-gone' });
+    });
+    saveAnswered = null;
+    note(answered ? `[save] the saves are back after ${((performance.now() - t0) / 1000).toFixed(1)} s: the game saves on`
+      : `[save] the page did not put the saves back within ${SAVE_WAIT_MS / 1000} s: the game saves on without them`);
+  })().finally(() => { recovering = null; });
+  return recovering;
+}
+
+// ----------------------------------------------- playing without saving ----
+// cfg.saves 'memory' (shell.ts: the save folder did not answer, and the player started the game anyway): /save is a
+// folder in this worker's memory, made of the files of the save folder that read at the start (no sync handle is opened
+// there, nothing is made, written, moved or removed), and every write of the game's goes into it alone: gone with the
+// game.  These classes answer as much of the OPFS handles' API as this worker uses, so the code above and below runs on
+// it as on the browser's; the page is told of no save (no "Progress saved", nothing for cloud saves).
+const domError = (name: string, msg = name) => new DOMException(msg, name);
+class MemSync {
+  constructor(private f: MemFile) {}
+  read(b: Uint8Array, o: { at: number }) { const d = this.f.data, n = Math.max(0, Math.min(b.length, d.length - o.at)); b.set(d.subarray(o.at, o.at + n)); return n; }
+  write(b: Uint8Array, o: { at: number }) {
+    const end = o.at + b.length;
+    if (end > this.f.data.length) { const d = new Uint8Array(end); d.set(this.f.data); this.f.data = d; }
+    this.f.data.set(b, o.at); this.f.mtime = Date.now(); return b.length;
+  }
+  getSize() { return this.f.data.length; }
+  truncate(n: number) { const d = new Uint8Array(n); d.set(this.f.data.subarray(0, n)); this.f.data = d; this.f.mtime = Date.now(); }
+  flush() {}
+  close() {}
+}
+class MemFile {
+  readonly kind = 'file';
+  data = new Uint8Array(0);
+  mtime = Date.now();
+  constructor(public name: string, public parent: MemDir) {}
+  async getFile() { const d = this.data; return { size: d.length, lastModified: this.mtime, arrayBuffer: async () => d.slice().buffer, text: async () => td.decode(d) }; }
+  async createSyncAccessHandle() { return new MemSync(this); }
+  async move(to: MemDir, name: string) { moveMem(this, to, name); }
+}
+class MemDir {
+  readonly kind = 'directory';
+  kids = new Map<string, MemDir | MemFile>();
+  constructor(public name: string, public parent: MemDir | null) {}
+  async getDirectoryHandle(n: string, o: { create?: boolean } = {}) {
+    let k = this.kids.get(n);
+    if (k?.kind === 'file') throw domError('TypeMismatchError');
+    if (!k) { if (!o.create) throw domError('NotFoundError'); k = new MemDir(n, this); this.kids.set(n, k); }
+    return k;
+  }
+  async getFileHandle(n: string, o: { create?: boolean } = {}) {
+    let k = this.kids.get(n);
+    if (k?.kind === 'directory') throw domError('TypeMismatchError');
+    if (!k) { if (!o.create) throw domError('NotFoundError'); k = new MemFile(n, this); this.kids.set(n, k); }
+    return k;
+  }
+  async removeEntry(n: string, o: { recursive?: boolean } = {}) {
+    const k = this.kids.get(n);
+    if (!k) throw domError('NotFoundError');
+    if (k.kind === 'directory' && k.kids.size && !o.recursive) throw domError('InvalidModificationError');
+    this.kids.delete(n);
+  }
+  async *entries(): AsyncIterable<[string, MemDir | MemFile]> { yield* [...this.kids]; }
+  async *keys(): AsyncIterable<string> { yield* [...this.kids.keys()]; }
+  async move(to: MemDir, name: string) { moveMem(this, to, name); }
+}
+function moveMem(e: MemDir | MemFile, to: MemDir, name: string) {
+  if (to.kids.get(name)?.kind === 'directory' && e.kind === 'file') throw domError('TypeMismatchError');
+  e.parent?.kids.delete(e.name);
+  e.name = name; e.parent = to;
+  to.kids.set(name, e);
+}
+// It is offered where the storage does not answer, so its start waits for the storage a little only: each call
+// MEM_CALL_MS, all of them MEM_ALL_MS.  Past either, the game starts with the page's files alone (none of the save
+// folder's: half of them would be a profile without its GARAGE.DAT).  Copied: what the game reads, up to MEM_ALL_MAX;
+// left out: F12's screenshots, the DVD and magazine covers (1 MB each), and a file over MEM_FILE_MAX (a game that cannot
+// keep anything has no use for them, and a phone none for their memory beside the game's own).  A profile's folder comes
+// whole or not at all: one of its files that does not read, or that the limits would leave out, leaves the profile out
+// (a profile without its GARAGE.DAT or MPWINS.DAT would play as another career).
+const MEM_CALL_MS = 2000, MEM_ALL_MS = 6000, MEM_FILE_MAX = 2 << 20, MEM_ALL_MAX = 16 << 20;
+const isMemShot = (path: string) => !path.includes('/') && /\.(tga|bmp|png|jpe?g)$/i.test(path);
+const isMemCover = (path: string) => /^NFS Underground 2\/[^/]+ (DVD|Magazine) \d+$/.test(path);
+const isMemProfile = (path: string) => /^NFS Underground 2\/[^/]+$/.test(path) && !isMemCover(path);
+interface MemCount { files: number; bytes: number; skipped: number; left: number; leftBytes: number; profiles: number; until: number }
+/** a profile's folder that cannot come whole (memCopy whole) */
+class MemPartial extends Error {}
+/** p, or a TimeoutError once ms passed (p answers whenever it does, unheard) */
+function within<T>(p: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  p.catch(() => {});
+  return Promise.race([p, new Promise<never>((_, no) => { timer = setTimeout(() => no(domError('TimeoutError', `no answer in ${ms} ms`)), ms); })])
+    .finally(() => clearTimeout(timer));
+}
+const memCall = <T>(p: Promise<T>, n: MemCount) => within(p, Math.max(0, Math.min(MEM_CALL_MS, n.until - Date.now())));
+const timedOut = (e: unknown) => (e as Error)?.name === 'TimeoutError';
+/** the save folder's files the game reads (rel: dir's path), copied into dir; what did not read is left out, and a
+ *  TimeoutError (a call past its time) is thrown: none of it is used then.  whole: in a profile's folder, where any of
+ *  that throws MemPartial instead (the profile is left out) */
+async function memCopy(from: FileSystemDirectoryHandle, dir: MemDir, rel: string, n: MemCount, whole = false) {
+  const it = from.entries();
+  for (;;) {
+    let r: IteratorResult<[string, FileSystemHandle]>;
+    try { r = await memCall(it.next(), n); } catch (e) { if (timedOut(e)) throw e; if (whole) throw new MemPartial(); n.skipped++; return; }
+    if (r.done) return;
+    const [name, h] = r.value, path = rel ? `${rel}/${name}` : name;
+    if (h.kind === 'directory') {
+      if (isMemCover(path)) { n.left++; continue; }
+      const sub = new MemDir(name, dir);
+      if (!whole && isMemProfile(path)) {
+        const was = { files: n.files, bytes: n.bytes };
+        try { await memCopy(h as FileSystemDirectoryHandle, sub, path, n, true); dir.kids.set(name, sub); }
+        catch (e) { if (!(e instanceof MemPartial)) throw e; Object.assign(n, was); n.profiles++; }
+        continue;
+      }
+      dir.kids.set(name, sub);
+      await memCopy(h as FileSystemDirectoryHandle, sub, path, n, whole);
+      continue;
+    }
+    if (isMemShot(path)) { n.left++; continue; }
+    try {
+      const f = await memCall((h as FileSystemFileHandle).getFile(), n);
+      if (f.size > MEM_FILE_MAX || n.bytes + f.size > MEM_ALL_MAX) { if (whole) throw new MemPartial(); n.left++; n.leftBytes += f.size; continue; }
+      const m = new MemFile(name, dir);
+      m.data = new Uint8Array(await memCall(f.arrayBuffer(), n)); m.mtime = f.lastModified;
+      dir.kids.set(name, m); n.files++; n.bytes += m.data.length;
+    } catch (e) { if (timedOut(e) || e instanceof MemPartial) throw e; if (whole) throw new MemPartial(); n.skipped++; }
+  }
+}
+/** /save in memory: the save folder's files the game reads, then the page's own (cfg.memFiles) */
+async function memorySaves(opfs: FileSystemDirectoryHandle | null, rootLate = false): Promise<FileSystemDirectoryHandle> {
+  const n: MemCount = { files: 0, bytes: 0, skipped: 0, left: 0, leftBytes: 0, profiles: 0, until: Date.now() + MEM_ALL_MS };
+  let m = new MemDir('', null), late = rootLate;
+  try {
+    const real = opfs && await memCall(opfs.getDirectoryHandle(cfg.saveDir), n);
+    if (real) await memCopy(real, m, '', n);
+  } catch (e) {
+    // (no save folder: nothing to copy; one that did not answer in time: none of it)
+    if (timedOut(e)) { late = true; m = new MemDir('', null); Object.assign(n, { files: 0, bytes: 0, skipped: 0, left: 0, leftBytes: 0, profiles: 0 }); }
+  }
+  for (const f of cfg.memFiles ?? []) {
+    const p = f.path.split('/').filter(Boolean);
+    let d = m;
+    for (const x of p.slice(0, -1)) d = await d.getDirectoryHandle(x, { create: true });
+    if (!f.over && d.kids.has(p[p.length - 1])) continue;
+    (await d.getFileHandle(p[p.length - 1], { create: true })).data = te.encode(f.text);
+  }
+  note(late ? `[save] playing without saving: the save folder did not answer within ${MEM_CALL_MS / 1000} s a call (${MEM_ALL_MS / 1000} s in all), ` +
+      'so /save is in this game\'s memory with the page\'s files alone; nothing is written to the browser\'s storage'
+    : `[save] playing without saving: /save is in this game's memory, ${n.files} files of the save folder copied in ` +
+      `(${(n.bytes / 1024).toFixed(0)} KB)${n.skipped ? `, ${n.skipped} that did not read left out` : ''}` +
+      `${n.left ? `, ${n.left} screenshots, covers or big files left out${n.leftBytes ? ` (${(n.leftBytes / 1048576).toFixed(1)} MB)` : ''}` : ''}` +
+      `${n.profiles ? `, ${n.profiles} profile${n.profiles > 1 ? 's' : ''} left out whole (a file of theirs did not read, or was too big)` : ''}; ` +
+      'nothing is written to the browser\'s storage');
+  return m as unknown as FileSystemDirectoryHandle;
+}
+const inMemory = () => cfg.saves === 'memory';
+
+// ------------------------------------------------------------------ fds ----
+interface Fd {
+  mount: 'data' | 'save' | 'dev'; kind: 'dir' | 'file'; path: string; pos: number; append: boolean;
+  node?: DNode;                                   // /data
+  sh?: FileSystemSyncAccessHandle; dh?: FileSystemDirectoryHandle; fh?: FileSystemFileHandle;   // /save
+  wrote?: boolean;                                // /save: written or truncated since it was opened
+  gen?: number;                                   // /save: rootGen when it was opened
+  end?: number;                                   // /save: its size as this fd made it (a deleted file's getSize() reads 2^64-1)
+  preopen?: string; dirents?: { name: string; type: number; ino: number }[];
+}
+const fds = new Map<number, Fd>();
+let nextFd = 5;
+function allocFd(f: Fd) { while (fds.has(nextFd)) nextFd++; fds.set(nextFd, f); return nextFd++; }
+
+function readPath(p: number, l: number) { return td.decode(u8().slice(p, p + l)); }
+function joinRel(base: string, rel: string) { return (base ? base + '/' : '') + rel; }
+function normRel(s: string) {
+  const out: string[] = [];
+  for (const p of s.split('/')) { if (!p || p === '.') continue; if (p === '..') { if (!out.length) return null; out.pop(); } else out.push(p); }
+  return out.join('/');
+}
+function iovs(iov: number, n: number) {
+  const d = dv(), a: { ptr: number; len: number }[] = [];
+  for (let i = 0; i < n; i++) a.push({ ptr: d.getUint32(iov + 8 * i, true), len: d.getUint32(iov + 8 * i + 4, true) });
+  return a;
+}
+function writeFilestat(p: number, ino: number, type: number, size: number, mtimeSec: number) {
+  const d = dv(), ns = BigInt(Math.floor(mtimeSec)) * 1000000000n;
+  d.setBigUint64(p, 1n, true); d.setBigUint64(p + 8, BigInt(ino), true); d.setUint8(p + 16, type);
+  d.setBigUint64(p + 24, 1n, true); d.setBigUint64(p + 32, BigInt(size), true);
+  d.setBigUint64(p + 40, ns, true); d.setBigUint64(p + 48, ns, true); d.setBigUint64(p + 56, ns, true);
+}
+const saveIno = new Map<string, number>();
+const inoOf = (path: string) => { let i = saveIno.get(path); if (!i) { i = inoNext++; saveIno.set(path, i); } return i; };
+
+async function statSave(rel: string): Promise<{ type: number; size: number; mtime: number } | null> {
+  const e = await saveEntry(rel);
+  if (!e || !e.kind) return null;
+  if (e.kind === 'directory') return { type: FT_DIR, size: 0, mtime: 0 };
+  const open = [...fds.values()].find(f => f.mount === 'save' && f.path === rel && f.sh);
+  if (open) return { type: FT_FILE, size: open.sh!.getSize(), mtime: Date.now() / 1000 };
+  const file = await (e.h as FileSystemFileHandle).getFile();
+  return { type: FT_FILE, size: file.size, mtime: file.lastModified / 1000 };
+}
+
+// O flags (path_open oflags): 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC; fdflags: 1 APPEND
+async function op(o: Op, a: bigint[], again = false): Promise<number> {
+  const n = (i: number) => Number(a[i]);
+  switch (o) {
+    case Op.FdPrestatGet: {
+      const f = fds.get(n(0)); if (!f?.preopen) return E.BADF;
+      const d = dv(); d.setUint8(n(1), 0); d.setUint32(n(1) + 4, te.encode(f.preopen).length, true); return 0;
+    }
+    case Op.FdPrestatDirName: {
+      const f = fds.get(n(0)); if (!f?.preopen) return E.BADF;
+      const b = te.encode(f.preopen); u8().set(b.subarray(0, n(2)), n(1)); return 0;
+    }
+    case Op.PathOpen: {
+      const dir = fds.get(n(0)); if (!dir || dir.kind !== 'dir') return E.BADF;
+      const rel = normRel(joinRel(dir.path, readPath(n(2), n(3)))); if (rel === null) return E.PERM;
+      const oflags = n(4), fdflags = n(7), rights = a[5];
+      const wantWrite = (rights & 0x40n) !== 0n || (oflags & (1 | 8)) !== 0;   // FD_WRITE right, or CREAT/TRUNC
+      if (dir.mount === 'dev') {
+        const name = rel;
+        if (name !== 'null' && name !== 'zero' && name !== 'urandom') return E.NOENT;
+        const fd = allocFd({ mount: 'dev', kind: 'file', path: name, pos: 0, append: false });
+        dv().setUint32(n(8), fd, true); return 0;
+      }
+      if (dir.mount === 'data') {
+        if (oflags & 1 || wantWrite && (oflags & 8)) return E.ROFS;
+        const node = dataFile(rel); if (!node) return E.NOENT;
+        if (oflags & 2 && !node.dir) return E.NOTDIR;
+        const fd = allocFd({ mount: 'data', kind: node.dir ? 'dir' : 'file', path: node.path, pos: 0, append: false, node });
+        dv().setUint32(n(8), fd, true); return 0;
+      }
+      const e = await saveEntry(rel); if (!e) return E.NOENT;
+      if (e.kind === 'directory') {
+        if (oflags & 4) return E.EXIST;
+        const fd = allocFd({ mount: 'save', kind: 'dir', path: rel, pos: 0, append: false, dh: e.h as FileSystemDirectoryHandle });
+        dv().setUint32(n(8), fd, true); return 0;
+      }
+      if (oflags & 2) return e.kind ? E.NOTDIR : E.NOENT;
+      if (!e.kind && !(oflags & 1)) return E.NOENT;
+      if (e.kind && oflags & 4) return E.EXIST;
+      let fh: FileSystemFileHandle;
+      try { fh = e.kind ? e.h as FileSystemFileHandle : await e.parent.getFileHandle(e.name, { create: true }); }
+      catch (err) { return await saveTrouble('a file of the save folder could not be made', err, again) ? op(o, a, true) : E.IO; }
+      let sh: FileSystemSyncAccessHandle;
+      try { sh = await fh.createSyncAccessHandle({ mode: 'readwrite-unsafe' }); }
+      catch (err) { return await saveTrouble('a file of the save folder could not be opened', err, again) ? op(o, a, true) : E.ACCES; }
+      if (oflags & 8) sh.truncate(0);
+      const fd = allocFd({ mount: 'save', kind: 'file', path: rel, pos: 0, append: !!(fdflags & 1), sh, fh, wrote: !!(oflags & 8), gen: rootGen,
+        end: oflags & 8 ? 0 : sh.getSize() });
+      dv().setUint32(n(8), fd, true); return 0;
+    }
+    case Op.FdClose: {
+      const f = fds.get(n(0)); if (!f) return E.BADF;
+      if (f.preopen) return 0;
+      let lost = false;
+      if (f.sh) {
+        // written into a save folder the browser deleted since it was opened: its bytes went with that folder
+        const away = f.mount === 'save' && !!f.wrote && (f.gen !== rootGen || await saveGone());
+        let bytes: Uint8Array | null = null;
+        if (away) try {
+          // (getSize() of a deleted file is 2^64-1 in Chrome: its size as this fd made it, and only if all of it reads back)
+          const n = f.end ?? 0, b = new Uint8Array(n);
+          bytes = n > 0 && f.sh.read(b, { at: 0 }) === n ? b : null;
+        } catch { bytes = null; }
+        try { f.sh.flush(); f.sh.close(); } catch (e) { if (!away) throw e; }
+        if (away) lost = !await salvage(f.path, bytes);
+      }
+      fds.delete(n(0));
+      // posted before the call returns, so the page hears of a save before the game can exit after it; never for one
+      // that went with a deleted folder (no "Progress saved" for it)
+      if (inMemory()) { /* playing without saving: the page has nothing to keep or send */ }
+      else if (f.wrote && !lost) me.postMessage({ t: 'saved', path: f.path });
+      else if (lost) me.postMessage({ t: 'lost', path: f.path });
+      return 0;
+    }
+    case Op.FdRead: case Op.FdPread: {
+      const f = fds.get(n(0)); if (!f) return E.BADF; if (f.kind === 'dir') return E.ISDIR;
+      const dst = iovs(n(1), n(2)), pread = o === Op.FdPread, pos = pread ? n(3) : f.pos, out = pread ? n(4) : n(3);
+      let got = 0;
+      if (f.mount === 'dev') {
+        if (f.path !== 'null') { const mem = u8(); for (const d of dst) { const b = new Uint8Array(d.len); if (f.path === 'urandom') crypto.getRandomValues(b); mem.set(b, d.ptr); got += d.len; } }
+      }
+      else if (f.mount === 'data') { try { got = await dataRead(f.node!, pos, dst); } catch (e) { note(`[data] a read of ${f.path} failed: ${(e as Error)?.message ?? e}`); return E.IO; } }
+      else {
+        const mem = u8(); let p = pos;
+        for (const d of dst) { const b = new Uint8Array(d.len); const k = f.sh!.read(b, { at: p }); mem.set(b.subarray(0, k), d.ptr); p += k; got += k; if (k < d.len) break; }
+      }
+      if (!pread) f.pos += got;
+      dv().setUint32(out, got, true); return 0;
+    }
+    case Op.FdWrite: case Op.FdPwrite: {
+      const f = fds.get(n(0)); if (!f) return E.BADF; if (f.mount === 'data') return E.ROFS; if (f.kind === 'dir') return E.ISDIR;
+      const src = iovs(n(1), n(2)), pw = o === Op.FdPwrite;
+      if (f.mount === 'dev') { dv().setUint32(pw ? n(4) : n(3), src.reduce((a, x) => a + x.len, 0), true); return 0; }
+      let pos = pw ? n(3) : (f.append ? f.sh!.getSize() : f.pos), put = 0;
+      for (const s of src) { const k = f.sh!.write(u8().slice(s.ptr, s.ptr + s.len), { at: pos }); pos += k; put += k; }
+      if (put) { f.wrote = true; f.end = Math.max(f.end ?? 0, pos); }
+      if (!pw) f.pos = pos;
+      dv().setUint32(pw ? n(4) : n(3), put, true); return 0;
+    }
+    case Op.FdSeek: {
+      const f = fds.get(n(0)); if (!f) return E.BADF; if (f.kind === 'dir') return E.ISDIR;
+      const size = f.mount === 'data' ? f.node!.size : f.mount === 'dev' ? 0 : f.sh!.getSize();
+      const wh = n(2), base = wh === 0 ? 0 : wh === 1 ? f.pos : size, np = base + Number(BigInt.asIntN(64, a[1]));
+      if (np < 0) return E.INVAL;
+      f.pos = np; dv().setBigUint64(n(3), BigInt(np), true); return 0;
+    }
+    case Op.FdTell: { const f = fds.get(n(0)); if (!f) return E.BADF; dv().setBigUint64(n(1), BigInt(f.pos), true); return 0; }
+    case Op.FdSync: { const f = fds.get(n(0)); if (!f) return E.BADF; f.sh?.flush(); return 0; }
+    case Op.FdFdstatGet: {
+      const f = fds.get(n(0)); if (!f) return E.BADF;
+      const d = dv(), p = n(1);
+      d.setUint8(p, f.kind === 'dir' ? FT_DIR : FT_FILE); d.setUint16(p + 2, f.append ? 1 : 0, true);
+      d.setBigUint64(p + 8, 0x1FFFFFFFn, true); d.setBigUint64(p + 16, 0x1FFFFFFFn, true); return 0;
+    }
+    case Op.FdFdstatSetFlags: { const f = fds.get(n(0)); if (!f) return E.BADF; f.append = !!(n(1) & 1); return 0; }
+    case Op.FdFilestatGet: {
+      const f = fds.get(n(0)); if (!f) return E.BADF;
+      if (f.mount === 'dev') { writeFilestat(n(1), 3, f.kind === 'dir' ? FT_DIR : 2 /* char device */, 0, 0); return 0; }
+      if (f.mount === 'data') { const nd = f.node ?? dataRoot; writeFilestat(n(1), nd.ino, nd.dir ? FT_DIR : FT_FILE, nd.size, nd.mtime); return 0; }
+      if (f.kind === 'dir') { writeFilestat(n(1), inoOf(f.path), FT_DIR, 0, 0); return 0; }
+      writeFilestat(n(1), inoOf(f.path), FT_FILE, f.sh!.getSize(), Date.now() / 1000); return 0;
+    }
+    case Op.FdFilestatSetSize: { const f = fds.get(n(0)); if (!f) return E.BADF; if (!f.sh) return E.ROFS; f.sh.truncate(n(1)); f.wrote = true; f.end = n(1); return 0; }
+    case Op.FdAllocate: { const f = fds.get(n(0)); if (!f?.sh) return E.BADF; const need = n(1) + n(2); if (f.sh.getSize() < need) { f.sh.truncate(need); f.end = need; } return 0; }
+    case Op.FdFilestatSetTimes: case Op.PathFilestatSetTimes: return 0;
+    case Op.PathFilestatGet: {
+      const dir = fds.get(n(0)); if (!dir || dir.kind !== 'dir') return E.BADF;
+      const rel = normRel(joinRel(dir.path, readPath(n(2), n(3)))); if (rel === null) return E.PERM;
+      if (dir.mount === 'data') { const nd = dataFile(rel); if (!nd) return E.NOENT; writeFilestat(n(4), nd.ino, nd.dir ? FT_DIR : FT_FILE, nd.size, nd.mtime); return 0; }
+      const st = await statSave(rel); if (!st) return E.NOENT;
+      writeFilestat(n(4), inoOf(rel), st.type, st.size, st.mtime); return 0;
+    }
+    case Op.FdReaddir: {
+      const f = fds.get(n(0)); if (!f) return E.BADF; if (f.kind !== 'dir') return E.NOTDIR;
+      if (!f.dirents || a[3] === 0n) {
+        const list: { name: string; type: number; ino: number }[] = [{ name: '.', type: FT_DIR, ino: 1 }, { name: '..', type: FT_DIR, ino: 1 }];
+        if (f.mount === 'data') { const nd = f.node ?? dataLookup(f.path); for (const k of nd?.kids?.values() ?? []) list.push({ name: k.name, type: k.dir ? FT_DIR : FT_FILE, ino: k.ino }); }
+        else for await (const [name, h] of f.dh!.entries())
+          list.push({ name, type: h.kind === 'directory' ? FT_DIR : FT_FILE, ino: inoOf(joinRel(f.path, name)) });
+        f.dirents = list;
+      }
+      const buf = n(1), len = n(2); let used = 0;
+      const d = dv(), mem = u8();
+      for (let i = Number(a[3]); i < f.dirents.length && used < len; i++) {
+        const e = f.dirents[i], nm = te.encode(e.name), hdr = new Uint8Array(24), hv = new DataView(hdr.buffer);
+        hv.setBigUint64(0, BigInt(i + 1), true); hv.setBigUint64(8, BigInt(e.ino), true); hv.setUint32(16, nm.length, true); hv.setUint8(20, e.type);
+        const rec = new Uint8Array(24 + nm.length); rec.set(hdr); rec.set(nm, 24);
+        const k = Math.min(rec.length, len - used); mem.set(rec.subarray(0, k), buf + used); used += k;
+      }
+      d.setUint32(n(4), used, true); return 0;
+    }
+    case Op.PathCreateDirectory: {
+      const dir = fds.get(n(0)); if (!dir || dir.kind !== 'dir') return E.BADF; if (dir.mount === 'data') return E.ROFS;
+      const rel = normRel(joinRel(dir.path, readPath(n(1), n(2)))); if (!rel) return E.PERM;
+      const e = await saveEntry(rel); if (!e) return E.NOENT; if (e.kind) return E.EXIST;
+      try { await e.parent.getDirectoryHandle(e.name, { create: true }); }
+      catch (err) { return await saveTrouble('a folder of the save folder could not be made', err, again) ? op(o, a, true) : E.IO; }
+      return 0;
+    }
+    case Op.PathRemoveDirectory: case Op.PathUnlinkFile: {
+      const dir = fds.get(n(0)); if (!dir || dir.kind !== 'dir') return E.BADF; if (dir.mount === 'data') return E.ROFS;
+      const rel = normRel(joinRel(dir.path, readPath(n(1), n(2)))); if (!rel) return E.PERM;
+      const e = await saveEntry(rel); if (!e?.kind) return E.NOENT;
+      if (o === Op.PathUnlinkFile && e.kind === 'directory') return E.ISDIR;
+      if (o === Op.PathRemoveDirectory && e.kind === 'file') return E.NOTDIR;
+      for (const [k, f] of fds) if (f.mount === 'save' && f.path === rel && f.sh) { f.sh.close(); fds.delete(k); }
+      try { await e.parent.removeEntry(e.name); } catch { return E.NOTEMPTY; }
+      // a profile the game deleted (its own Delete): the page's cloud saves expect one fewer
+      if (o === Op.PathUnlinkFile && isProfilePath(rel.split('/')) && !inMemory()) me.postMessage({ t: 'removed', path: rel });
+      return 0;
+    }
+    case Op.PathRename: {
+      const da = fds.get(n(0)), db = fds.get(n(3)); if (!da || !db) return E.BADF;
+      if (da.mount === 'data' || db.mount === 'data') return E.ROFS;
+      const ra = normRel(joinRel(da.path, readPath(n(1), n(2)))), rb = normRel(joinRel(db.path, readPath(n(4), n(5))));
+      if (!ra || !rb) return E.PERM;
+      const ea = await saveEntry(ra); if (!ea?.kind) return E.NOENT;
+      const pb = await saveDirAt(rb.split('/').slice(0, -1), false); if (!pb) return E.NOENT;
+      for (const [k, f] of fds) if (f.mount === 'save' && f.path === ra && f.sh) { f.sh.close(); fds.delete(k); }
+      const eb = await saveEntry(rb); if (eb?.kind === 'file') await eb.parent.removeEntry(eb.name);
+      await (ea.h as any).move(pb, rb.split('/').pop());
+      // a file written under another name and moved into place (the runtime's registry.txt.tmp): saved as that one
+      if (ea.kind === 'file' && !inMemory()) me.postMessage({ t: 'saved', path: rb });
+      return 0;
+    }
+    case Op.FdRenumber: { const f = fds.get(n(0)); if (!f) return E.BADF; fds.delete(n(0)); fds.set(n(1), f); return 0; }
+    case Op.FdAdvise: return 0;
+    case Op.MovieOpen: return movieOpen(n(0), n(1));
+    case Op.MovieDecode: return await movieDecode(memory, n(0), n(1), n(2), n(3), n(4), n(5), n(6), n(7), note);
+    case Op.MovieClose: movieClose(n(0)); return 0;
+    case Op.Clock:
+      if (n(0) < 0 || n(0) >= MAX_THREADS) return E.INVAL;
+      new Float64Array(rpcI32.buffer)[(n(0) * RPC_SLOT + 128) / 8] = performance.timeOrigin + performance.now();
+      return 0;
+  }
+  return E.NOSYS;
+}
+
+// ------------------------------------------------------------- the loop ----
+// The doorbell wait has a timeout.  WebKit (Safari, and every browser on an iPhone) sometimes leaves a waitAsync
+// without one pending after its notify (it then comes back 'ok', the waiter already off the list) until something
+// else runs on this worker: the request stays unanswered, the game thread waiting for it holds the guest lock, and
+// the whole game freezes (a player's iPhone in a career race, a CreateFileA 15.6 s and on; Playwright's WebKit 27.2
+// on a Mac: about one race in three, up to 50 s).  With a timeout no wait was late in 18 races there (50 and
+// 1000 ms); 50 also bounds one that would be to a few frames.
+const DOORBELL_WAIT_MS = 50;
+// The request each slot has in this worker (op, its fd's file, since when, IO_SLOW_MS steps said): a request that
+// does not come back is written in the log with where it waits (steps), while this worker's loop still runs
+const pending: ({ op: number; what: string; t0: number; said: number } | null)[] = new Array(MAX_THREADS).fill(null);
+function watch() {
+  const now = performance.now(), slow = (x: { t0: number; said: number }) => {
+    if (now - x.t0 < IO_SLOW_MS * 2 ** x.said) return false;
+    x.said++; return true;
+  };
+  for (let s = 0; s < MAX_THREADS; s++) {
+    const r = pending[s];
+    if (!r || !slow(r)) continue;
+    const at = [...steps].filter(([, v]) => now - v.t0 >= IO_SLOW_MS).map(([k, v]) => `${k}: ${v.at} for ${((now - v.t0) / 1000).toFixed(0)} s`);
+    note(`[io] ${opName(r.op)} of ${r.what} unanswered for ${((now - r.t0) / 1000).toFixed(0)} s${at.length ? `; waiting: ${at.slice(0, 4).join('; ')}` : ''}`);
+  }
+}
+// where the page holds the memory's buffer only: each new one as the memory grows, before the page needs it (a game
+// thread's read into the grown part comes through here; the renderer's readbacks wait for it: gpu/index.ts)
+let offPage = false, memSaid = 0;
+function memGrew() {
+  const b = memory.buffer;
+  if (b.byteLength <= memSaid) return;
+  memSaid = b.byteLength;
+  me.postMessage({ t: 'mem', buf: b });
+}
+async function serve() {
+  let seen = Atomics.load(ctl, CTL_IO_DOORBELL);
+  setInterval(watch, 5000);
+  for (;;) {
+    Atomics.add(ctl, CTL_IO_BEAT, 1);
+    if (offPage) memGrew();
+    for (let s = 0; s < MAX_THREADS; s++) {
+      const b = s * (RPC_SLOT / 4);
+      if (Atomics.compareExchange(rpcI32, b, RPC_POSTED, RPC_TAKEN) !== RPC_POSTED) continue;
+      const opc = rpcI32[b + 1] as Op, nargs = rpcI32[b + 3], b64 = s * (RPC_SLOT / 8), args: bigint[] = [];
+      for (let i = 0; i < nargs; i++) args.push(rpcI64[b64 + 2 + i]);
+      const fd = nargs ? fds.get(Number(args[0])) : undefined;
+      pending[s] = { op: opc, what: fd ? `${fd.preopen ?? `/${fd.mount}`}${fd.preopen ? '' : '/' + fd.path}` : nargs ? `fd ${args[0]}` : '-', t0: performance.now(), said: 0 };
+      op(opc, args).catch(e => { console.error('io op', opc, e); return E.IO; }).then(r => {
+        pending[s] = null;
+        rpcI32[b + 2] = r; Atomics.store(rpcI32, b, RPC_DONE); Atomics.notify(rpcI32, b);
+      });
+    }
+    const w = Atomics.waitAsync(ctl, CTL_IO_DOORBELL, seen, DOORBELL_WAIT_MS);
+    if (w.async) await w.value;
+    seen = Atomics.load(ctl, CTL_IO_DOORBELL);
+  }
+}
+
+let gaveHere = false;
+/** bytes [off, off + len) of a game-folder file for the page (its renderer's HQ vinyls, gpu/hqskin.ts): through the
+ *  same block cache as the game's reads (kept, and there offline), or with exact those bytes alone from the server (an
+ *  HQ vinyl's two pictures are ~30 KB, a block 1 MiB), at an address Cloudflare keeps (exactUrl); the third try as a
+ *  byte range of /data/, as a block's does when the connection keeps dropping */
+async function pageRead(m: ReadAsk): Promise<void> {
+  try {
+    const n = dataFile(m.path);
+    if (!n || n.dir) throw new Error('not in the game folder');
+    const end = Math.min(n.size, m.off + m.len);
+    if (m.off < 0 || end <= m.off) throw new Error(`no bytes at ${m.off} (${n.size} in the file)`);
+    if (m.exact) {
+      for (let k = 1; ; k++) {
+        const ranged = k === 3;
+        const r = await fetchOnce(ranged ? dataUrl(cfg.dataBase, n.path) : exactUrl(runs.url, n.path, m.off, end - m.off, n),
+          m.off, end - m.off, ranged, false);
+        if (r instanceof Uint8Array) {
+          const out = new Uint8Array(r.length); out.set(r);
+          me.postMessage({ t: 'read', id: m.id, bytes: out } satisfies ReadAnswer, [out.buffer]);
+          return;
+        }
+        if (!r.again || k >= 3) throw new Error(r.why);
+        await new Promise(res => setTimeout(res, 500 * k));
+      }
+    }
+    const out = new Uint8Array(end - m.off), first = Math.floor(m.off / BLOCK), last = Math.floor((end - 1) / BLOCK);
+    const blocks = await Promise.all(Array.from({ length: last - first + 1 }, (_, i) => getBlock(n, first + i, P_GAME)));
+    for (let bi = first; bi <= last; bi++) {
+      const b = blocks[bi - first], s = Math.max(m.off, bi * BLOCK), e = Math.min(end, bi * BLOCK + b.length);
+      out.set(b.subarray(s - bi * BLOCK, e - bi * BLOCK), s - m.off);
+    }
+    me.postMessage({ t: 'read', id: m.id, bytes: out } satisfies ReadAnswer, [out.buffer]);
+  } catch (x) {
+    me.postMessage({ t: 'read', id: m.id, error: x instanceof Error ? x.message : String(x) } satisfies ReadAnswer);
+  }
+}
+
+onmessage = async (e: MessageEvent<Init | { t: 'save-ready' } | { t: 'give'; port: MessagePort; slot: number } | { t: 'give-page'; slot: number } | ReadAsk>) => {
+  if ('t' in e.data) {
+    if (e.data.t === 'read') { void pageRead(e.data); return; }
+    if (e.data.t === 'save-ready') saveAnswered?.();
+    // the Memory for a game thread, on the port the page gave it
+    else if (e.data.t === 'give') {
+      // (a browser that will not post a shared memory on a port: through the page, which then holds it a moment)
+      try { e.data.port.postMessage(memory); }
+      catch (x) {
+        if (!gaveHere) { gaveHere = true; note(`[memory] the game threads get the memory through the page (${x instanceof Error ? x.message : x})`); }
+        me.postMessage({ t: 'give-here', slot: e.data.slot, memory });
+      }
+      e.data.port.close();
+    }
+    // a game thread that had nothing usable on its port asked the page for the Memory (game-worker.ts memoryFrom)
+    else if (e.data.t === 'give-page') me.postMessage({ t: 'give-here', slot: e.data.slot, memory });
+    return;
+  }
+  cfg = e.data.cfg;
+  if (e.data.memory) memory = e.data.memory;
+  else {
+    try {
+      const got = allocMemory(e.data.tries!);
+      memory = got.memory; offPage = true;
+      me.postMessage({ t: 'memory', buf: memory.buffer, note: got.note });
+    } catch (err) {
+      me.postMessage({ t: 'io-error', msg: err instanceof Error ? err.message : String(err),
+        range: err instanceof RangeError, note: (err as { note?: string } | null)?.note });
+      return;
+    }
+  }
+  memSaid = memory.buffer.byteLength;
+  ctl = new Int32Array(e.data.ctl); rpcI32 = new Int32Array(e.data.rpc); rpcI64 = new BigInt64Array(e.data.rpc);
+  try {
+    if (inMemory()) {
+      // (a browser whose storage does not answer at all still plays: the game data from the server, the saves in memory)
+      let rootLate = false;
+      const opfs = await within(navigator.storage.getDirectory(), MEM_CALL_MS).catch(e => { rootLate = timedOut(e); return null; });
+      saveRoot = await memorySaves(opfs, rootLate);
+      try { cacheDir = opfs && await within(opfs.getDirectoryHandle(CACHE_DIR, { create: true }), MEM_CALL_MS); } catch { cacheDir = null; }
+    } else {
+      const opfs = await navigator.storage.getDirectory();
+      saveRoot = await opfs.getDirectoryHandle(cfg.saveDir, { create: true });
+      try { cacheDir = await opfs.getDirectoryHandle(CACHE_DIR, { create: true }); } catch { cacheDir = null; }
+    }
+    await loadManifest();
+    fds.set(3, { mount: 'data', kind: 'dir', path: '', pos: 0, append: false, node: dataRoot, preopen: '/data' });
+    fds.set(4, { mount: 'save', kind: 'dir', path: '', pos: 0, append: false, dh: saveRoot, preopen: '/save' });
+    fds.set(5, { mount: 'dev', kind: 'dir', path: '', pos: 0, append: false, preopen: '/dev' });
+    me.postMessage({ t: 'io-ready', files: inoNext });
+    void serve();
+  } catch (err) {
+    me.postMessage({ t: 'io-error', msg: String(err) });
+  }
+};
