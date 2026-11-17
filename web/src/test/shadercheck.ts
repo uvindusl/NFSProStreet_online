@@ -330,7 +330,9 @@ async function main() {
     try {
       await device.createRenderPipelineAsync({
         label: `${vs}+${ps} ${JSON.stringify(constants)}`,
-        layout: isCubePs(idOf(ps)) ? abi.layoutCube : abi.layout2d,
+        // &all2d: a corpus dump has no cube twins, so every pixel module takes
+        // the 2D layout even when its synthetic id is >= PSCUBE.
+        layout: (!q.has('all2d') && isCubePs(idOf(ps))) ? abi.layoutCube : abi.layout2d,
         vertex: { module: mods.get(vs)!, entryPoint: vs },
         fragment: { module: mods.get(ps)!, entryPoint: ps, constants, targets: [{ format: 'bgra8unorm' }] },
         primitive: { topology: 'triangle-list', frontFace: 'cw', cullMode: 'back' },
