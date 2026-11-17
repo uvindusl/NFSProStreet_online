@@ -1624,7 +1624,7 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "Direct3DCreate9")) {
         uint32_t sdkVersion = A(0);
         struct IDirect3D9* d3d9 = Direct3DCreate9(sdkVersion);
-        r = (uint32_t)d3d9;
+        r = (uint32_t)(uintptr_t)d3d9;
     } else if (str_eq(n, "DirectInput8Create")) {
         /* DirectInput8Create HLE: create IDirectInput8 interface stub */
         uint32_t hInst = A(0);
@@ -1641,92 +1641,92 @@ int win32_call(CPU *c, uint32_t idx) {
         /* Fall through to finish label */
     } else if (strncmp(n, "D3DX", 4) == 0) {
         if (str_eq(n, "D3DXMatrixMultiply")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)A(0);
-            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)A(1);
-            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
+            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)A(1);
+            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)A(2);
             D3DXMatrixMultiply(pOut, pM1, pM2);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXMatrixMultiplyTranspose")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)A(0);
-            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)A(1);
-            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
+            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)A(1);
+            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)A(2);
             D3DXMatrixMultiplyTranspose(pOut, pM1, pM2);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXMatrixTranspose")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)A(0);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)A(1);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(1);
             D3DXMatrixTranspose(pOut, pM);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXMatrixInverse")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)A(0);
-            float* pDeterminant = (float*)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
+            float* pDeterminant = (float*)(uintptr_t)A(1);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
             D3DXMatrixInverse(pOut, pDeterminant, pM);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXVec3Transform")) {
-            D3DXVECTOR4* pOut = (D3DXVECTOR4*)A(0);
-            const D3DXVECTOR3* pV = (const D3DXVECTOR3*)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)A(2);
+            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)A(0);
+            const D3DXVECTOR3* pV = (const D3DXVECTOR3*)(uintptr_t)A(1);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
             D3DXVec3Transform(pOut, pV, pM);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXVec4Transform")) {
-            D3DXVECTOR4* pOut = (D3DXVECTOR4*)A(0);
-            const D3DXVECTOR4* pV = (const D3DXVECTOR4*)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)A(2);
+            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)A(0);
+            const D3DXVECTOR4* pV = (const D3DXVECTOR4*)(uintptr_t)A(1);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
             D3DXVec4Transform(pOut, pV, pM);
-            r = (uint32_t)pOut;
+            r = (uint32_t)(uintptr_t)pOut;
         } else if (str_eq(n, "D3DXCreateEffectFromResourceA")) {
-            void* pDevice = (void*)A(0);
-            void* hSrcModule = (void*)A(1);
-            const char* pSrcResource = (const char*)A(2);
-            const void* pDefines = (const void*)A(3);
-            void* pInclude = (void*)A(4);
+            void* pDevice = (void*)(uintptr_t)A(0);
+            void* hSrcModule = (void*)(uintptr_t)A(1);
+            const char* pSrcResource = (const char*)(uintptr_t)A(2);
+            const void* pDefines = (const void*)(uintptr_t)A(3);
+            void* pInclude = (void*)(uintptr_t)A(4);
             uint32_t Flags = A(5);
-            void* pPool = (void*)A(6);
-            void** ppEffect = (void**)A(7);
-            void** ppErrorBuffer = (void**)A(8);
+            void* pPool = (void*)(uintptr_t)A(6);
+            void** ppEffect = (void**)(uintptr_t)A(7);
+            void** ppErrorBuffer = (void**)(uintptr_t)A(8);
             D3DXCreateEffectFromResourceA(pDevice, hSrcModule, pSrcResource, pDefines, pInclude, Flags, pPool, ppEffect, ppErrorBuffer);
             r = D3D_OK;
         } else if (str_eq(n, "D3DXCreateEffectPool")) {
-            void** ppPool = (void**)A(0);
+            void** ppPool = (void**)(uintptr_t)A(0);
             D3DXCreateEffectPool(ppPool);
             r = D3D_OK;
         } else if (str_eq(n, "D3DXGetVertexShaderProfile")) {
-            void* pDevice = (void*)A(0);
+            void* pDevice = (void*)(uintptr_t)A(0);
             const char* profile = D3DXGetVertexShaderProfile(pDevice);
-            r = (uint32_t)profile;
+            r = (uint32_t)(uintptr_t)profile;
         } else if (str_eq(n, "D3DXGetPixelShaderProfile")) {
-            void* pDevice = (void*)A(0);
+            void* pDevice = (void*)(uintptr_t)A(0);
             const char* profile = D3DXGetPixelShaderProfile(pDevice);
-            r = (uint32_t)profile;
+            r = (uint32_t)(uintptr_t)profile;
         } else if (str_eq(n, "D3DXCreateCubeTextureFromFileInMemory")) {
-            void* pDevice = (void*)A(0);
-            const void* pSrcData = (const void*)A(1);
+            void* pDevice = (void*)(uintptr_t)A(0);
+            const void* pSrcData = (const void*)(uintptr_t)A(1);
             uint32_t SrcDataSize = A(2);
-            void** ppCubeTexture = (void**)A(3);
+            void** ppCubeTexture = (void**)(uintptr_t)A(3);
             D3DXCreateCubeTextureFromFileInMemory(pDevice, pSrcData, SrcDataSize, ppCubeTexture);
             r = D3D_OK;
         } else if (str_eq(n, "D3DXCreateVolumeTextureFromFileInMemory")) {
-            void* pDevice = (void*)A(0);
-            const void* pSrcData = (const void*)A(1);
+            void* pDevice = (void*)(uintptr_t)A(0);
+            const void* pSrcData = (const void*)(uintptr_t)A(1);
             uint32_t SrcDataSize = A(2);
-            void** ppVolumeTexture = (void**)A(3);
+            void** ppVolumeTexture = (void**)(uintptr_t)A(3);
             D3DXCreateVolumeTextureFromFileInMemory(pDevice, pSrcData, SrcDataSize, ppVolumeTexture);
             r = D3D_OK;
         } else if (str_eq(n, "D3DXSaveSurfaceToFileA")) {
-            const char* pDestFile = (const char*)A(0);
+            const char* pDestFile = (const char*)(uintptr_t)A(0);
             uint32_t DestFormat = A(1);
-            void* pSrcSurface = (void*)A(2);
-            const void* pSrcPalette = (const void*)A(3);
-            const void* pSrcRect = (const void*)A(4);
+            void* pSrcSurface = (void*)(uintptr_t)A(2);
+            const void* pSrcPalette = (const void*)(uintptr_t)A(3);
+            const void* pSrcRect = (const void*)(uintptr_t)A(4);
             D3DXSaveSurfaceToFileA(pDestFile, DestFormat, pSrcSurface, pSrcPalette, pSrcRect);
             r = D3D_OK;
         } else if (str_eq(n, "D3DXSaveSurfaceToFileInMemory")) {
-            void** ppDestBuf = (void**)A(0);
+            void** ppDestBuf = (void**)(uintptr_t)A(0);
             uint32_t DestFormat = A(1);
-            void* pSrcSurface = (void*)A(2);
-            const void* pSrcPalette = (const void*)A(3);
-            const void* pSrcRect = (const void*)A(4);
+            void* pSrcSurface = (void*)(uintptr_t)A(2);
+            const void* pSrcPalette = (const void*)(uintptr_t)A(3);
+            const void* pSrcRect = (const void*)(uintptr_t)A(4);
             D3DXSaveSurfaceToFileInMemory(ppDestBuf, DestFormat, pSrcSurface, pSrcPalette, pSrcRect);
             r = D3D_OK;
         } else {
