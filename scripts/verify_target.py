@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Verify the target image is the one the user actually runs.
 
-The retail `nfs.exe` is SecuROM-packed, so the real code only exists in memory
-after the loader decrypts it.  `scripts/build_runtime_image.py` reconstructs a
-normal PE from a dump of the running game.  This script pins that image:
+The image is the user's own unpacked game executable, supplied locally; this
+repository does not contain it.  This script pins its layout and hashes so a
+lift is always run against the same target:
 
     python3 scripts/verify_target.py game/nfs.exe.unpacked
 

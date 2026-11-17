@@ -1,7 +1,7 @@
 # Phase 2 — Binary analysis and function map
 
-Target: `game/nfs.exe.unpacked` — the image the user's running game decrypts into
-memory (SHA-256 `805bf77c…62fd962a`). Reproduce with:
+Target: `game/nfs.exe.unpacked` — the user's own unpacked game image
+(SHA-256 `805bf77c…62fd962a`). Reproduce with:
 
 ```bash
 python3 scripts/verify_target.py game/nfs.exe.unpacked
@@ -10,11 +10,9 @@ IMPORTS_JSON=out/imports-runtime.json \
 python3 scripts/classify_gaps.py game/nfs.exe.unpacked out/analysis.json
 ```
 
-How that image was obtained is in `docs/phase0-binary-record.md`. In short: the
-retail `nfs.exe` is SecuROM-packed, the loader decrypts the original image in
-place at `0x400000`, and `scripts/build_runtime_image.py` turns a dump of the
-process into a normal PE using the original header the game carries in `.HEAVEN`.
-`out/` is generated and must never be committed.
+The image is supplied locally by whoever runs the project; this repository does
+not contain it and does not describe how to produce it. `out/` is generated and
+must never be committed.
 
 ## 1. What Phase 2 does
 
