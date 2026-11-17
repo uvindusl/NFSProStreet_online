@@ -14,7 +14,7 @@
 /* PSRefIn, PSRefPar and PSRefTex are declared in wgsl.h. */
 typedef struct {
     const VSProg *p; const PSRefPar *P; const PSRefIn *in;
-    float r[16][4], t[4][4], v[2][4], oC[4], oD[4];
+    float r[16][4], t[8][4], v[2][4], oC[4], oD[4];
 } PSRefExec;
 
 static void psr_reg(PSRefExec *e, unsigned tok, float o[4]){
@@ -22,9 +22,10 @@ static void psr_reg(PSRefExec *e, unsigned tok, float o[4]){
     int ty = RT(tok), n = RN(tok);
     const float *b = 0; static const float z[4] = { 0, 0, 0, 0 };
     switch (ty){
+    
     case R_TEMP:     b = e->r[n & 15]; break;
     case R_INPUT:    b = e->v[n & 1]; break;
-    case R_ADDR:     b = e->t[n & 3]; break;
+    case R_ADDR:     b = e->t[n & 7]; break;
     case R_COLOROUT: b = e->oC; break;
     case R_CONSTINT:
         if (n >= 0 && n < 16){ for (int i = 0; i < 4; i++) o[i] = (float)p->defi[n][i]; return; }
@@ -50,8 +51,8 @@ static void psr_src(PSRefExec *e, unsigned tok, float o[4]){
         switch (SMOD(tok)){
         case 1: x = -x; break;            case 2: x = x - 0.5f; break;
         case 3: x = -(x - 0.5f); break;   case 4: x = 2.f*x - 1.f; break;
-        case 5: x = -(2.f*x - 1.f); break; case 6: x = 1.f - x; break;
-        case 7: x = 2.f*x; break;          case 8: x = -2.f*x; break;
+        case 5: x = -(2.f*x - 1.f); break; case 6: x = 2.f*x; break;
+        case 7: x = -2.f*x; break;         case 8: x = -fabsf(x); break;
         case 11: x = fabsf(x); break;      case 12: x = -fabsf(x); break;
         default: break;
         }
@@ -67,9 +68,9 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
     e.p = p; e.P = P; e.in = in;
     memcpy(e.v[0], in->col[0], 16); memcpy(e.v[1], in->col[1], 16);
     *killed = 0;
-    float tc[4][2];
-    for (int k = 0; k < 4; k++){
-        int m = ((int)P->proj[k]) >> 4;
+    float tc[8][2];
+    for (int k = 0; k < 8; k++){
+        int m = (k < 4) ? (((int)P->proj[k]) >> 4) : 0;
         float d = m == 2 ? in->uv[k][3] : (m == 1 ? in->uv[k][2] : 1.f);
         tc[k][0] = in->uv[k][0] / d; tc[k][1] = in->uv[k][1] / d;
     }
@@ -78,7 +79,7 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
     if (p->version >= 0x0200)
         for (unsigned q = 0; q < p->n; q++)
             if (p->ins[q].op == O_DCL && RT(p->ins[q].dst) == R_ADDR)
-                memcpy(e.t[RN(p->ins[q].dst) & 3], in->uv[RN(p->ins[q].dst) & 3], 16);
+                memcpy(e.t[RN(p->ins[q].dst) & 7], in->uv[RN(p->ins[q].dst) & 7], 16);
     for (unsigned q = 0; q < p->n; q++){
         const VSIns *x = &p->ins[q];
         float s[3][4], d[4] = { 0, 0, 0, 0 };
@@ -87,9 +88,9 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
         case O_TEX: case O_TEXLDD: case O_TEXLDL: {
             int dn = RN(x->dst) & 3, smp;
             float c[3];
-            if (x->nsrc >= 2){ smp = RN(x->src[1]) & 3; c[0] = s[0][0]; c[1] = s[0][1]; c[2] = s[0][2]; }
+            if (x->nsrc >= 2){ smp = RN(x->src[1]) & 7; c[0] = s[0][0]; c[1] = s[0][1]; c[2] = s[0][2]; }
             else if (x->nsrc == 1 && RT(x->src[0]) == R_ADDR){
-                int m = RN(x->src[0]) & 3; smp = dn;
+                int m = RN(x->src[0]) & 7; smp = dn;
                 if ((cubemask >> smp) & 1u){ c[0] = in->uv[m][0]; c[1] = in->uv[m][1]; c[2] = in->uv[m][2]; }
                 else { c[0] = tc[m][0]; c[1] = tc[m][1]; c[2] = 0.f; }
             } else if (x->nsrc == 1){ smp = dn; c[0] = s[0][0]; c[1] = s[0][1]; c[2] = s[0][2]; }
@@ -100,7 +101,7 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
             }
             tex(smp, c, ((cubemask >> smp) & 1u) ? 3 : 2, d);
             break; }
-        case O_TEXCOORD: memcpy(e.t[RN(x->dst) & 3], in->uv[RN(x->dst) & 3], 16); continue;
+        case O_TEXCOORD: memcpy(e.t[RN(x->dst) & 7], in->uv[RN(x->dst) & 7], 16); continue;
         case O_TEXKILL: {
             /* the register is the destination token (no sources); ps_1_x:
              * the first three components of coordinate set N (tN) or of rN,
@@ -147,7 +148,7 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
         if (!x->has_dst) continue;
         int dty = RT(x->dst), dnum = RN(x->dst);
         float *dst = dty == R_TEMP ? e.r[dnum & 15] : dty == R_INPUT ? e.v[dnum & 1] :
-                     dty == R_ADDR ? e.t[dnum & 3] : dty == R_COLOROUT ? e.oC :
+                     dty == R_ADDR ? e.t[dnum & 7] : dty == R_COLOROUT ? e.oC :
                      dty == R_DEPTHOUT ? e.oD : 0;
         if (!dst) return 0;
         int sh = DSHIFT(x->dst);

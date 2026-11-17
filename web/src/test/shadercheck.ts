@@ -210,10 +210,15 @@ async function psDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   const par = new Uint8Array(vec, 16, 560);
   const inputs = new Float32Array(vec, 576, np * 25);
   const want = new Float32Array(vec, 576 + np * 100, np * 5);
-  const head = code.match(/@fragment fn (ps_\d+)\(i: VOut\) -> @location\(0\) vec4f \{/);
+  // Accept both @location(0) vec4f and PSOut return forms
+  const head = code.match(/@fragment fn (ps_\d+)\(i: VOut\) -> (@location\(0\) vec4f|PSOut) \{/);
   if (!head) { failures.push(`${name}: no fragment entry point`); return; }
-  const body = code.replace(head[0], 'fn psfn(i: VOut) -> vec4f {').replaceAll('{ discard; }', '{ KILL = 1u; }')
+  const retType = head[2];  // '@location(0) vec4f' or 'PSOut'
+  // Rewrite entry point to fn psfn(i: VOut) -> <retType> {
+  const body = code.replace(head[0], `fn psfn(i: VOut) -> ${retType} {`).replaceAll('{ discard; }', '{ KILL = 1u; }')
     .replace(/textureSample\(tex(\d), smp\d, /g, (_m, k) => ((cubemask >> +k) & 1) ? `ftex3(${k}u, ` : `ftex2(${k}u, `);
+  // Determine call convention: PSOut form accesses .col, vec4f form returns directly
+  const isPSOut = retType === 'PSOut';
   const cs = body + FTEX + `
 var<private> KILL: u32;
 @group(0) @binding(4) var<storage, read> PIN: array<f32>;
@@ -231,7 +236,7 @@ var<private> KILL: u32;
   i.uv3 = vec4f(PIN[b + 20u], PIN[b + 21u], PIN[b + 22u], PIN[b + 23u]);
   i.fog = PIN[b + 24u];
   KILL = 0u;
-  let c = psfn(i);
+  let c = ${isPSOut} ? psfn(i).col : psfn(i);
   let o = g.x * 5u;
   POUT[o] = c.x; POUT[o + 1u] = c.y; POUT[o + 2u] = c.z; POUT[o + 3u] = c.w; POUT[o + 4u] = f32(KILL);
 }`;

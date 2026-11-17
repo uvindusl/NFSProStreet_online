@@ -44,6 +44,11 @@ web/dist-dev/
 # game-derived analysis data: deliberately kept out of git
 analysis/securom-data-patch-map.md
 analysis/milestones-reconciliation.md
+# ctor-13 / protection details (game-derived addresses, init chain, patch paths)
+analysis/ctor13-dispatch-roadmap.md
+analysis/ship-scribe-status.md
+debug/96726c-writer-trace.md
+debug/ctor13-dispatch-analysis.md
 
 # generated shader galleries (analysis/webgpu-test)
 analysis/webgpu-test/corpus.html

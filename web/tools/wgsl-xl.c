@@ -131,11 +131,11 @@ static void write_vectors(const char *dir, int id, const VSProg *p, const int dc
         for (int i = 0; i < 16; i++)
             if (dcl[i][0] >= 0) decl_fetch(vb + (size_t)v * stride + dcl[i][0], (unsigned)dcl[i][1], in[i]);
         VSOut o; vs_run(p, &k, (const float (*)[4])in, &o);
-        float e[29];
+        float e[45];
         memcpy(e, o.pos, 16); memcpy(e + 4, o.col[0], 16); memcpy(e + 8, o.col[1], 16);
-        memcpy(e + 12, o.tex[0], 64);
-        e[28] = wf ? o.fog : 1.f;          /* GPU semantics: unwritten oFog = 1 (no fog) */
-        fwrite(e, 4, 29, f);
+        memcpy(e + 12, o.tex, 128);     /* uv0..uv7 (8 x vec4) */
+        e[44] = wf ? o.fog : 1.f;      /* GPU semantics: unwritten oFog = 1 (no fog) */
+        fwrite(e, 4, 45, f);
     }
     fclose(f); free(vb);
 }
@@ -177,14 +177,14 @@ static int write_ps_vectors(const char *dir, int id, const VSProg *p, unsigned c
         /* colours a little outside [0, 1] (the Mac does not clamp oD0/oD1)
          * so _sat, cmp and cnd see both sides of their thresholds */
         for (int c = 0; c < 4; c++){ in[i].col[0][c] = rndf(-0.25f, 1.25f); in[i].col[1][c] = rndf(-0.25f, 1.25f); }
-        for (int k = 0; k < 4; k++){
+        for (int k = 0; k < 8; k++){
             in[i].uv[k][0] = rndf(0.f, 1.f); in[i].uv[k][1] = rndf(0.f, 1.f);
             in[i].uv[k][2] = rndf(0.5f, 2.f); in[i].uv[k][3] = rndf(0.5f, 2.f);
         }
         in[i].fog = rndf(-0.2f, 1.2f);
-        float row[25];
-        memcpy(row, in[i].col, 32); memcpy(row + 8, in[i].uv, 64); row[24] = in[i].fog;
-        fwrite(row, 4, 25, f);
+        float row[41];
+        memcpy(row, in[i].col, 32); memcpy(row + 8, in[i].uv, 128); row[40] = in[i].fog;
+        fwrite(row, 4, 41, f);
     }
     int ok = 1;
     for (int i = 0; i < NP; i++){
