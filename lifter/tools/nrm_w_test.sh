@@ -2,10 +2,16 @@
 # nrm_w_test.sh - prove the vertex NRM emitter writes src0.w * 1/|xyz|
 #
 # D3D9 NRM: dest.w = src0.w * (1/|src0.xyz|).  Before the fix the vertex
-# emitter wrote a bare 1.0 for the w component.  vs_2_0_134 and vs_3_0_051
-# both do `mov r0.w, c120.xxxx; nrm r1, r0` and then read r1.w, so the w
-# factor is live in the corpus.  This test asserts the emitted WGSL carries
-# the src0.w factor (not a bare 1.0) for every NRM in every vertex shader.
+# emitter wrote a bare 1.0 for the w component.  This is a TEXT check over the
+# emitted WGSL: for every NRM in every vertex shader it asserts the emission
+# carries the src0.w factor rather than a bare 1.0.
+#
+# The corpus cannot OBSERVE the w factor numerically: the only two vertex
+# shaders with an unmasked `nrm` (vs_2_0_134, vs_3_0_051) contain
+# `def c120 = 0 4 1 0`, which overrides the caller's c120, so their nrm source
+# w is 0 and the result w is 0 either way.  For the numeric check use
+# lifter/tools/nrm_w_all_test.sh, whose CHECK 3 runs a synthetic shader
+# (oT0.w == src0.w * 1/|xyz| == 0.4).
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
