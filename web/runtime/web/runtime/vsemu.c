@@ -593,6 +593,7 @@ static const char *OPN(unsigned op){
     case O_BREAKC:return"breakc"; case O_MOVA:return"mova"; case O_DEF:return"def";
     case O_DEFI:return"defi"; case O_DEFB:return"defb"; case O_EXPP:return"expp";
     case O_LOGP:return"logp"; case O_CND:return"cnd";
+    case O_TEX:return"texld";
     default: return "???";
     }
 }
