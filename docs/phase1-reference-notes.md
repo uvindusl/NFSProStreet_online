@@ -415,15 +415,12 @@ This is most likely a repack/crack: the official ProStreet executable is around
    Steam, GOG, or EA app). This is the clean path: it gives the real import
    table, the real section layout, and a hash we can pin in Phase 6. Verify it
    is the version the project targets before lifting.
-2. **Unpack this file ourselves.** The stub is a standard LZMA-style decoder;
-   we could implement it and dump the 20 MB image, or run the game under Wine
-   and dump the decrypted image from memory. This is legitimate reverse
-   engineering of software you own, but the result may not match the official
-   build, and it adds risk.
-3. **Prove the pipeline on a simpler game first** (the plan's own fallback),
+2. **Prove the pipeline on a simpler game first** (the plan's own fallback),
    then return to ProStreet.
 
-Recommendation: option 1. Do not build Phase 2 on a packed/cracked binary.
+Recommendation: option 1. Do not build Phase 2 on a packed/cracked binary. This
+project does not provide, and does not document how to produce, an unprotected
+image from a wrapped release.
 
 ---
 
