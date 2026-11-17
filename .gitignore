@@ -29,3 +29,7 @@ __pycache__/
 .DS_Store
 *.swp
 *.bak
+
+# test binaries
+tests/build/
+tools/build/
