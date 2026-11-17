@@ -1,80 +1,107 @@
 # Need for Speed: ProStreet — static recompilation
 
-A from-scratch **static recompilation** of the 2007 PC game *Need for Speed:
-ProStreet*. The game's x86 code is translated to C ahead of time, that C is
-compiled into a native binary, and a hand-written Win32 / Direct3D 9
-high-level emulation layer runs it.
+An experimental, from-scratch **static recompilation** of the 2007 PC game *Need for Speed: ProStreet*.
 
-This is the native sibling of the browser-port approach used by
-[nfsu2-web](https://github.com/th0mk/nfsu2-web): the x86 → C lifter is reused
-from that MIT-licensed project and retargeted from Underground 2 to ProStreet.
+The game's x86 code is translated to C ahead of time. That C is compiled into a native binary (and, as a second target, to WebAssembly), and a hand-written Win32 / Direct3D 9 / D3DX high-level emulation layer stands in for Windows. The long-term goal is to run the game in a browser using WebGPU and Web Audio.
 
-**Bring your own copy of the game.** No game code, game data or Microsoft DLLs
-are stored here. The lifted C, the runtime image and all game assets are
-produced locally from a copy you legally own.
+> **Status: early. The game does not run yet.** The code lifts and loads, and parts of the graphics stack work in isolation, but the program stops during C runtime start-up and never reaches `main`. See [Status](#status) for exactly what has been verified.
 
-> Not affiliated with or endorsed by Electronic Arts. *Need for Speed* is a
-> trademark of Electronic Arts Inc.
+**Bring your own copy of the game.** This repository contains no game code, game data, shaders, or Microsoft DLLs. Everything derived from the game (lifted C, images, shader blobs) is generated locally and is git-ignored.
+
+> Not affiliated with or endorsed by Electronic Arts. *Need for Speed* and *ProStreet* are trademarks of Electronic Arts Inc.
 
 ## Status
 
-| Phase | What it means | State |
+Each row is only marked ✅ when there is a command that reproduces it on the current build. Anything else is listed as not done.
+
+| Area | State | How to check |
 |---|---|---|
-| **0. Recon** | know the executable: layout, imports, DRM | ✅ [docs/phase0-binary-record.md](docs/phase0-binary-record.md) |
-| **1. Reference** | study the NFSU2 lineage the lifter comes from | ✅ [docs/phase1-reference-notes.md](docs/phase1-reference-notes.md) |
-| **2. Function map** | recover the real image and map every function | ✅ [docs/phase2-function-map.md](docs/phase2-function-map.md) |
-| **3. Lift** | every needed function of `nfs.exe` becomes C | ✅ [docs/phase3-lifter.md](docs/phase3-lifter.md) |
-| **4. CPU bring-up** | lifted code runs headless: CRT, heap, threads, TLS, SEH | ⏳ in progress |
-| **5. Graphics** | D3D9 + the D3DX effect framework | ⏳ next |
-| **6. Audio / input** | DirectSound, DirectInput | ⏳ |
-| **7. Game** | front-end, career, race weekend | ⏳ |
+| x86 → C lift | ✅ 47,514 functions lifted | `scripts/lift_boot.sh` |
+| Native runtime builds, warnings as errors | ✅ | `STRICT=1 scripts/build_runtime.sh` |
+| Image loads, 371 imports bound | ✅ | `scripts/run_boot.sh` (see boot log) |
+| C runtime start-up | ⛔ stops at static constructor 13 of 2,811 | `scripts/run_boot.sh` |
+| Reaches `main` | ❌ not reached | — |
+| D3D9 HLE: device, buffers, draw | ✅ native triangle test | `tests/build_d3d9_htriangle.sh` |
+| D3D9 HLE: textures | ✅ native textured-quad test (API calls only, no pixel comparison) | `tests/build_d3d9_textured_quad.sh` |
+| Shader bytecode parsing | ✅ all 591 shaders parse | `lifter/tools/build_shader_disasm.sh` |
+| D3D9 shader → WGSL translation | ✅ 591/591 emitted and pass `naga` validation (validity only, not correctness) | `scripts/validate_wgsl.sh` |
+| Shader instruction tests | ✅ `texld`, address registers | `tests/d4_instruction_test.sh` |
+| Web build | ✅ builds | `FULL=1 web/build.sh`, then `cd web && npm ci && node build.mjs` |
+| WebGPU test triangle in Chrome | ✅ interpolated triangle verified by pixel sampling | `analysis/webgpu-test/` |
+| A real ProStreet shader rendered correctly in WebGPU | ❌ not yet; output does not match expected colour | in progress |
+| Game files, audio, input, menus, racing | ❌ not started | — |
 
-The lift is real and measured; **nothing here runs the game yet.** The runtime
-currently brings the CRT up, initialises per-thread TLS and dispatches SEH, and
-stops inside `_initterm_e`.
+The full milestone table is in [`docs/milestones.md`](docs/milestones.md).
 
-## The target image
+### Known issues
 
-The retail `nfs.exe` is SecuROM-packed: its game code does not exist on disk,
-only in memory after the loader decrypts it. The legitimate way to obtain it is
-to run your own copy and read the decrypted image out of the process.
+- **Boot stops in the C runtime start-up.** The program halts at an unresolved indirect call during static constructor 13. Nothing past that point has run, so no gameplay-related code (D3D9 from the game, audio, input, file loading) has been exercised by the real game.
+- **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
+- **The CPU shader interpreter is incomplete.** It has no `cmp` case and computes `lrp` with the operands reversed. The WGSL emitter is correct; the interpreter is not used on that path.
+- **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.
 
-```bash
-# 1. launch the game, leave it at the main menu, note its pid
-# 2. dump the decrypted image
-python3 scripts/dump_running.py <pid> artifacts/nfs.exe.memdump
-# 3. rebuild a normal, loadable-layout PE from the dump
-python3 scripts/build_runtime_image.py artifacts/nfs.exe.memdump artifacts/nfs.exe.unpacked
-# 4. pin the image (size, hashes, sections, entry point)
-python3 scripts/verify_target.py artifacts/nfs.exe.unpacked
-```
+## What you need
 
-`scripts/verify_target.py` exits non-zero if the image drifts from the recorded
-one, so the rest of the pipeline fails loudly on the wrong copy.
+- A legitimately owned copy of the game.
+- A **readable, unprotected build of the game executable.** The retail executable on some releases is wrapped in copy protection and cannot be lifted as shipped. This project does not provide, and does not document how to produce, an unprotected image. If you cannot obtain one legitimately, the lifter has nothing to work on.
+- To build: Linux x86-64, Python 3, Node.js 20 or newer, a C compiler, and [wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases) unpacked into `deps/` for the web build. The tested setup is 8 cores and 15 GB of RAM; use `J=2` to limit parallel jobs.
+- For shader validation: [`naga-cli`](https://crates.io/crates/naga-cli). `scripts/validate_wgsl.sh` runs it over every extracted blob.
+- To view the web build: a Chromium-based browser with WebGPU enabled.
 
 ## Build and run
 
-```bash
-scripts/lift_boot.sh                        # lift the boot set (JTSWITCH=1 required)
-scripts/build_runtime.sh                    # -> out/prostreet
-scripts/run_boot.sh artifacts/nfs.exe.unpacked 60
+```
+scripts/lift_boot.sh                        # lift the boot set (JTSWITCH=1 is required)
+STRICT=1 J=2 scripts/build_runtime.sh       # native runtime -> out/prostreet
+scripts/run_boot.sh <image> 60              # boot and print a report
 ```
 
-`scripts/build_runtime.sh` compiles the generated shards with `-w` and the
-hand-written runtime with `-Wall -Wextra`; `STRICT=1` turns any runtime warning
-into a build failure. Do not trust a build made with `-w`.
+`scripts/build_runtime.sh` compiles the generated shards with `-w` and the hand-written runtime with `-Wall -Wextra`. `STRICT=1` turns any runtime warning into a build failure. Do not trust a build made without it.
+
+Native tests:
+
+```
+tests/build_d3d9_htriangle.sh
+tests/build_d3d9_textured_quad.sh
+tests/d4_instruction_test.sh
+```
+
+Web build:
+
+```
+FULL=1 web/build.sh
+cd web && npm ci && node build.mjs
+```
+
+## How it works
+
+1. **`lifter/tools/`** — a Python lifter built on Capstone turns every reachable function of the executable into C. Switch tables, indirect calls, and function pointers held in data are seeded so the dispatcher can find them.
+2. **`lifter/runtime/`** — the hand-written runtime: CPU state, a flat 4 GB guest address space, thread-local storage, structured exception handling, the Win32 layer, and Direct3D 9 / D3DX emulation.
+3. **Shaders** — ProStreet ships 591 precompiled D3D9 shader blobs (`vs_1_1`, `vs_2_0`, `vs_3_0`, `ps_2_0`, `ps_3_0`). An offline translator turns them into WGSL for WebGPU. The blobs are read from your own game files and are never committed.
+4. **`web/`** — the browser host: the WebGPU renderer, Web Audio, input, a worker-based game host, and a small server that serves the page, the module, and your local game folder.
+
+More detail is in [`docs/`](docs/).
 
 ## Layout
 
-| path | role |
+| Path | Role |
 |---|---|
-| `lifter/tools/` | the x86-32 → C lifter (`lift.py`, `genall.py`, `lregs.py`, …) |
-| `lifter/runtime/` | hand-written native runtime: CPU, guest memory, dispatch, Win32 HLE, SEH |
-| `lifter/seeds-*.txt` | function seeds per phase |
-| `scripts/` | image recovery, seeding, lift and build drivers |
-| `docs/` | the phase records, written as each phase completed |
+| `lifter/tools/` | x86-32 → C lifter, shader disassembler, shader → WGSL translator |
+| `lifter/runtime/` | native runtime: CPU, memory, dispatch, Win32 and D3D9/D3DX emulation |
+| `web/` | browser host and web build |
+| `scripts/` | lift, build, and boot drivers |
+| `tests/` | native graphics and shader tests |
+| `docs/` | milestones and design notes |
+| `analysis/`, `debug/` | working notes; some are historical and may be out of date, so prefer `docs/milestones.md` |
+
+## Credits
+
+- Based on the browser-port approach and x86 → C lifter of [th0mk/nfsu2-web](https://github.com/th0mk/nfsu2-web) (MIT), which in turn builds on Talha Müderrisoğlu's static recompilation of *Need for Speed: Underground 2*.
+- Method follows [N64: Recompiled](https://github.com/N64Recomp/N64Recomp) and [XenonRecomp](https://github.com/hedge-dev/XenonRecomp).
+- Parts of this project were developed with AI coding assistants.
+
+Third-party attributions are listed in [`THIRD_PARTY.md`](THIRD_PARTY.md).
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Third-party attributions are in
-[THIRD_PARTY.md](THIRD_PARTY.md).
+MIT — see [`LICENSE`](LICENSE).
