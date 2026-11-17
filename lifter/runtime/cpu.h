@@ -118,7 +118,10 @@ void dispatch_tail(struct CPU *c);
  * code, misses, the addresses ICALL/EFXSTAT watch) takes dispatch_indirect /
  * dispatch_tail as before. */
 #define DISPATCH_TEXT_BASE 0x00401000u
-/* Need for Speed ProStreet v1.1 .text: RVA 0x1000, virtual size 0x56507b. */
+/* Need for Speed ProStreet v1.1 .text: RVA 0x1000, virtual size 0x56507b.
+ * The native runtime (lifter/runtime) lifts ProStreet, so this must stay
+ * 0x56507b.  The browser runtime has its own copy at
+ * web/runtime/web/runtime/cpu.h and tracks whatever lift web/gen.sh made. */
 #define DISPATCH_TEXT_SIZE 0x0056507bu
 typedef void (*guest_fn_t)(struct CPU *);
 extern guest_fn_t g_dtab[DISPATCH_TEXT_SIZE];

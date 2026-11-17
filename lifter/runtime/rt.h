@@ -28,6 +28,7 @@ void mem_init(void);
 void mem_commit(uint32_t addr, uint32_t size);
 int  mem_load_pe(const char *path);
 int  mem_overlay_section(const char *path, const char *secname);
+void mem_watch_write_range(uint32_t lo, uint32_t hi);
 void mem_fault_handler_install(void);
 void mem_altstack_install(void);
 void mem_report(void);

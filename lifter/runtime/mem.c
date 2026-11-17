@@ -32,6 +32,9 @@ uint32_t *g_cov = 0;
 uint32_t g_last_fn = 0;
 int g_prof_on = 0;
 
+static uint32_t g_wwatch_lo = 0, g_wwatch_hi = 0;
+static int g_wwatch_armed = 0;
+
 RtLog g_rtlog[RTLOG_SIZE];
 uint64_t g_rtlog_n = 0;
 
@@ -207,9 +210,54 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = (ucontext_t *)uc_;
     static int nested = 0;
     if (nested++) _exit(4);
-    fprintf(stderr, "\n*** GUEST FAULT: %s at address %p\n",
+    uintptr_t host_addr = (uintptr_t)si->si_addr;
+    uint32_t guest_va = 0;
+    int in_guest = 0;
+    if (g_mem) {
+        uintptr_t base = (uintptr_t)g_mem;
+        uintptr_t off = host_addr - base;
+        if (off < GSZ) { guest_va = (uint32_t)off; in_guest = 1; }
+    }
+    int is_write = 0;
+    if (uc) {
+#if defined(__x86_64__) && defined(REG_ERR)
+        is_write = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+#endif
+    }
+    if (g_wwatch_armed && in_guest && is_write &&
+        guest_va >= g_wwatch_lo && guest_va < g_wwatch_hi) {
+        fprintf(stderr, "\n*** GUEST WRITE WATCH hit guest_va=0x%08x host=%p\n",
+                guest_va, si->si_addr);
+        if (uc) {
+            greg_t *g = uc->uc_mcontext.gregs;
+            fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
+                    (void *)g[REG_RIP], guest_fn_from_host((void *)g[REG_RIP]));
+            fprintf(stderr, "    eax=%08lx ecx=%08lx edx=%08lx ebx=%08lx\n",
+                    (unsigned long)g[REG_RAX], (unsigned long)g[REG_RCX],
+                    (unsigned long)g[REG_RDX], (unsigned long)g[REG_RBX]);
+            fprintf(stderr, "    esp=%08lx ebp=%08lx esi=%08lx di=%08lx\n",
+                    (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
+                    (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
+        }
+        if (g_cur_cpu) {
+            CPU *c = g_cur_cpu;
+            fprintf(stderr, "    cpu: eip=%08x esp=%08x ebp=%08x eax=%08x ecx=%08x edx=%08x\n",
+                    c->eip, c->esp, c->ebp, c->eax, c->ecx, c->edx);
+            fprintf(stderr, "    cpu: ebx=%08x esi=%08x edi=%08x\n", c->ebx, c->esi, c->edi);
+            if (mem_is_committed(c->esp)) guest_backtrace(c, 24);
+        }
+        rtlog_dump(24);
+        uint64_t plo = (uint64_t)guest_va & ~0x3FFFu;
+        mprotect(g_mem + plo, 0x4000, PROT_READ | PROT_WRITE);
+        g_wwatch_armed = 0; /* catch first write, then allow progress */
+        fprintf(stderr, "    watch: page %08llx set RW, continuing\n",
+                (unsigned long long)plo);
+        return;
+    }
+    fprintf(stderr, "\n*** GUEST FAULT: %s at host %p guest_va=%s%08x\n",
             sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" :
-            sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "signal", si->si_addr);
+            sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "signal",
+            si->si_addr, in_guest ? "0x" : "(none) ", in_guest ? guest_va : 0u);
     if (uc) {
         greg_t *g = uc->uc_mcontext.gregs;
         fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
@@ -223,13 +271,12 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
     }
     if (g_cur_cpu) {
         CPU *c = g_cur_cpu;
-        uint32_t fault_va = (uint32_t)(uintptr_t)si->si_addr;
         fprintf(stderr, "    cpu: eip=%08x esp=%08x ebp=%08x eax=%08x ecx=%08x edx=%08x\n",
                 c->eip, c->esp, c->ebp, c->eax, c->ecx, c->edx);
         fprintf(stderr, "    cpu: ebx=%08x esi=%08x edi=%08x\n",
                 c->ebx, c->esi, c->edi);
-        fprintf(stderr, "    fault va=%08x committed=%d heap_brk=%08x\n",
-                fault_va, mem_is_committed(fault_va), gh_break());
+        fprintf(stderr, "    fault guest_va=%08x in_guest=%d committed=%d heap_brk=%08x\n",
+                guest_va, in_guest, in_guest ? mem_is_committed(guest_va) : 0, gh_break());
         fprintf(stderr, "    cpu: ptr=%p fs_base=%08x gs_base=%08x  (fs:[0] -> %08x)\n",
                 (void *)c, c->fs_base, c->gs_base,
                 c->fs_base ? MR32(c->fs_base) : 0);
@@ -239,14 +286,10 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
         fprintf(stderr, "    cpu: <none> (g_cur_cpu not set on this thread)\n");
     }
     /* Phase 5: auto-commit page at fault address and continue */
-    if (g_mem) {
-        uint32_t fault_va = (uint32_t)(uintptr_t)si->si_addr;
-        if (fault_va >= 0x400000 && fault_va < 0x1aa8000) {
-            mem_commit(fault_va, 0x1000);
-            fprintf(stderr, "    auto-committed page at 0x%08x\n", fault_va);
-            /* Don't exit - let guest continue */
-            return;
-        }
+    if (in_guest && guest_va >= 0x400000 && guest_va < 0x1aa8000) {
+        mem_commit(guest_va, 0x1000);
+        fprintf(stderr, "    auto-committed guest page at 0x%08x\n", guest_va & ~0xFFFu);
+        return;
     }
     rtlog_dump(24);
     _exit(4);
@@ -262,6 +305,21 @@ void mem_fault_handler_install(void) {
     sigaction(SIGBUS, &sa, 0);
     sigaction(SIGILL, &sa, 0);
     sigaction(SIGFPE, &sa, 0);
+}
+
+void mem_watch_write_range(uint32_t lo, uint32_t hi) {
+    if (hi <= lo || !g_mem) return;
+    g_wwatch_lo = lo;
+    g_wwatch_hi = hi;
+    g_wwatch_armed = 1;
+    uint64_t plo = (uint64_t)lo & ~0x3FFFu;
+    uint64_t phi = ((uint64_t)hi + 0x3FFFu) & ~0x3FFFu;
+    if (phi > GSZ) phi = GSZ;
+    if (mprotect(g_mem + plo, (size_t)(phi - plo), PROT_READ) != 0)
+        fprintf(stderr, "mem: watch mprotect RO failed [%08x,%08x): %s\n", lo, hi, strerror(errno));
+    else
+        fprintf(stderr, "mem: watch writes [%08x,%08x) pages [%08llx,%08llx)\n",
+                lo, hi, (unsigned long long)plo, (unsigned long long)phi);
 }
 
 void mem_report(void) {

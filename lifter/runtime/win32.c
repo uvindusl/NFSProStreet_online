@@ -770,16 +770,20 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "_initterm") || str_eq(n, "_initterm_e")) {
         uint32_t begin = A(0), end = A(1);
         uint32_t cnt = 0;
-        for (uint32_t p = begin; p < end; p += 4) {
+        uint32_t slots = (end > begin) ? (end - begin) / 4u : 0;
+        fprintf(stderr, "  %s(%08x,%08x): %u slots\n", n, begin, end, slots);
+        for (uint32_t i = 0, p = begin; p < end; p += 4, i++) {
             uint32_t fn = MR32(p);
             if (!fn) continue;
             cnt++;
-            if (!guest_call(c, fn)) break;
+            fprintf(stderr, "    %s[%u] ptr=%08x fn=%08x ...\n", n, i, p, fn);
+            if (!guest_call(c, fn)) {
+                fprintf(stderr, "    %s[%u] fn=%08x FAILED (guest_call returned 0)\n", n, i, fn);
+                break;
+            }
+            fprintf(stderr, "    %s[%u] fn=%08x ok\n", n, i, fn);
         }
-        if (str_eq(n, "_initterm"))
-            fprintf(stderr, "  _initterm(%08x,%08x): %u constructors\n", begin, end, cnt);
-        else
-            fprintf(stderr, "  _initterm_e(%08x,%08x): %u constructors\n", begin, end, cnt);
+        fprintf(stderr, "  %s(%08x,%08x): %u/%u constructors ran\n", n, begin, end, cnt, slots);
         r = 0;
     } else if (str_eq(n, "__getmainargs")) {
         uint32_t argc = A(0), argv = A(1), envp = A(2), si = A(4);

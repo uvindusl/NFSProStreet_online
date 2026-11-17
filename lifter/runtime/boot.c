@@ -62,21 +62,148 @@ static void *guest_main(void *arg) {
     return 0;
 }
 
-/* The unpacked artifact is a dump of a running process, so its .data holds
- * live pointers from that process (the allocator's free list, for one).  The
- * retail exe has the initial .data the game expects, and its .text is
- * byte-identical, so load the artifact for its layout and put the clean
- * .data back.  A different main image needs no overlay. */
+/* Overlay the clean on-disk .data only when explicitly requested.  The
+ * unpacked artifact is a dump of a running process, so its .data holds the
+ * live post-load state; overlaying retail/zero-init .data is known to break
+ * the recorded baseline and is therefore opt-in.
+ *   argv[2]                        -> overlay that image's .data
+ *   PROSTREET_CLEAN_IMAGE=<path>   -> overlay that image's .data */
 static void overlay_clean_data(const char *pe, int argc, char **argv) {
-    const char *clean = argc > 2 ? argv[2] : getenv("PROSTREET_CLEAN_IMAGE");
-    if (!clean || !*clean) clean = "game/nfsps.exe";
-    if (!strcmp(clean, pe)) return;
+    const char *clean = (argc > 2) ? argv[2] : getenv("PROSTREET_CLEAN_IMAGE");
+    if (!clean || !*clean) {
+        fprintf(stderr, "boot: keeping loaded .data (no clean-data overlay requested)\n");
+        return;
+    }
+    if (!strcmp(clean, pe)) {
+        fprintf(stderr, "boot: clean image is the main image, no .data overlay\n");
+        return;
+    }
     if (access(clean, R_OK) != 0) {
-        fprintf(stderr, "boot: no clean image at %s, keeping loaded .data\n", clean);
+        fprintf(stderr, "boot: clean image %s not readable, keeping loaded .data\n", clean);
         return;
     }
     if (mem_overlay_section(clean, ".data"))
         fprintf(stderr, "boot: .data overlay from %s failed, keeping loaded .data\n", clean);
+}
+
+static int hex_digit(int c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return -1;
+}
+
+static int parse_hex_u32(const char *s, const char **end, uint32_t *out) {
+    uint64_t v = 0;
+    int n = 0;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    for (;;) {
+        int d = hex_digit((unsigned char)*s);
+        if (d < 0) break;
+        v = (v << 4) | (uint32_t)d;
+        if (v > 0xFFFFFFFFull) return 0;
+        s++; n++;
+    }
+    if (!n) return 0;
+    *out = (uint32_t)v;
+    *end = s;
+    return 1;
+}
+
+/* PROSTREET_ZERO="0xSTART-0xEND[,0xSTART-0xEND...]" (END exclusive).
+ * Applied after any .data overlay so experiments can reset selected ranges. */
+static void apply_zero_env(void) {
+    const char *v = getenv("PROSTREET_ZERO");
+    if (!v || !*v) return;
+    const char *p = v;
+    while (*p) {
+        while (*p == ' ' || *p == ',' || *p == '\t') p++;
+        if (!*p) break;
+        uint32_t start = 0, end = 0;
+        const char *q = p;
+        if (!parse_hex_u32(p, &q, &start)) {
+            fprintf(stderr, "boot: PROSTREET_ZERO: bad range near '%s'\n", p);
+            return;
+        }
+        p = q;
+        if (*p != '-' && *p != ':') {
+            fprintf(stderr, "boot: PROSTREET_ZERO: expected '-' after %08x\n", start);
+            return;
+        }
+        p++;
+        if (!parse_hex_u32(p, &q, &end)) {
+            fprintf(stderr, "boot: PROSTREET_ZERO: bad end near '%s'\n", p);
+            return;
+        }
+        p = q;
+        if (end <= start) {
+            fprintf(stderr, "boot: PROSTREET_ZERO: empty range %08x-%08x\n", start, end);
+            continue;
+        }
+        mem_commit(start, end - start);
+        memset(g_mem + start, 0, end - start);
+        fprintf(stderr, "boot: PROSTREET_ZERO zeroed %08x-%08x (%u bytes)\n",
+                start, end, end - start);
+    }
+}
+
+/* PROSTREET_SET="VA=VALUE[,VA=VALUE...]" writes 32-bit values (hex) after
+ * overlay/zero so experiments can patch specific globals. */
+static void apply_set_env(void) {
+    const char *v = getenv("PROSTREET_SET");
+    if (!v || !*v) return;
+    const char *p = v;
+    while (*p) {
+        while (*p == ' ' || *p == ',' || *p == '\t') p++;
+        if (!*p) break;
+        uint32_t va = 0, val = 0;
+        const char *q = p;
+        if (!parse_hex_u32(p, &q, &va)) {
+            fprintf(stderr, "boot: PROSTREET_SET: bad va near '%s'\n", p);
+            return;
+        }
+        p = q;
+        if (*p != '=' && *p != ':') {
+            fprintf(stderr, "boot: PROSTREET_SET: expected '=' after %08x\n", va);
+            return;
+        }
+        p++;
+        if (!parse_hex_u32(p, &q, &val)) {
+            fprintf(stderr, "boot: PROSTREET_SET: bad value near '%s'\n", p);
+            return;
+        }
+        p = q;
+        mem_commit(va, 4);
+        MR32(va) = val;
+        fprintf(stderr, "boot: PROSTREET_SET [%08x]=%08x\n", va, val);
+    }
+}
+
+/* PROSTREET_WATCH_W="0xSTART[-0xEND]" traps the first guest write to the
+ * range (page-granular RO) and reports it, to find unexpected writers. */
+static void apply_watch_env(void) {
+    const char *v = getenv("PROSTREET_WATCH_W");
+    if (!v || !*v) return;
+    const char *p = v;
+    while (*p == ' ' || *p == '\t') p++;
+    uint32_t start = 0, end = 0;
+    const char *q = p;
+    if (!parse_hex_u32(p, &q, &start)) {
+        fprintf(stderr, "boot: PROSTREET_WATCH_W: bad addr near '%s'\n", p);
+        return;
+    }
+    p = q;
+    if (*p == '-' || *p == ':') {
+        p++;
+        if (!parse_hex_u32(p, &q, &end)) {
+            fprintf(stderr, "boot: PROSTREET_WATCH_W: bad end near '%s'\n", p);
+            return;
+        }
+    } else {
+        end = start + 4;
+    }
+    if (end <= start) end = start + 4;
+    mem_watch_write_range(start, end);
 }
 
 int main(int argc, char **argv) {
@@ -87,12 +214,17 @@ int main(int argc, char **argv) {
     mem_altstack_install();
     if (mem_load_pe(pe)) return 1;
     overlay_clean_data(pe, argc, argv);
+    apply_zero_env();
+    apply_set_env();
 
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
     win32_init();
     setup_teb();
     if (getenv("PROSTREET_TLS_TEST") && !win32_tls_selftest()) return 1;
     dispatch_init();
+
+    /* Arm write-watch AFTER dispatch_init so we catch any init-time writes */
+    apply_watch_env();
 
     pthread_attr_t at;
     pthread_attr_init(&at);

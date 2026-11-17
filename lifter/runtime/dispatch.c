@@ -178,7 +178,7 @@ static void unresolved(CPU *c, uint32_t addr) {
     rtlog(RT_INDIRECT, addr, ret, c->esp);
     /* A wrong target means the lifted program has lost its way; stop at the
      * first one instead of running on with a corrupted state. */
-    fprintf(stderr, "\n*** stopping: unresolved indirect call to 0x%08x\n", addr);
+    fprintf(stderr, "\n*** stopping: unresolved indirect call to 0x%08x (MR32(0x96726c)=%08x)\n", addr, MR32(0x96726c));
     win32_report();
     dispatch_report();
     exit(3);
