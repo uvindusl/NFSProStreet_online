@@ -1,5 +1,8 @@
 # Browser‑Port Action Plan — ProStreet → WebGPU (M0‑M4)
 
+⚠️ THIS PLAN IS SUPERSEDED ⚠️
+Current status lives in docs/milestones.md and README.md. This plan is kept for history only.
+
 **Purpose:** Drive Need for Speed: ProStreet static recompilation to a browser‑playable WebGPU build as fast as possible. Synthesizes all prior docs, analysis, and pipeline knowledge.
 
 **Current phase:** M0 (foundation) → M1 (boot) → M2 (lift) → M3 (runtime) → M4 (first frame). See phase table in `README.md`.
@@ -10,7 +13,7 @@
 
 | Blocker | Evidence | Owner | Effort |
 |---|---|---|---|
-| **Native boot — CRT constructors / clean `.data`** | `out/boot-live.log`: stops inside `_initterm_e` at `0x00435390` on stale allocator pointer `0xb4dd18 -> 0x2aed0020`. `out/boot-overlay.log` stops at unresolved indirect call `0x0096aad4` when overlaying clean `.data`. Minimal patch: write `0x0096aae8` at VA `0x00aae110` (one dword). `analysis/securom-data-patch-map.md` classifies this as a Class d patch. | opencode (lifter/runtime/win32.c, lifter/tools/) | 1‑2 days |
+| **Native boot — CRT constructors / clean `.data`** | `out/boot-live.log`: stops inside `_initterm_e` at `0x00435390` on stale allocator pointer `0xb4dd18 -> 0x2aed0020`. `out/boot-overlay.log` stops at unresolved indirect call `0x0096aad4` when overlaying clean `.data`. The packed-image / ctor-13 blocker was abandoned and the project now requires an already-unprotected image; no SecuROM data-patch is applied. | opencode (lifter/runtime/win32.c, lifter/tools/) | 1‑2 days |
 | **Native boot — pool allocator / heap brk** | Live dump has `heap_brk=0x200006e0`; guest reads stale pointer from `.data`. The `gh_alloc` bump‑arena in `lifter/runtime/win32.c` must not exhaust before the game's pool allocator runs. | opencode | 2‑3 days |
 | **Web build / gen gaps** | `web/gen.sh` lifts the shader/parameter chain; `web/build.sh` compiles to WASM. No D3DX HLE → `Direct3DCreate9` returns 0 (see `docs/d3dx-coverage.md`). No `IDirect3D9` device creation → no rendered frame. | pi (web/) | 3‑5 days |
 | **D3D9 + D3DX HLE** | `docs/d3dx-coverage.md`: all 14 `D3DX*` imports stubbed (`r = 0`). `Direct3DCreate9` returns 0. Reference `nfsu2-web` has full HLE in `reference/nfsu2-web/runtime/d3dx_hle.c` and `reference/nfsu2-web/runtime/com.c` (COMSTAT ~36k device calls/frame). | pi (web/) / opencode (lifter/) | 5‑7 days |
@@ -23,7 +26,7 @@
 ### M0 → M1: Native boot to first CRT constructor completion
 | # | Action | File(s) | Owner |
 |---|---|---|---|
-| 1 | Apply SecuROM data‑patch: write `0x0096aae8` at VA `0x00aae110` (one dword in `.data`). Re‑verify with `scripts/verify_target.py` and `./out/prostreet`. | `analysis/securom-data-patch-map.md`, `lifter/runtime/win32.c`, `scripts/verify_target.py` | opencode |
+| 1 | The packed-image / ctor-13 blocker was abandoned and the project now requires an already-unprotected image. No SecuROM data-patch is applied. Re‑verify with `scripts/verify_target.py` and `./out/prostreet`. | `lifter/runtime/win32.c`, `scripts/verify_target.py` | opencode |
 | 2 | Fix pool allocator / heap brk exhaustion: ensure `gh_alloc` has enough headroom before the game's pool allocator runs. Trace from `out/boot-live.log` last events before crash. | `lifter/runtime/win32.c` (`gh_alloc`, `g_brk`, `HEAP_END`) | opencode |
 | 3 | Bring boot to `SleepEx` loop (currently crashes at `_initterm_e`). Verify `./out/prostreet artifacts/nfs.exe.unpacked` runs past CRT, creates thread, enters SleepEx loop. | `out/boot-live.log`, `scripts/run_boot.sh` | opencode |
 
@@ -85,7 +88,7 @@
 ## 5. Unknowns / risks
 
 - **Exact import order** during boot (ProStreet init sequence not fully traced; may differ from NFSU2).
-- **SecuROM‑decrypted `.rdata` vs clean overlay**: the `analysis/securom-data-patch-map.md` minimal patch (one dword at `0x00aae110`) is verified, but other `.data` differences exist (18,746 runs). Leaving them clean is actionable, but edge cases may appear later.
+- **Packed-image / ctor-13 blocker**: the blocker was abandoned and the project now requires an already-unprotected image. The minimal SecuROM data-patch is not applied; other `.data` differences may exist but are left clean.
 - **Pool allocator vs bump arena**: `gh_alloc` in `lifter/runtime/win32.c` may conflict with the game's custom pool allocator once D3DX HLE starts allocating textures/structs.
 - **WebGPU adapter compatibility**: Dawn / WebGPU on test hardware may not support the required D3D9 feature level; may need fallback to D3D11/12 backend.
 - **D3DX effect parameter evaluation**: the reference nfsu2-web evaluates preshaders and expression trees; ProStreet's exact expression format is unknown until the first `BeginPass` is reached.
@@ -94,4 +97,4 @@
 
 ## 6. Next immediate action
 
-**Today:** opencode applies the SecuROM patch (one dword at `0x00aae110`) and fixes `gh_alloc` headroom; verify `./out/prostreet` passes `verify_target.py` and reaches the `SleepEx` loop. Then pi ports `Direct3DCreate9` stub + minimal D3DX9 HLE to `web/`. Follow-up: weekly sync via `herdr agent prompt w1F:p8` / `w1F:pC`.
+**Today:** opencode fixes `gh_alloc` headroom; verify `./out/prostreet` passes `verify_target.py` and reaches the `SleepEx` loop. The packed-image / ctor-13 blocker was abandoned — an already-unprotected image is required. Then pi ports `Direct3DCreate9` stub + minimal D3DX9 HLE to `web/`. Follow-up: weekly sync via `herdr agent prompt w1F:p8` / `w1F:pC`.
