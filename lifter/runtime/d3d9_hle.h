@@ -370,6 +370,21 @@ typedef struct D3DXMATRIX {
     float _41, _42, _43, _44;
 } D3DXMATRIX;
 
+/* D3DXVECTOR3 */
+typedef struct D3DXVECTOR3 {
+    float x, y, z;
+} D3DXVECTOR3;
+
+/* D3DXVECTOR4 */
+typedef struct D3DXVECTOR4 {
+    float x, y, z, w;
+} D3DXVECTOR4;
+
+/* D3DXQUATERNION */
+typedef struct D3DXQUATERNION {
+    float x, y, z, w;
+} D3DXQUATERNION;
+
 /* D3DVIEWPORT9 */
 typedef struct D3DVIEWPORT9 {
     uint32_t X;
