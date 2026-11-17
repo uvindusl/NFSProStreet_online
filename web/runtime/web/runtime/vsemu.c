@@ -465,7 +465,7 @@ int vs_run(const VSProg *p, const VSConst *k, const float v[16][4], VSOut *o){
         case O_FRC: for(int i=0;i<4;i++) d[i]=s[0][i]-floorf(s[0][i]); DSTW(x,d); break;
         case O_ABS: for(int i=0;i<4;i++) d[i]=fabsf(s[0][i]); DSTW(x,d); break;
         case O_SGN: for(int i=0;i<4;i++) d[i]=(s[0][i]>0.f)-(s[0][i]<0.f); DSTW(x,d); break;
-        case O_LRP: for(int i=0;i<4;i++) d[i]=s[1][i]+s[0][i]*(s[2][i]-s[1][i]); DSTW(x,d); break;
+        case O_LRP: for(int i=0;i<4;i++) d[i]=s[2][i]+s[0][i]*(s[1][i]-s[2][i]); DSTW(x,d); break;
         case O_RCP: { float r=safe_rcp(s[0][0]); d[0]=d[1]=d[2]=d[3]=r; DSTW(x,d); } break;
         case O_RSQ: { float r=safe_rsq(s[0][0]); d[0]=d[1]=d[2]=d[3]=r; DSTW(x,d); } break;
         case O_DP3: { float r=s[0][0]*s[1][0]+s[0][1]*s[1][1]+s[0][2]*s[1][2];

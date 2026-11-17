@@ -75,43 +75,43 @@ The emitter (`web/runtime/web/vsemu_wgsl.inc`) has two ALU switches:
 
 Coverage by opcode:
 
-| Opcode | Name | Pixel switch | Vertex switch | Dropped in corpus? |
+| Opcode | Name | Pixel switch | Vertex switch | Handled by class switch? |
 |--------|------|-------------|---------------|-------------------|
-| 1 | O_MOV | handled | handled | No |
-| 2 | O_ADD | handled | handled | No |
-| 4 | O_MAD | handled | handled | No |
-| 5 | O_MUL | handled | handled | No |
-| 6 | O_RCP | handled | handled | No |
-| 7 | O_RSQ | handled | handled | No |
-| 8 | O_DP3 | handled | handled | No |
-| 9 | O_DP4 | handled | handled | No |
-| 10 | O_MIN | handled | handled | No |
-| 11 | O_MAX | handled | handled | No |
-| 12 | O_SLT | **dropped** | handled | Yes (ps_2_0? No—ps_2_0 doesn't use O_SLT; only vs classes use it, and vertex handles it) |
-| 13 | O_SGE | **dropped** | handled | Yes (only vs classes use it; vertex handles it) |
-| 14 | O_EXP | handled | handled | No |
-| 15 | O_LOG | handled | handled | No |
-| 16 | O_LIT | **dropped** | handled | Yes (only vs classes use it; vertex handles it) |
-| 18 | O_LRP | handled | handled | No |
-| 19 | O_FRC | handled | handled | No |
-| 31 | O_DCL | skipped | skipped | No |
-| 32 | O_POW | handled | handled | No |
-| 35 | O_ABS | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 36 | O_NRM | handled | handled | No |
-| 37 | O_SINCOS | **dropped** | handled | Yes (only vs classes use it; vertex handles it) |
+| 1 | O_MOV | handled | handled | Yes |
+| 2 | O_ADD | handled | handled | Yes |
+| 4 | O_MAD | handled | handled | Yes |
+| 5 | O_MUL | handled | handled | Yes |
+| 6 | O_RCP | handled | handled | Yes |
+| 7 | O_RSQ | handled | handled | Yes |
+| 8 | O_DP3 | handled | handled | Yes |
+| 9 | O_DP4 | handled | handled | Yes |
+| 10 | O_MIN | handled | handled | Yes |
+| 11 | O_MAX | handled | handled | Yes |
+| 12 | O_SLT | **dropped** | handled | Yes |
+| 13 | O_SGE | **dropped** | handled | Yes |
+| 14 | O_EXP | handled | handled | Yes |
+| 15 | O_LOG | handled | handled | Yes |
+| 16 | O_LIT | **dropped** | handled | Yes |
+| 18 | O_LRP | handled | handled | Yes |
+| 19 | O_FRC | handled | handled | Yes |
+| 31 | O_DCL | skipped | skipped | Yes |
+| 32 | O_POW | handled | handled | Yes |
+| 35 | O_ABS | handled | **dropped** | Yes |
+| 36 | O_NRM | handled | handled | Yes |
+| 37 | O_SINCOS | **dropped** | handled | Yes |
 | 38 | O_REP | **skipped** | **skipped** | No (pixel switch skips via `default: continue`; shader still translates) |
 | 39 | O_ENDREP | **skipped** | **skipped** | No (pixel switch skips via `default: continue`; shader still translates) |
-| 46 | O_MOVA | **dropped** | handled | Yes (only vs classes use it; vertex handles it) |
-| 48 | O_DEFI | skipped | skipped | No |
-| 65 | O_TEXKILL | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 66 | O_TEX | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 81 | O_DEF | skipped | skipped | No |
-| 88 | O_CMP | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 90 | O_DP2ADD | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 91 | O_DSX | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
-| 92 | O_DSY | handled | **dropped** | Yes (only ps classes use it; pixel handles it) |
+| 46 | O_MOVA | **dropped** | handled | Yes |
+| 48 | O_DEFI | skipped | skipped | Yes |
+| 65 | O_TEXKILL | handled | **dropped** | Yes |
+| 66 | O_TEX | handled | **dropped** | Yes |
+| 81 | O_DEF | skipped | skipped | Yes |
+| 88 | O_CMP | handled | **dropped** | Yes |
+| 90 | O_DP2ADD | handled | **dropped** | Yes |
+| 91 | O_DSX | handled | **dropped** | Yes |
+| 92 | O_DSY | handled | **dropped** | Yes |
 
-**Key:** "handled" = switch has a real case; "dropped" = switch falls through to `default` (continue/goto done) — for pixel switch this means instruction is skipped but shader still translates; for vertex switch this means shader is rejected; "skipped" = explicitly consumed (decl/const/end, not an ALU op).
+**Key:** "handled" = switch has a real case; "dropped" = switch falls through to `default` (continue/goto done) — for pixel switch this means instruction is skipped but shader still translates; for vertex switch this means shader is rejected; "skipped" = explicitly consumed (decl/const/end, not an ALU op). "Handled by class switch?" = Yes if the switch that processes this opcode's shader class has a real case for it.
 
 ## Silently skipped opcodes (present in corpus but unhandled by emitter cases)
 
