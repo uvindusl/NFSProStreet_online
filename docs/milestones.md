@@ -20,7 +20,7 @@
 | **E1** Web lift output | `ls gen/all/shard_*.c | wc -l` | 131 | **Pass** | ProStreet |
 | **E2** FULL=1 web/build.sh | `FULL=1 web/build.sh` | exit 0\nBuilt /home/uvindu/Projects/nfsprostree-recompile/out/web/nfsu2.wasm and /home/uvindu/Projects/nfsprostree-recompile/out/web/server.wasm\nManifest: /home/uvindu/Projects/nfsprostree-recompile/out/web/nfsu2.json\n out/web/nfsu2.wasm 56911892 bytes | **Pass** | ProStreet |
 | **E3** npm ci and node build.mjs | `cd web && npm ci && node build.mjs exit 0` | exit 0\n 26 assets | **Pass** | ProStreet |
-| **E4** Triangle in Chrome via WebGPU | `analysis/webgpu-test/tri.png exists` | exists | **Pass** | ProStreet |
+| **E4** Triangle in Chrome via WebGPU | `convert analysis/webgpu-test/tri.png -format percent-k info:` → **96825**; `-format "%[pixel:p{640,480}]" info:` → **srgb(85,85,85)**; `-format "%[pixel:p{300,650}]" info:` → **srgb(183,48,25)**; `-format "%[pixel:p{1000,650}]" info:` → **srgb(43,187,25)**; `-format "%[pixel:p{640,150}]" info:` → **srgb(27,27,202)**; `triangle.html` contains `createRenderPipelineAsync` + draw 3 vertices | **Pass** | ProStreet |
 | **E5** ProStreet boots to main in browser | Blocked by B3 | Blocked by B3 | **Blocked** | ProStreet |
 | **F1** Game systems: files | (asset inventory) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F2** Game systems: audio | (sound playback) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
