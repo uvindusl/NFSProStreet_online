@@ -79,11 +79,18 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; i++){
         if (strcmp(argv[i], "--test") == 0) do_test = 1;
         else if (strcmp(argv[i], "--selftest") == 0) do_selftest = 1;
-        else if (strncmp(argv[i], "--decl=", 7) == 0){
+        else if (strncmp(argv[i], "--decl=", 7) == 0 || strcmp(argv[i], "--decl") == 0){
             /* --decl reg:offset:type,reg:offset:type,...  D3DDECLTYPE.
-             * Parsed into an int[16][2] (offset,type), -1 = unused.  The
-             * runtime's com.c passes the same layout to vs_to_wgsl. */
-            char *s = argv[i] + 7;
+             * Accepts both "--decl=VALUE" and "--decl VALUE"; a bare
+             * "--decl" with no following argument is an error.  Parsed into
+             * an int[16][2] (offset,type), -1 = unused.  The runtime's com.c
+             * passes the same layout to vs_to_wgsl. */
+            char *s;
+            if (argv[i][6] == '=') s = argv[i] + 7;
+            else {
+                if (i + 1 >= argc){ fprintf(stderr, "bad --decl: missing value\n"); return 1; }
+                s = argv[++i];
+            }
             decl_set = 1;
             while (*s){
                 char *end;
