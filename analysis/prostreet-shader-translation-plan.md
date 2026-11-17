@@ -2,7 +2,7 @@
 
 **Ground-truth corpus:** 591 compiled D3D9 shaders extracted from the clean retail image `nfsps.exe .rsrc` via `lifter/tools/extract_shaders.py` into `/tmp/opencode/ps-shaders`. Breakdown: ps_2_0 223, vs_2_0 199, ps_3_0 71, vs_3_0 71, vs_1_1 27.
 
-**Reference emitter coverage:** The reference emitter (`web/runtime/web/vsemu_wgsl.inc`, driven by `tools/shader2wgsl.c`) translates **533 of 591** shaders. The **58 failures** are all `ps_2_0` shaders that write `oDepth` (`R_DEPTHOUT`), rejected at `vsemu_wgsl.inc` line 436.
+**Reference emitter coverage:** The reference emitter (`web/runtime/web/vsemu_wgsl.inc`, driven by `tools/shader2wgsl.c`) translates **591 of 591** shaders, and all 591 pass `naga` validation (`scripts/validate_wgsl.sh`).
 
 ## 1. Corpus Mapping to the Game
 
@@ -16,9 +16,9 @@
 
 - **Offline step:** The tool `tools/shader2wgsl.shader.bin` reads a D3D9 shader .bin, parses it with the reference parser (`vsemu.c`), and emits WGSL text via `vs_to_wgsl()` / `ps_to_wgsl()`. The tool runs natively (not in the browser) and can be invoked as `shader2wgsl.shader.bin -o output.wgsl` or `shader2wgsl.shader.bin --test` to also run the reference interpreter `ps_ref_run` for validation.
 
-- **Current coverage:** **533 of 591** shaders translate successfully. The **58 failures** are all `ps_2_0` shaders that write to `oDepth` (the depth-out register, semantic `R_DEPTHOUT`). The rejection happens at `vsemu_wgsl.inc` line 436, where the WGSL emitter cannot handle a depth-output target in a pixel shader — WGSL has no direct equivalent for D3D9's depth-out, so the emitter skips/aborts those shaders.
+- **Current coverage:** **591 of 591** shaders translate successfully. The 58 `ps_2_0` shaders that write `oDepth` (the depth-out register, semantic `R_DEPTHOUT`) were the last gap; the emitter now handles depth output via the `PSOut` struct's `@builtin(frag_depth)` component, so none are skipped.
 
-- **What the 58 need:** A `frag_depth` output. In D3D9, `oDepth` writes the depth value into the depth buffer. In WGSL, depth output is typically handled via `fragmentDepth()` or via the `depth` built-in in the fragment stage. The 58 ps_2_0 shaders need a frag_depth output added to their WGSL emission path, and the renderer must bind a depth attachment when presenting.
+- **How the 58 were fixed:** `R_DEPTHOUT` was added to the destination allow-list and the fragment epilogue now emits `depth.x` from the `PSOut` struct. The `PSOut` struct carries both `col: vec4f` and `@builtin(frag_depth) depth: f32`. The return statement emits `depth.x` — the scalar depth value from the vec4. No `fragmentDepth()` call is emitted — WGSL has no such built-in; depth is written via the WebGPU depth-stencil attachment. The renderer must create a depth-stencil attachment when presenting.
 
 ### (c) How the translated WGSL should be keyed and loaded by the web renderer
 
@@ -42,7 +42,7 @@ So the runtime can look up a pre-translated module, the D3D9 HLE layer must hand
 
 ### (d) Open questions
 
-- **Depth output for the 58 ps_2_0 shaders:** What exact WGSL fragment-depth syntax is needed? The `vsemu_wgsl.inc` emitter rejects `oDepth`; we need to decide whether to (a) emit `fragmentDepth()` calls, (b) emit a `depth` built-in, or (c) skip depth output and rely on a separate depth-only pass.
+- **Depth output for the 58 ps_2_0 shaders:** The `vsemu_wgsl.inc` emitter already handles depth output via the `PSOut` struct. The fix adds `R_DEPTHOUT` to the destination allow-list and changes the fragment epilogue to emit `PSOut(%s, depth.x)` — the scalar depth value from the vec4 `depth` component. No `fragmentDepth()` call is emitted — WGSL has no such built-in; depth is written via the WebGPU depth-stencil attachment.
 
 - **Cube-map variants:** The reference generator has `cubemask` and `reflk` overrides for reflection-split variants. Do any of the 591 blobs use cubemap texture stages, and if so, how should the keying include the cubemask?
 
@@ -57,18 +57,18 @@ So the runtime can look up a pre-translated module, the D3D9 HLE layer must hand
 ## 2. Updated Plan References
 
 - Corpus size: **591** shaders (ps_2_0 223, vs_2_0 199, ps_3_0 71, vs_3_0 71, vs_1_1 27).
-- Translation coverage: **533 of 591** (the 58 failures are all ps_2_0 writing `oDepth`).
+- Translation coverage: **591 of 591** (the 58 `ps_2_0` `oDepth` writers were the last to land).
 - Offline tool: `tools/shader2wgsl` with `-DVSEMU_WGSL` flag.
 - Pre-translation keying: shader hash → WGSL module text, stored in the hosted page.
 - HLE hand-off: `CreateVertexShader` / `CreatePixelShader` bytecode + metadata.
 
 ## 3. Next Steps
 
-1. **Fix the 58 ps_2_0 depth-output shaders** — add `fragmentDepth()` or `depth` built-in emission in `vsemu_wgsl.inc` and re-run the translator to push coverage to 591/591.
+1. **Keying schema:** Design and hash the 591 blobs, build the lookup table, and embed it in the hosted page.
 
-2. **Keying schema:** Design and hash the 591 blobs, build the lookup table, and embed it in the hosted page.
+2. **Renderer integration:** Wire the WGSL module lookup into the WebGPU init path; verify that a few representative shaders (e.g. a headlight PS, a diffuse PS, a depth-only PS) render correctly.
 
-3. **Renderer integration:** Wire the WGSL module lookup into the WebGPU init path; verify that a few representative shaders (e.g. a headlight PS, a diffuse PS, a depth-only PS) render correctly.
+3. **Render correctness:** `naga` validity is not correctness. Compare each shader family's rendered output against a reference; the first target is a real ProStreet shader rendering the expected colour in WebGPU.
 
 4. **Effect framework hookup:** Register the pre-translated modules in the effect framework so the game can find them by name/resource ID.
 
