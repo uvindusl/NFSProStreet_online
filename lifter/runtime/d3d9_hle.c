@@ -40,6 +40,160 @@ static uint32_t ref_release(void* impl) {
     return r;
 }
 
+/* ===== Shader objects =====
+ * CreateVertexShader/CreatePixelShader receive a pointer to compiled D3D9
+ * bytecode (the same token streams ProStreet keeps in its .rsrc).  The runtime
+ * needs that bytecode so it can translate it to WGSL (or run it on the CPU
+ * interpreter); keep an exact copy plus the profile and instruction count, and
+ * hand the guest an opaque handle.  Set NFSPROSTREET_SHADER_DIR=<dir> to also
+ * dump every created shader there (game data: keep it out of the repo). */
+typedef struct {
+    const void* vtbl;
+    RefCounted base;
+    int id;
+    int is_vs;
+    int ninstr;
+    uint32_t nbytes;
+    uint8_t* bytes;
+} ShaderImpl;
+
+#define D3D9_MAX_SHADERS 8192
+static ShaderImpl* g_shaders[D3D9_MAX_SHADERS];
+static int g_shader_next_id = 0;
+static int g_shader_dir_checked = 0;
+static const char* g_shader_dir = NULL;
+
+static const char* shader_dir(void) {
+    if (!g_shader_dir_checked) {
+        g_shader_dir = getenv("NFSPROSTREET_SHADER_DIR");
+        g_shader_dir_checked = 1;
+    }
+    return g_shader_dir;
+}
+
+/* Walk a D3D9 token stream and return its byte length (up to and including the
+ * END token), or 0 if it cannot be walked.  The instruction length is bits 27-24
+ * (dwords after the token) in shader model 2+; comments use bits 30-16; shader
+ * model 1 has no length field, so operands are scanned by their bit-31
+ * parameter-token marker.  Mirrors lifter/tools/extract_shaders.py. */
+static uint32_t d3d9_shader_scan(const uint32_t* tok, int* out_ninstr) {
+    if (out_ninstr) *out_ninstr = 0;
+    if (!tok) return 0;
+    uint32_t ver = tok[0];
+    if ((ver >> 16) != 0xFFFEu && (ver >> 16) != 0xFFFFu) return 0;
+    unsigned major = (ver >> 8) & 0xFFu;
+    uint32_t i = 1;
+    int k = 0;
+    while (i < 65536u) {
+        uint32_t t = tok[i];
+        if (t == 0x0000FFFFu) {                 /* END */
+            if (out_ninstr) *out_ninstr = k;
+            return (i + 1u) * 4u;
+        }
+        unsigned op = t & 0xFFFFu;
+        if (op == 0xFFFEu) {                    /* comment: not an instruction */
+            i += 1u + ((t >> 16) & 0x7FFFu);
+            continue;
+        }
+        if (major >= 2u) {
+            i += 1u + ((t >> 24) & 0xFu);
+        } else {
+            uint32_t j = i + 1u;                /* shader model 1: scan operands */
+            while (j < 65536u && (tok[j] & 0x80000000u)) j++;
+            if (j == i + 1u) return 0;
+            i = j;
+        }
+        k++;
+    }
+    return 0;
+}
+
+static void shader_dump(const ShaderImpl* s) {
+    const char* dir = shader_dir();
+    if (!dir || !*dir) return;
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s_%03d.bin", dir, s->is_vs ? "vs" : "ps", s->id);
+    FILE* f = fopen(path, "wb");
+    if (!f) return;
+    fwrite(s->bytes, 1, s->nbytes, f);
+    fclose(f);
+}
+
+static int __stdcall sh_QueryInterface(void* self, const void* riid, void** ppv) {
+    (void)self; (void)riid;
+    if (ppv) *ppv = NULL;
+    return D3D_OK;
+}
+
+static uint32_t __stdcall sh_AddRef(void* self) {
+    ShaderImpl* s = (ShaderImpl*)self;
+    return ++s->base.refcount;
+}
+
+static uint32_t __stdcall sh_Release(void* self) {
+    ShaderImpl* s = (ShaderImpl*)self;
+    if (s->base.refcount == 0) return 0;
+    uint32_t r = --s->base.refcount;
+    if (r == 0) {
+        if (s->id >= 0 && s->id < D3D9_MAX_SHADERS) g_shaders[s->id] = NULL;
+        free(s->bytes);
+        free(s);
+    }
+    return r;
+}
+
+static int __stdcall sh_GetDevice(void* self, void** ppDevice) {
+    (void)self;
+    if (ppDevice) *ppDevice = NULL;
+    return D3D_OK;
+}
+
+static int __stdcall sh_GetFunction(void* self, void* pData, uint32_t* pSizeOfData) {
+    ShaderImpl* s = (ShaderImpl*)self;
+    if (pSizeOfData) {
+        if (pData && *pSizeOfData >= s->nbytes) memcpy(pData, s->bytes, s->nbytes);
+        *pSizeOfData = s->nbytes;
+    }
+    return D3D_OK;
+}
+
+/* IDirect3DVertexShader9 / IDirect3DPixelShader9 share one vtable shape:
+ * QueryInterface, AddRef, Release, GetDevice, GetFunction. */
+static const void* g_shader_vtbl[5] = {
+    (const void*)sh_QueryInterface, (const void*)sh_AddRef, (const void*)sh_Release,
+    (const void*)sh_GetDevice, (const void*)sh_GetFunction,
+};
+
+static int shader_create(const void* pFunction, void** ppShader, int is_vs) {
+    if (ppShader) *ppShader = NULL;
+    if (!pFunction) return D3DERR_INVALIDCALL;
+    int ninstr = 0;
+    uint32_t nbytes = d3d9_shader_scan((const uint32_t*)pFunction, &ninstr);
+    if (nbytes == 0) {
+        d3d9_log("  %s: bytecode could not be walked", is_vs ? "vs" : "ps");
+        return D3DERR_INVALIDCALL;
+    }
+    ShaderImpl* s = calloc(1, sizeof *s);
+    if (!s) return D3DERR_INVALIDCALL;
+    s->bytes = malloc(nbytes);
+    if (!s->bytes) { free(s); return D3DERR_INVALIDCALL; }
+    memcpy(s->bytes, pFunction, nbytes);
+    s->vtbl = g_shader_vtbl;
+    s->base.refcount = 1;
+    s->is_vs = is_vs;
+    s->ninstr = ninstr;
+    s->nbytes = nbytes;
+    s->id = (g_shader_next_id < D3D9_MAX_SHADERS) ? g_shader_next_id++ : -1;
+    if (s->id >= 0) g_shaders[s->id] = s;
+    shader_dump(s);
+    uint32_t ver = *(const uint32_t*)pFunction;
+    d3d9_log("  %s_%u_%u: %u bytes, %d instructions, handle=%d",
+             is_vs ? "vs" : "ps", (ver >> 8) & 0xFFu, ver & 0xFFu,
+             nbytes, ninstr, s->id);
+    if (ppShader) *ppShader = s;
+    return D3D_OK;
+}
+
 /* ===== Resource implementations (vtbl must be first for COM layout) ===== */
 typedef struct {
     const IDirect3DVertexBuffer9Vtbl* vtbl;
@@ -631,6 +785,8 @@ typedef struct {
     D3DXMATRIX transforms[256];
     D3DVIEWPORT9 viewport;
     struct IDirect3DTexture9* textures[8];
+    void* bound_vs;
+    void* bound_ps;
 } DeviceImpl;
 
 static int __stdcall dev_QueryInterface(struct IDirect3DDevice9* self, const void* riid, void** ppv) {
@@ -1254,20 +1410,22 @@ static int __stdcall dev_GetFVF(struct IDirect3DDevice9* self, uint32_t* pFVF) {
 }
 
 static int __stdcall dev_CreateVertexShader(struct IDirect3DDevice9* self, const void* pFunction, void** ppShader) {
-    (void)self; (void)pFunction; (void)ppShader;
+    (void)self;
     d3d9_log("IDirect3DDevice9::CreateVertexShader");
-    return D3D_OK;
+    return shader_create(pFunction, ppShader, 1);
 }
 
 static int __stdcall dev_SetVertexShader(struct IDirect3DDevice9* self, void* pShader) {
-    (void)self; (void)pShader;
-    d3d9_log("IDirect3DDevice9::SetVertexShader");
+    DeviceImpl* impl = (DeviceImpl*)self;
+    d3d9_log("IDirect3DDevice9::SetVertexShader(%p)", pShader);
+    impl->bound_vs = pShader;
     return D3D_OK;
 }
 
 static int __stdcall dev_GetVertexShader(struct IDirect3DDevice9* self, void** ppShader) {
-    (void)self; (void)ppShader;
+    DeviceImpl* impl = (DeviceImpl*)self;
     d3d9_log("IDirect3DDevice9::GetVertexShader");
+    if (ppShader) *ppShader = impl->bound_vs;
     return D3D_OK;
 }
 
@@ -1349,20 +1507,22 @@ static int __stdcall dev_GetIndices(struct IDirect3DDevice9* self, void** ppInde
 }
 
 static int __stdcall dev_CreatePixelShader(struct IDirect3DDevice9* self, const void* pFunction, void** ppShader) {
-    (void)self; (void)pFunction; (void)ppShader;
+    (void)self;
     d3d9_log("IDirect3DDevice9::CreatePixelShader");
-    return D3D_OK;
+    return shader_create(pFunction, ppShader, 0);
 }
 
 static int __stdcall dev_SetPixelShader(struct IDirect3DDevice9* self, void* pShader) {
-    (void)self; (void)pShader;
-    d3d9_log("IDirect3DDevice9::SetPixelShader");
+    DeviceImpl* impl = (DeviceImpl*)self;
+    d3d9_log("IDirect3DDevice9::SetPixelShader(%p)", pShader);
+    impl->bound_ps = pShader;
     return D3D_OK;
 }
 
 static int __stdcall dev_GetPixelShader(struct IDirect3DDevice9* self, void** ppShader) {
-    (void)self; (void)ppShader;
+    DeviceImpl* impl = (DeviceImpl*)self;
     d3d9_log("IDirect3DDevice9::GetPixelShader");
+    if (ppShader) *ppShader = impl->bound_ps;
     return D3D_OK;
 }
 
