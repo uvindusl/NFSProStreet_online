@@ -184,7 +184,7 @@ static const Kind KINDS[HORN_KINDS] = {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wc23-extensions"
 static const uint8_t g_horns_bin[] = {
-#embed "../web/src/static/horns.dat"
+#embed "web/src/static/horns.dat"
 };
 #pragma clang diagnostic pop
 typedef struct { const uint8_t *pcm; uint32_t n, l0, l1; float rate; } Clip;   /* l1: 0, no loop */

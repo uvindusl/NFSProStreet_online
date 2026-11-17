@@ -31,7 +31,7 @@ export X87PC="${X87PC:-1}"
 echo "X87PC=$X87PC"
 "$PY" tools/reloc2.py "$EXE"
 OVERRIDE="$OV" HOOKS="$HK" "$PY" tools/genall.py "$EXE" "${NSHARD:-128}"
-"$PY" tools/argcount.py "$EXE" > out/argcount.log
+IMPORTS_JSON=out/imports-runtime-new.json "$PY" tools/argcount.py "$EXE" > out/argcount.log
 echo "gen OK -> gen/all ($(ls gen/all/shard_*.c | wc -l | tr -d ' ') shards)"
 
 # Second guest module: EA's LAN server, server.dll next to SPEED2.EXE, lifted

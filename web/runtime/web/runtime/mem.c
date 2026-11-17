@@ -31,7 +31,7 @@ __attribute__((weak)) void watch_report_change(uint32_t ip, uint32_t o, uint32_t
 }
 static uint64_t g_committed = 0;
 /* bitmap of the committed 16 KB pages (4 GB / 16 KB = 262144 bits = 32 KB) */
-uint8_t g_cbits[1u<<15] = {0};
+uint8_t g_cbits[1u<<16] = {0};
 /* The body is now inline in cpu.h (three instructions).  As a separate call
  * it was 1.45% of the guest thread in the profile -- call overhead, not work. */
 

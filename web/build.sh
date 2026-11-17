@@ -18,7 +18,9 @@ WASI="$WASI" web/tools/aliasguard.sh > /dev/null || { WASI="$WASI" web/tools/ali
 # a worktree's gen links: to the lift of this checkout's sources made before, if there is one (web/tools/gencache.sh)
 web/tools/gencache.sh link
 [ -f gen/all/fntab.c ] || { echo "gen/all missing: run web/gen.sh <path to NFSPROSTREET.EXE>"; exit 1; }
-[ -f gen/server/fntab.c ] || { echo "gen/server missing: run web/gen.sh <path to NFSPROSTREET.EXE> (it lifts server.dll too)"; exit 1; }
+# gen/server (the LAN server, lifted from server.dll) is optional: a build with
+# only the game module skips it.
+HAVE_SRV=0; [ -f gen/server/fntab.c ] && HAVE_SRV=1
 # The lift must be the one this runtime needs: its _orig declarations, and
 # gen.sh's stamp (override list, hook list, lifter; web/tools/gencheck.sh)
 web/tools/gencheck.sh
@@ -41,11 +43,15 @@ OBJCACHE="${OBJCACHE:-$HOME/.cache/nfsps-web/obj}"; mkdir -p "$OBJCACHE"
 GUEST_END=671088640   # 0x28000000
 INITIAL_MB="${INITIAL_MB:-1024}"
 MIN_MB="${MIN_MB:-704}"
-TARGET="--target=wasm32-wasip1-threads -pthread"
+# -pthread is a SEPARATE argument: inside --target= it becomes part of the triple
+# string ("wasm32-unknown-wasip1-threads -pthread"), which makes clang look for
+# the sysroot headers in include/wasm32-wasip1-threads\ -pthread (errno.h lives in
+# include/wasm32-wasip1-threads).  It is a driver flag, not a triple component.
+TARGET="--target=wasm32-wasip1-threads"
 FEAT="-msimd128 -mbulk-memory -mnontrapping-fptoint -mtail-call -mexception-handling -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false"
 DEFS="-D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
 # -fno-delete-null-pointer-checks: guest address 0 is real wasm memory (cpu.h)
-CFLAGS="$TARGET $OPT $FEAT $DEFS -fno-delete-null-pointer-checks -include web/runtime/web/compat/wasm_plat.h -Iweb/runtime/web/compat -Ilifter/runtime -Igen/all"
+CFLAGS="$TARGET -pthread $OPT $FEAT $DEFS -fno-delete-null-pointer-checks -include web/runtime/web/compat/wasm_plat.h -Iweb/runtime/web/compat -Iweb/runtime/web -Iweb/runtime -Ilifter/runtime -Iweb/runtime/web/runtime -Iweb -Igen/all"
 # the lifted shards only: guest memory as an object of its own (cpu.h, NFSU2_GUEST_OBJ)
 SHARDFLAGS="-DNFSU2_GUEST_OBJ"
 export CC OBJDUMP CFLAGS SHARDFLAGS OUT FULL MEMCHECK OBJCACHE
@@ -57,7 +63,7 @@ HDRSUM="$( (cat lifter/runtime/cpu.h lifter/runtime/splitscreen_mem.h web/runtim
 # rule for both.  A shard's key is its source, its own module's decls.h and the
 # flags, so the two modules never share cache entries by accident.
 { (cd gen/all && ls shard_*.c fntab.c impargs.c $( [ -f stubs.c ] && echo stubs.c ) | sed "s|^|all |")
-  (cd gen/server && ls shard_*.c fntab.c impargs.c modinfo.c $( [ -f stubs.c ] && echo stubs.c ) | sed "s|^|server |"); } |
+  [ "$HAVE_SRV" = 1 ] && (cd gen/server && ls shard_*.c fntab.c impargs.c modinfo.c $( [ -f stubs.c ] && echo stubs.c ) | sed "s|^|server |"); } |
   xargs -P "$J" -n 2 sh -c '
   case "$1" in all) od="$OUT/obj" ;; *) od="$OUT/obj/srv" ;; esac
   src="gen/$1/$2"; obj="$od/$(basename "$2" .c).o"
@@ -87,25 +93,24 @@ HDRSUM="$( (cat lifter/runtime/cpu.h lifter/runtime/splitscreen_mem.h web/runtim
   ' _ || exit 1
 
 # ---- runtime ----
-# The browser runtime files (web/compat, web/*.c) first, then the shared
-# runtime (lifter/runtime/*.c except the native backends).
-RTFILES=$(ls runtime/web/*.c | grep -v "_web.c$" | sort)
-RTFILES="$RTFILES runtime/web/compat/wasm_plat.h"
-RTFILES="$RTFILES lifter/runtime/cpu.c lifter/runtime/guest.c lifter/runtime/setting.c lifter/runtime/featurelist.c lifter/runtime/features.c lifter/runtime/splitscreen.c lifter/runtime/gh_alloc.c lifter/runtime/threadpool.c"
-RTFILES="$RTFILES runtime/web/main_web.c runtime/web/sbrk.c runtime/web/gpu_web.c runtime/web/audio_web.c runtime/web/input_web.c runtime/web/net_lan.c runtime/web/status_web.c runtime/web/thread_exit.c runtime/web/tz.c runtime/web/stackprobe.c runtime/web/memcmp.c runtime/web/sha256.c"
-RTFILES="$RTFILES runtime/web/inflate.c runtime/web/roam_web.c runtime/web/texrep_web.c runtime/web/radio_proto.c runtime/web/photo_icon.c runtime/web/null_platform.c"
-for f in $RTFILES; do
-  [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
+# The shared runtime (web/runtime/web/runtime/*.c, the NFSU2 runtime vendored
+# here) minus the Mac-only parts, then the browser glue (web/runtime/web/*.c).
+# roam_core/roam_game are compiled with -ffp-contract=off: their results must
+# match the Windows plugin bit for bit.
+RT="mem dispatch genexec heap watchdog win32 win32_ext com debug features res fileio overrides d3dx_hle vsemu oracle autotest lifecycle widescreen framerate dinput_pad dikeys keyboard dinput_kbd career intro drifttest roam roam_core roam_game mprace mpcredit horn hornmenu optslider tonemenu powerunits radio drift carsfx racehorn racenet racecars winsock online netrace module modheap enhance headlights language sms sponsors lobbyclick olfilter tunegraph dyno menusize regional garage sndlead carshadow carpaint hiddenraces visualrep hqvinyls whine carspot walls travel movie photo look savegame uniques catchup showoff quickrace cameras vinylcat vinylpacks modpacks specialties lightkey plates plate_image trafficcars shownames hudbank engage gpsdistance stance splitscreen coop damage"
+WEB="$(cd web/runtime/web && ls *.c | sed 's/\.c$//')"
+pids=""
+for f in $RT; do
+  src="web/runtime/web/runtime/$f.c"
+  [ -f "$src" ] || continue
+  fx=""; case "$f" in roam_core|roam_game) fx="-ffp-contract=off" ;; esac
+  $CC $CFLAGS $fx -DNFS_ENHANCED=0 -c -o "$OUT/rt/$f.o" "$src" & pids="$pids $!"
 done
-
-# compile runtime files
-for src in $RTFILES; do
-  obj="$OUT/rt/$(basename "$src" .c).o"
-  sum=$( (cat "$src"; echo "$HDRSUM") | shasum | cut -c1-40)
-  if [ -z "$FULL" ] && [ -f "$obj" ] && [ "$(cat "$obj.sum" 2>/dev/null)" = "$sum" ]; then continue; fi
-  $CC $CFLAGS -Iruntime -Iruntime/web/compat -c -o "$obj" "$src" 2>&1 | head -5
-  echo "$sum" > "$obj.sum"
+for f in $WEB; do
+  case "$f" in thread_exit) fl="$TARGET $OPT $FEAT" ;; *) fl="$CFLAGS -DNFS_ENHANCED=0" ;; esac
+  $CC $fl -c -o "$OUT/rt/web_$f.o" "web/runtime/web/$f.c" & pids="$pids $!"
 done
+for p in $pids; do wait "$p" || { echo "runtime compile failed"; exit 1; }; done
 
 # ---- link ----
 # Main module (NFSPROSTREET.EXE)
@@ -115,7 +120,7 @@ WASM="$OUT/nfsu2.wasm"
 WASM_JSON="$OUT/nfsu2.json"
 $CC $CFLAGS -Wl,--export=memory -Wl,--export=__heap_base -Wl,--export=__data_end \
   -Wl,--initial-memory=$((INITIAL_MB*1024*1024)) -Wl,--max-memory=4294967296 \
-  -Wl,--stack-first -Wl,--stack=8388608 \
+  -Wl,--stack-first -Wl,-z,stack-size=$((8*1024*1024)) \
   -Wl,--allow-undefined -Wl,--no-entry \
   -o "$WASM" $OBJS_ALL $OBJS_RT 2>&1 | head -10
 
@@ -124,7 +129,7 @@ OBJS_SRV=$(ls "$OUT/obj/srv"/*.o 2>/dev/null | sort)
 WASM_SRV="$OUT/server.wasm"
 $CC $CFLAGS -Wl,--export=memory -Wl,--export=__heap_base -Wl,--export=__data_end \
   -Wl,--initial-memory=$((INITIAL_MB*1024*1024)) -Wl,--max-memory=4294967296 \
-  -Wl,--stack-first -Wl,--stack=8388608 \
+  -Wl,--stack-first -Wl,-z,stack-size=$((8*1024*1024)) \
   -Wl,--allow-undefined -Wl,--no-entry \
   -o "$WASM_SRV" $OBJS_SRV $OBJS_RT 2>&1 | head -10
 

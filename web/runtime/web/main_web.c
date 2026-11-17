@@ -64,7 +64,7 @@ static void *guest_main_thread(void *unused){
         g_exit_armed = 1;
         guest_lock(&cpu);
         PUSH32(0xDEADC0DEu);
-        sub_0075bcc7(&cpu);
+        sub_00828c25(&cpu);
         guest_unlock();
         fprintf(stderr, "\n*** guest entry point returned (eip=0x%08x, eax=0x%08x)\n", cpu.eip, cpu.eax);
     } else {
@@ -124,7 +124,7 @@ int main(int argc, char **argv){
     cpu.fs_base = TEB_BASE;
     cpu.gs_base = TEB_BASE;
 
-    fprintf(stderr, "\n=== running the entry point: 0x0075bcc7 ===\n");
+    fprintf(stderr, "\n=== running the entry point: 0x00828c25 ===\n");
     fprintf(stderr, "    TEB=0x%08x  stack=0x%08x..0x%08x  esp=0x%08x\n\n", TEB_BASE, STACK_LO, STACK_HI, cpu.esp);
     {
         pthread_attr_t at; pthread_attr_init(&at);

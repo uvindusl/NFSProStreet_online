@@ -14,15 +14,15 @@
 set -e -o pipefail
 cd "$(dirname "$0")/.."
 overrides(){
-  { { grep -ohE 'sub_00[0-9a-f]{6}_orig' runtime/*.c runtime/*.m || true; } | sed -E 's/sub_00([0-9a-f]{6})_orig/\1/';
-    { grep -ohE '^DX_WRAP\([A-Z0-9_]+, *00[0-9a-f]{6}\)' runtime/d3dx_hle.c || true; } | sed -E 's/.*00([0-9a-f]{6})\)/\1/'; } | sort -u | paste -sd, -
+  { { grep -ohE 'sub_00[0-9a-f]{6}_orig' lifter/runtime/*.c web/runtime/web/runtime/*.c web/runtime/web/*.c 2>/dev/null || true; } | sed -E 's/sub_00([0-9a-f]{6})_orig/\1/';
+    { grep -ohE '^DX_WRAP\([A-Z0-9_]+, *00[0-9a-f]{6}\)' web/runtime/web/runtime/d3dx_hle.c 2>/dev/null || true; } | sed -E 's/.*00([0-9a-f]{6})\)/\1/'; } | sort -u | paste -sd, -
 }
 hooks(){
-  { { grep -ohE 'HOOK_SITE\(0x00[0-9a-f]{6}\)' runtime/*.c || true; } | sed -E 's/HOOK_SITE\((0x[0-9a-f]+)\)/\1/'; } | sort -u | paste -sd, -
+  { { grep -ohE 'HOOK_SITE\(0x00[0-9a-f]{6}\)' lifter/runtime/*.c web/runtime/web/runtime/*.c web/runtime/web/*.c 2>/dev/null || true; } | sed -E 's/HOOK_SITE\((0x[0-9a-f]+)\)/\1/'; } | sort -u | paste -sd, -
 }
 sha(){ shasum -a 256 | cut -c1-16; }
 # the lifter: everything that decides gen/all's and gen/server's C
-LIFTER="tools/lift.py tools/split_reloc.py runtime/splitscreen_mem.h tools/lregs.py tools/genall.py tools/inline_hot.txt tools/retpast.txt tools/reloc2.py tools/argcount.py tools/flagabi.py tools/prepare_module.py"
+LIFTER="tools/lift.py tools/split_reloc.py lifter/runtime/splitscreen_mem.h tools/lregs.py tools/genall.py tools/inline_hot.txt tools/retpast.txt tools/reloc2.py tools/argcount.py tools/flagabi.py tools/prepare_module.py"
 case "${1:-}" in
   overrides) overrides ;;
   hooks) hooks ;;

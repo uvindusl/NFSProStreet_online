@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Infer each import's stdcall argument count from the push sequences at its call sites.
    Also count fs:/gs: segment use (SEH/TLS)."""
-import sys, struct, collections
+import sys, os, struct, collections, json
 sys.path.insert(0,'tools')
 import pefile
 from capstone import *
@@ -13,12 +13,31 @@ iat={}
 # IMPDLL=<original module>: read the import table from the unrelocated file
 # (pefile refuses the relocated analysis copy's import directory) and move
 # the IAT addresses to this image's base.
-import os
+# SecuROM zeroes the IMAGE_IMPORT_DESCRIPTOR array in memory, so a live dump
+# has no DIRECTORY_ENTRY_IMPORT.  The IAT slots survive (they hold the bound
+# addresses), so the (slot -> dll, name) map is read from the JSON that
+# scripts/recover_imports.py wrote from the running game instead.
 _ipe=pefile.PE(os.environ['IMPDLL']) if os.environ.get('IMPDLL') else pe
 _idelta=IB-_ipe.OPTIONAL_HEADER.ImageBase
-for e in _ipe.DIRECTORY_ENTRY_IMPORT:
-    for imp in e.imports:
-        iat[(imp.address+_idelta)&0xffffffff]=(e.dll.decode('latin1'), imp.name.decode('latin1') if imp.name else f"#{imp.ordinal}")
+if hasattr(_ipe,'DIRECTORY_ENTRY_IMPORT'):
+    for e in _ipe.DIRECTORY_ENTRY_IMPORT:
+        for imp in e.imports:
+            iat[(imp.address+_idelta)&0xffffffff]=(e.dll.decode('latin1'), imp.name.decode('latin1') if imp.name else f"#{imp.ordinal}")
+else:
+    # SecuROM zeroes the import descriptor array in the live dump; the IAT
+    # survives, so scripts/recover_imports.py wrote the (slot -> dll, name)
+    # map from the running game.  Look for it next to the exe.
+    for _c in ('out/imports-runtime-new.json','out/imports-runtime.json'):
+        if os.path.exists(_c):
+            for _e in json.load(open(_c)):
+                # scripts/recover_imports.py records the IAT slot as an RVA
+                # (e.g. 0x567000); the call-site lookup compares VAs, so
+                # move it to this image's base like the DIRECTORY_ENTRY_IMPORT
+                # branch above does.
+                iat[(IB+_e['slot'])&0xffffffff]=(_e['dll'], _e['name'])
+            break
+    else:
+        sys.exit("argcount: no import table and no IMPORTS_JSON")
 def rd32(a):
     for nm,va,vs,d in L.secs:
         if va<=a<va+len(d)-3: return struct.unpack_from('<I',d,a-va)[0]

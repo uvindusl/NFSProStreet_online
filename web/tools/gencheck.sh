@@ -18,7 +18,7 @@ set -e -o pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 G="${GEN:-gen}"
 [ -f "$G/all/decls.h" ] || { echo "$G/all missing: run web/gen.sh <path to SPEED2.EXE>"; exit 1; }
-STALE=$(grep -ohE 'sub_00[0-9a-f]{6}_orig' runtime/*.c runtime/*.m | sort -u | while read -r f; do
+STALE=$(grep -ohE 'sub_00[0-9a-f]{6}_orig' runtime/*.c runtime/*.m 2>/dev/null || true | sort -u | while read -r f; do
   grep -q "void $f(" "$G/all/decls.h" || echo "$f"; done)
 [ -z "$STALE" ] || { echo "$G/all is older than the runtime (not lifted as _orig: $(echo $STALE | tr '\n' ' ')): run web/gen.sh <SPEED2.EXE>"; exit 1; }
 if [ ! -f "$G/all/stamp.txt" ]; then

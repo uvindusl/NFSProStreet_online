@@ -753,7 +753,7 @@ static void world_watch(void){
 /* ---- guest memory snapshot (tests/asi_harness.c runs the Windows plugin on it) ---
  * "NFSUSNP1", then u32: version 1, eip (the hook), eax ecx edx ebx esp ebp esi
  * edi, fs_base, fcw, n; then n x { u32 block (address >> 14), 16 KB }. */
-extern uint8_t g_cbits[1u << 15];
+extern uint8_t g_cbits[1u << 16];
 static void snapshot(CPU *c, const char *path){
     char p[200] = {0}; sscanf(path, "%199s", p);
     FILE *o = fopen(p, "wb");
