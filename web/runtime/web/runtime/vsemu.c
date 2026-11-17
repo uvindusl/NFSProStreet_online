@@ -41,7 +41,7 @@ enum { O_NOP=0, O_MOV, O_ADD, O_SUB, O_MAD, O_MUL, O_RCP, O_RSQ, O_DP3, O_DP4,
        /* --- pixel shader instructions (D3D numbering) --- */
        O_TEXCOORD=64, O_TEXKILL=65, O_TEX=66,   /* ps_1_x tex / ps_2_0 texld */
        O_EXPP=78, O_LOGP=79, O_CND=80, O_DEF=81,
-       O_CMP=88, O_DP2ADD=90, O_TEXLDD=95, O_TEXLDL=97,
+        O_CMP=88, O_DP2ADD=90, O_TEXLDD=93, O_SETP=94, O_TEXLDL=95, O_BREAKP=96,
        O_END=0xFFFF };
 
 typedef struct {
@@ -594,6 +594,15 @@ static const char *OPN(unsigned op){
     case O_DEFI:return"defi"; case O_DEFB:return"defb"; case O_EXPP:return"expp";
     case O_LOGP:return"logp"; case O_CND:return"cnd";
     case O_TEX:return"texld";
+    case O_TEXKILL:return"texkill";
+    case O_CMP:return"cmp";
+    case O_DP2ADD:return"dp2add";
+    case 91:return"dsx";
+    case 92:return"dsy";
+    case O_TEXLDD:return"texldd";
+    case O_SETP:return"setp";
+    case O_TEXLDL:return"texldl";
+    case O_BREAKP:return"breakp";
     default: return "???";
     }
 }
