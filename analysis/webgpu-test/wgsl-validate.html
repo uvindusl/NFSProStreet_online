@@ -1,0 +1,359 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>WGSL Validation Test</title>
+<style>
+  body { font-family: monospace; margin: 20px; background: #111; color: #eee; }
+  .pass { color: #8f8; } .fail { color: #f88; }
+  pre { white-space: pre-wrap; word-wrap: break-word; max-height: 60vh; overflow: auto; }
+  #canvas { border: 1px solid #444; display: block; margin: 20px 0; }
+  button { padding: 8px 16px; font-size: 14px; margin: 5px; cursor: pointer; }
+</style>
+<h2>ProStreet WGSL Validation</h2>
+<div id="status">Checking WebGPU...</div>
+<canvas id="canvas" width="512" height="512"></canvas>
+<pre id="log"></pre>
+<button onclick="runTests()">Run Validation</button>
+<button onclick="testTriangle()">Test Triangle</button>
+<button onclick="testTexturedQuad()">Test Textured Quad</button>
+
+<script type=module>
+const logEl = document.getElementById('log');
+const statusEl = document.getElementById('status');
+const canvas = document.getElementById('canvas');
+
+function log(msg, cls) {
+  const d = document.createElement('div');
+  d.className = cls || '';
+  d.textContent = msg;
+  logEl.appendChild(d);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+async function checkWebGPU() {
+  if (!navigator.gpu) {
+    statusEl.textContent = '❌ WebGPU not supported in this browser';
+    log('WebGPU not available', 'fail');
+    return false;
+  }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) {
+    statusEl.textContent = '❌ No WebGPU adapter found';
+    log('No adapter', 'fail');
+    return false;
+  }
+  statusEl.textContent = `✅ WebGPU OK: ${adapter.info.vendor} ${adapter.info.architecture} ${adapter.info.description}`;
+  log(`Adapter: ${adapter.info.vendor} ${adapter.info.architecture} ${adapter.info.description}`, 'pass');
+  return true;
+}
+
+async function runTests() {
+  logEl.innerHTML = '';
+  const ok = await checkWebGPU();
+  if (!ok) return;
+
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+
+  // Test 1: Minimal fragment shader (triangle test equivalent)
+  log('=== Test 1: Minimal Fragment Shader ===');
+  const minFS = `
+    @group(0) @binding(0) var<uniform> P: struct { aref: f32, usec: f32 };
+    override ALPHA_FUNC: u32 = 7u;
+    fn alpha_pass(a: f32, r: f32) -> bool {
+      switch ALPHA_FUNC {
+        case 7u: return !(a < r);
+        default: return true;
+      }
+    }
+    @fragment fn main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+      var c = vec4f(1.0, 0.0, 0.0, 1.0);
+      if (ALPHA_FUNC != 8u) { if (!alpha_pass(c.a, P.aref)) { discard; } }
+      return c;
+    }
+  `;
+  try {
+    const m = device.createShaderModule({ code: minFS, label: 'min-fs' });
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter(x => x.type === 'error');
+    if (errs.length) { log('FAIL: ' + errs.map(e => e.message).join('; '), 'fail'); }
+    else { log('PASS: Minimal FS compiles', 'pass'); }
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  // Test 2: Texture sampling (textured quad equivalent)
+  log('=== Test 2: Texture Sampling ===');
+  const texFS = `
+    @group(1) @binding(0) var tex0: texture_2d<f32>;
+    @group(1) @binding(4) var smp0: sampler;
+    struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f {
+      return textureSample(tex0, smp0, i.uv);
+    }
+  `;
+  try {
+    const m = device.createShaderModule({ code: texFS, label: 'tex-fs' });
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter(x => x.type === 'error');
+    if (errs.length) { log('FAIL: ' + errs.map(e => e.message).join('; '), 'fail'); }
+    else { log('PASS: Texture sampling FS compiles', 'pass'); }
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  // Test 3: frag_depth output
+  log('=== Test 3: frag_depth Output ===');
+  const depthFS = `
+    struct PSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };
+    @fragment fn main() -> PSOut {
+      return PSOut(vec4f(1.0, 0.0, 0.0, 1.0), 0.5);
+    }
+  `;
+  try {
+    const m = device.createShaderModule({ code: depthFS, label: 'depth-fs' });
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter(x => x.type === 'error');
+    if (errs.length) { log('FAIL: ' + errs.map(e => e.message).join('; '), 'fail'); }
+    else { log('PASS: frag_depth FS compiles', 'pass'); }
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  // Test 4: Override constants
+  log('=== Test 4: Override Constants ===');
+  const overrideFS = `
+    override MY_CONST: f32 = 1.0;
+    @fragment fn main() -> @location(0) vec4f {
+      return vec4f(MY_CONST, 0.0, 0.0, 1.0);
+    }
+  `;
+  try {
+    const m = device.createShaderModule({ code: overrideFS, label: 'override-fs' });
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter(x => x.type === 'error');
+    if (errs.length) { log('FAIL: ' + errs.map(e => e.message).join('; '), 'fail'); }
+    else { log('PASS: Override constants work', 'pass'); }
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  // Test 5: Full pipeline creation (triangle)
+  log('=== Test 5: Triangle Render Pipeline ===');
+  const triVS = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+      var pos = array<vec4f, 3>(
+        vec4f(-1.0, -1.0, 0.0, 1.0),
+        vec4f( 1.0, -1.0, 0.0, 1.0),
+        vec4f( 0.0,  1.0, 0.0, 1.0)
+      );
+      var col = array<vec4f, 3>(
+        vec4f(1.0, 0.0, 0.0, 1.0),
+        vec4f(0.0, 1.0, 0.0, 1.0),
+        vec4f(0.0, 0.0, 1.0, 1.0)
+      );
+      return VOut(pos[vid], col[vid]);
+    }
+  `;
+  const triFS = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f {
+      return i.col;
+    }
+  `;
+  try {
+    const vs = device.createShaderModule({ code: triVS, label: 'tri-vs' });
+    const fs = device.createShaderModule({ code: triFS, label: 'tri-fs' });
+    const pipe = await device.createRenderPipelineAsync({
+      layout: 'auto',
+      vertex: { module: vs, entryPoint: 'main' },
+      fragment: { module: fs, entryPoint: 'main', targets: [{ format: 'bgra8unorm' }] },
+      primitive: { topology: 'triangle-list' },
+    });
+    log('PASS: Triangle pipeline creates', 'pass');
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  // Test 6: Full pipeline with depth (textured quad)
+  log('=== Test 6: Textured Quad Pipeline with Depth ===');
+  const quadVS = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+    @vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+      var pos = array<vec4f, 4>(
+        vec4f(-1.0, -1.0, 0.5, 1.0),
+        vec4f( 1.0, -1.0, 0.5, 1.0),
+        vec4f(-1.0,  1.0, 0.5, 1.0),
+        vec4f( 1.0,  1.0, 0.5, 1.0)
+      );
+      var uv = array<vec2f, 4>(
+        vec2f(0.0, 1.0), vec2f(1.0, 1.0), vec2f(0.0, 0.0), vec2f(1.0, 0.0)
+      );
+      return VOut(pos[vid], uv[vid]);
+    }
+  `;
+  const quadFS = `
+    @group(1) @binding(0) var tex0: texture_2d<f32>;
+    @group(1) @binding(4) var smp0: sampler;
+    struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f {
+      return textureSample(tex0, smp0, i.uv);
+    }
+  `;
+  try {
+    const vs = device.createShaderModule({ code: quadVS, label: 'quad-vs' });
+    const fs = device.createShaderModule({ code: quadFS, label: 'quad-fs' });
+    const pipe = await device.createRenderPipelineAsync({
+      layout: 'auto',
+      vertex: { module: vs, entryPoint: 'main' },
+      fragment: { module: fs, entryPoint: 'main', targets: [{ format: 'bgra8unorm' }] },
+      primitive: { topology: 'triangle-strip' },
+      depthStencil: { format: 'depth24plus-stencil8', depthWriteEnabled: true, depthCompare: 'less-equal' },
+    });
+    log('PASS: Textured quad pipeline creates', 'pass');
+  } catch(e) { log('FAIL: ' + e.message, 'fail'); }
+
+  log('=== Summary ===');
+  log('All compilation tests completed. Check results above.', 'pass');
+}
+
+async function testTriangle() {
+  logEl.innerHTML = '';
+  const ok = await checkWebGPU();
+  if (!ok) return;
+
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+  const context = canvas.getContext('webgpu');
+  context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+
+  const vsCode = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+      var pos = array<vec4f, 3>(
+        vec4f(-0.5, -0.5, 0.0, 1.0),
+        vec4f( 0.5, -0.5, 0.0, 1.0),
+        vec4f( 0.0,  0.5, 0.0, 1.0)
+      );
+      var col = array<vec4f, 3>(
+        vec4f(1.0, 0.0, 0.0, 1.0),
+        vec4f(0.0, 1.0, 0.0, 1.0),
+        vec4f(0.0, 0.0, 1.0, 1.0)
+      );
+      return VOut(pos[vid], col[vid]);
+    }
+  `;
+  const fsCode = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f {
+      return i.col;
+    }
+  `;
+
+  try {
+    const vs = device.createShaderModule({ code: vsCode });
+    const fs = device.createShaderModule({ code: fsCode });
+    const pipeline = await device.createRenderPipelineAsync({
+      layout: 'auto',
+      vertex: { module: vs, entryPoint: 'main' },
+      fragment: { module: fs, entryPoint: 'main', targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }] },
+      primitive: { topology: 'triangle-list' },
+    });
+
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: { r: 0.1, g: 0.1, b: 0.2, a: 1.0 }, loadOp: 'clear', storeOp: 'store' }],
+    });
+    pass.setPipeline(pipeline);
+    pass.draw(3);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    log('✅ Triangle rendered successfully!', 'pass');
+  } catch(e) {
+    log('❌ Triangle render failed: ' + e.message, 'fail');
+  }
+}
+
+async function testTexturedQuad() {
+  logEl.innerHTML = '';
+  const ok = await checkWebGPU();
+  if (!ok) return;
+
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter.requestDevice();
+  const context = canvas.getContext('webgpu');
+  context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: 'opaque' });
+
+  // Create checkerboard texture (2x2)
+  const tex = device.createTexture({
+    size: [2, 2],
+    format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+  const pixels = new Uint8Array([
+    255, 0, 0, 255,   0, 255, 0, 255,   // row 0: red, green
+    0, 0, 255, 255,   255, 255, 0, 255   // row 1: blue, yellow
+  ]);
+  device.queue.writeTexture(
+    { texture: tex },
+    pixels,
+    { bytesPerRow: 8 },
+    { width: 2, height: 2 }
+  );
+  const sampler = device.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+
+  const vsCode = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+    @vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+      var pos = array<vec4f, 4>(
+        vec4f(-0.5, -0.5, 0.5, 1.0),
+        vec4f( 0.5, -0.5, 0.5, 1.0),
+        vec4f(-0.5,  0.5, 0.5, 1.0),
+        vec4f( 0.5,  0.5, 0.5, 1.0)
+      );
+      var uv = array<vec2f, 4>(
+        vec2f(0.0, 1.0), vec2f(1.0, 1.0), vec2f(0.0, 0.0), vec2f(1.0, 0.0)
+      );
+      return VOut(pos[vid], uv[vid]);
+    }
+  `;
+  const fsCode = `
+    @group(0) @binding(0) var tex0: texture_2d<f32>;
+    @group(0) @binding(1) var smp0: sampler;
+    struct VOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f {
+      return textureSample(tex0, smp0, i.uv);
+    }
+  `;
+
+  try {
+    const vs = device.createShaderModule({ code: vsCode });
+    const fs = device.createShaderModule({ code: fsCode });
+    const bindGroupLayout = device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+      ]
+    });
+    const bindGroup = device.createBindGroup({
+      layout: bindGroupLayout,
+      entries: [
+        { binding: 0, resource: tex.createView() },
+        { binding: 1, resource: sampler },
+      ]
+    });
+    const pipeline = await device.createRenderPipelineAsync({
+      layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+      vertex: { module: vs, entryPoint: 'main' },
+      fragment: { module: fs, entryPoint: 'main', targets: [{ format: navigator.gpu.getPreferredCanvasFormat() }] },
+      primitive: { topology: 'triangle-strip' },
+    });
+
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: { r: 0.1, g: 0.1, b: 0.2, a: 1.0 }, loadOp: 'clear', storeOp: 'store' }],
+    });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup);
+    pass.draw(4);
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    log('✅ Textured quad rendered successfully!', 'pass');
+  } catch(e) {
+    log('❌ Textured quad render failed: ' + e.message, 'fail');
+  }
+}
+
+// Auto-run on load
+checkWebGPU().then(ok => { if (ok) log('Ready. Click buttons to run tests.', 'pass'); });
+</script>

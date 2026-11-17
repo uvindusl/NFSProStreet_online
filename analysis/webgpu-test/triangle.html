@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>WebGPU Triangle — ProStreet E4 Proof</title>
+<style>html,body{margin:0;height:100%;background:#000}#c{display:block;width:100vw;height:100vh}</style>
+<canvas id="c"></canvas>
+<script type=module>
+(async () => {
+  const log = (m) => { const d=document.createElement('div'); d.textContent=m; d.style.color='#8f8'; d.style.fontFamily='monospace'; d.style.position='fixed'; d.style.top='8px'; d.style.left='8px'; d.style.zIndex=10; document.body.appendChild(d); };
+  if (!navigator.gpu) { log('NO navigator.gpu'); return; }
+  const a = await navigator.gpu.requestAdapter();
+  if (!a) { log('NO adapter'); return; }
+  log('adapter: ' + JSON.stringify(a.info));
+  const dev = await a.requestDevice();
+  const cv = document.getElementById('c');
+  cv.width = Math.floor(innerWidth * devicePixelRatio);
+  cv.height = Math.floor(innerHeight * devicePixelRatio);
+  const ctx = cv.getContext('webgpu');
+  const fmt = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device: dev, format: fmt, alphaMode: 'opaque' });
+  const vs = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+      var pos = array<vec4f,3>(vec4f(-1,-1,0,1), vec4f(1,-1,0,1), vec4f(0,1,0,1));
+      var col = array<vec4f,3>(vec4f(1,0,0,1), vec4f(0,1,0,1), vec4f(0,0,1,1));
+      return VOut(pos[vid], col[vid]);
+    }`;
+  const fs = `
+    struct VOut { @builtin(position) pos: vec4f, @location(0) col: vec4f };
+    @fragment fn main(i: VOut) -> @location(0) vec4f { return i.col; }`;
+  const v = dev.createShaderModule({code: vs});
+  const f = dev.createShaderModule({code: fs});
+  const pipe = await dev.createRenderPipelineAsync({
+    layout: 'auto',
+    vertex: { module: v, entryPoint: 'main' },
+    fragment: { module: f, entryPoint: 'main', targets: [{ format: fmt }] },
+    primitive: { topology: 'triangle-list' },
+  });
+  const enc = dev.createCommandEncoder();
+  const pass = enc.beginRenderPass({
+    colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: {r:0.05,g:0.05,b:0.15,a:1}, loadOp: 'clear', storeOp: 'store' }],
+  });
+  pass.setPipeline(pipe);
+  pass.draw(3);
+  pass.end();
+  dev.queue.submit([enc.finish()]);
+  log('DRAWN');
+})();
+</script>
+</html>
