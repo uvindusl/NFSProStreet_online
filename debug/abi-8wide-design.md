@@ -135,8 +135,10 @@ hand-off is 4 wide.  Widen it end to end:
 * `gpu_web.c`: `g_cur_smp[4] -> [8]`; `metal_set_samplers(const unsigned k[8])`;
   `smp_eff(unsigned tex, uint32_t out[8])`; `raw_rec` / `raw_merge` copy 8 words
   into `D->smp`.  `g_cur_proj[4]` and the `tsel` packing are **unchanged**.
-* `gpu_proto.h GwDraw`: `uint32_t smp[4] -> smp[8]`.  Every offset from `blit_src`
-  on shifts by **+16 bytes**; `sizeof(GwDraw)` 180 -> 196:
+* `gpu_proto.h GwDraw`: `uint32_t smp[4] -> smp[8]`, and `#define GW_VERSION 7u`
+  -> `8u` (the renderer refuses a control block whose layout word differs).
+  Every offset from `blit_src` on shifts by **+16 bytes**; `sizeof(GwDraw)`
+  180 -> 196:
 
   | field | old | new |
   |---|---|---|
@@ -156,6 +158,14 @@ hand-off is 4 wide.  Widen it end to end:
   | `clip` | 152 | 168 |
   | `sizeof` | 180 | 196 |
 
+* `web/src/gpu/proto.ts` (the page side of `gpu_proto.h`): `DRAW_BYTES = 180 ->
+  196`, `DRAW_WORDS = 45 -> 49`, `GW_VERSION = 7 -> 8`, and the `D` enum
+  (`smp = 20` unchanged; `blitSrc 24 -> 28`, `bcol 25 -> 29`, `cull 26 -> 30`,
+  `fogv 27 -> 31`, `clrArgb 31 -> 35`, `clrFlags 32 -> 36`, `clrZ 33 -> 37`,
+  `ksz 34 -> 38`, `ixIsz 35 -> 39`, `ixIb 36 -> 40`, `ixBase 37 -> 41`,
+  `clip 38 -> 42`, `viewport 39 -> 43`).  `LAYOUT` follows from `DRAW_BYTES`.
+* `web/tools/check-gpu-proto.mjs` (new, committed with this doc) compares the
+  two and is gate 6 below.
 * `encoder.ts`: the `D` offset table, `DRAW_WORDS`, and the group-1 bind group
   (8 textures + 8 samplers, reading `D.smp[0..7]`).
 * `null_platform.c`: the weak `metal_set_texproj`/`metal_set_samplers` stubs.
@@ -178,9 +188,10 @@ hand-off is 4 wide.  Widen it end to end:
 ## Implementation halves (disjoint file sets)
 
 **Half A — GPU / ABI / emitter.**  `web/runtime/web/vsemu_wgsl.inc`,
-`web/src/gpu/wgsl.ts`, `web/src/gpu/shader-abi.ts`, `web/src/gpu/encoder.ts`,
-`web/runtime/web/gpu_web.c`, `web/runtime/web/gpu_proto.h`,
-`web/runtime/web/runtime/com.c`, `web/runtime/web/null_platform.c`.
+`web/src/gpu/wgsl.ts`, `web/src/gpu/shader-abi.ts`, `web/src/gpu/proto.ts`,
+`web/src/gpu/encoder.ts`, `web/runtime/web/gpu_web.c`,
+`web/runtime/web/gpu_proto.h`, `web/runtime/web/runtime/com.c`,
+`web/runtime/web/null_platform.c`.
 
 **Half B — oracle / harness / vectors.**  `web/runtime/web/runtime/vsemu.h`,
 `web/runtime/web/vsemu_psref.inc`, `web/tools/wgsl-xl.c`,
@@ -199,7 +210,8 @@ The two halves meet only through this document.
    still reports SHADERCHECK PASS.
 5. `lifter/tools/web/vsemu_wgsl.inc` refreshed byte-identical to
    `web/runtime/web/vsemu_wgsl.inc`.
-6. A C-side `sizeof(GwDraw)` / `offsetof` printout matches the TS `D` table.
+6. `node web/tools/check-gpu-proto.mjs` exits 0 (the C header, `src/gpu/proto.ts`
+   and `GW_VERSION` agree).
 
 ## Staging
 
