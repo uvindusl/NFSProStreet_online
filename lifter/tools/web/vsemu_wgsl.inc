@@ -47,7 +47,8 @@ static const char W_VOUT[] =
     "  @builtin(position) pos: vec4f,\n"
     "  @location(0) col0: vec4f, @location(1) col1: vec4f,\n"
     "  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n"
-    "  @location(6) fog: f32,\n"
+    "  @location(6) uv4: vec4f, @location(7) uv5: vec4f, @location(8) uv6: vec4f, @location(9) uv7: vec4f,\n"
+    "  @location(10) fog: f32,\n"
     "}\n";
 /* K is a 64 KB window of the frame's VS constant arena, bound once for many
  * draws; a draw's block {stride, tsel, base, target w | h << 16; c[0..255]} starts at row
@@ -135,11 +136,11 @@ static const char W_PSPAR[] =
     "struct PSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };\n";
 
 static void w_textures(WBuf *b, unsigned cubemask){
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < 8; k++)
         wb_put(b, "@group(1) @binding(%d) var tex%d: %s;\n", k, k,
                ((cubemask >> k) & 1u) ? "texture_cube<f32>" : "texture_2d<f32>");
-    for (int k = 0; k < 4; k++)
-        wb_put(b, "@group(1) @binding(%d) var smp%d: sampler;\n", 4 + k, k);
+    for (int k = 0; k < 8; k++)
+        wb_put(b, "@group(1) @binding(%d) var smp%d: sampler;\n", 8 + k, k);
 }
 
 /* f32 literal that survives a round trip (9 significant digits) and always
@@ -331,7 +332,7 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
         for (unsigned q = 0; q < p->n; q++){
             const VSIns *y = &p->ins[q];
             if (y->op != O_DCL || RT(y->dst) != R_ADDR) continue;
-            int k = RN(y->dst) & 3;
+            int k = RN(y->dst) & 7;
             x.t |= 1u << k;
             wb_put(&bb, "  t%d = select(vec4f(0.0), i.uv%d, PS20_TEXCOORD);\n", k, k);
         }
