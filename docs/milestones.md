@@ -15,7 +15,7 @@
 | **C4** First game frame screenshot | (capture from emulator) | Not done | **Not done** | ProStreet |
 | **D1** 591 blobs parse | `ls /tmp/opencode/ps-shaders/*.bin | wc -l` | 591 | **Pass** | ProStreet |
 | **D2** WGSL emitted for all 591 | `bash tools/shader2wgsl_test.sh 2>&1 | grep -E "Total|Passed"` | Total shaders: 591\nPassed: 591\nFailed: 0 | **Pass** | ProStreet |
-| **D3** WGSL passes validator | (per-profile pass/fail) | naga validates all 591; naga_fail=0 after oDepth fix (depth.x) | **Pass** | ProStreet |
+| **D3** WGSL passes validator | `bash scripts/validate_wgsl.sh /tmp/opencode/ps-shaders` | === emitted=591 emitfail=0 naga_fail=0 === | **Pass** | ProStreet |
 | **D4** texld/texkill/address per-instruction | `bash tests/d4_instruction_test.sh` | Passed: 7\nFailed: 0 | **Pass** | ProStreet |
 | **D5** dsx/dsy lowered to WGSL dpdx/dpdy | `out/tools/shader2wgsl /tmp/opencode/ps-shaders/ps_3_0_026.bin -o /tmp/opencode/ps-wgsl/ps_3_0_026.bin.wgsl; grep -n dpdx /tmp/opencode/ps-wgsl/ps_3_0_026.bin.wgsl` | 59:  { let e = dpdx(v0); r2.x = e.x; r2.y = e.y; r2.z = e.z; }\n71:  { let e = dpdx(v1); r4.x = e.x; r4.y = e.y; } | **Pass** | ProStreet |
 | **E1** Web lift output | `ls gen/all/shard_*.c | wc -l` | 131 | **Pass** | ProStreet |
@@ -29,4 +29,4 @@
 | **F4** Game systems: menu | (main menu navigation) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F5** Game systems: race | (race track/raceplay) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 
-**Known gap (D-series):** O_REP/O_ENDREP loop markers are silently skipped by the ps_3_0 pixel switch (`default: continue`), so the loop body of ps_3_0_066/067/068 is emitted once instead of N times. The shaders still translate and validate. See `debug/shader-opcode-coverage.md`.
+**REP/ENDREP lowered to WGSL for loop:** The ps emitter now emits a real for loop for ps_3_0 pixel shaders (ps_3_0_066/067/068). The gap is closed — these shaders pass naga validation. See commit 5b77bf2 for the emitter change.

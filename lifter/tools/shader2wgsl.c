@@ -126,8 +126,15 @@ int main(int argc, char *argv[])
     size_t wcap = 1u << 20;
     char *wgsl = malloc(wcap);
     if (!wgsl){ free(p); free(blob); return 1; }
+    /* A standalone shader blob carries no D3DVERTEXELEMENT9 declaration, so the
+     * vertex-input reads cannot be resolved offline: every v# is emitted as
+     * FLOAT1 at offset 0.  This is a placeholder for naga validation only, not
+     * a claim about the real draw.  The runtime passes the true declaration to
+     * vs_to_wgsl (com.c gpuvs_id), where decl[i] = (byte offset, D3DDECLTYPE)
+     * -- see vsemu.h:46. */
+    static const int vdecl_placeholder[16][2] = {{0}};
     int w = is_ps ? ps_to_wgsl(p, 0, wgsl, wcap)
-                  : vs_to_wgsl(p, 0, (const int[16][2]){0}, wgsl, wcap);
+                  : vs_to_wgsl(p, 0, vdecl_placeholder, wgsl, wcap);
     if (w <= 0){ fprintf(stderr, "WGSL emission failed (rc=%d)\n", w); free(wgsl); free(p); free(blob); return 1; }
 
     /* ---- optional --test: run the reference interpreter on the same program ---- */
