@@ -28,13 +28,16 @@
 | **F3** Game systems: input | (controller/keyboard) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F4** Game systems: menu | (main menu navigation) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F5** Game systems: race | (race track/raceplay) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
+| **F6** Shader corpus | `node web/tools/shader-check.mjs --from /tmp/opencode/ps-dump --query '&all2d' --timeout 1200000` | `SHADERCHECK json: adapter google swiftshader, modules 593, vs 298, ps 256, psCube 39, compileErrors 0, warnings 0, pipelines 1183, pipelineErrors 0, pull cases 3328 exact 3328 maxUlp 0 bad 0, ok true, PASS and exit 0` (committed ed05b5d and 3e7682d) | **Pass** | ProStreet |
 
 **REP/ENDREP lowered to WGSL for loop:** The ps emitter now emits a real for loop for ps_3_0 pixel shaders (ps_3_0_066/067/068). The gap is closed — these shaders pass naga validation. See commit 5b77bf2 for the emitter change.
 
 ## Latest State Updates (Commit a945de9 + 17cf15f)
 
-### 1. Vertex NRM w-Factor Fix (commit a945de9)
-The vertex shader nrm (normalize) emitter now correctly writes src0.w * 1/|xyz| for the w component, matching D3D9. Previously a bare 1.0 was emitted. Verified with lifter/tools/nrm_w_test.sh: OK (29 NRM emissions carry the src0.w factor). The fix is applied to all three vertex implementations (CPU vs_run, the WGSL emitter, and the MSL emitter), which are kept in step; the corpus contains vs_2_0 and vs_3_0 shaders only.
+### 1. Vertex NRM w-Factor Fix (commit a945de9, tested in 3304cc3)
+The vertex shader nrm (normalize) emitter now correctly writes src0.w * 1/|xyz| for the w component, matching D3D9. Previously a bare 1.0 was emitted. The fix is applied to all three vertex implementations (CPU vs_run, the WGSL emitter, and the MSL emitter), which are kept in step; the corpus contains vs_2_0 and vs_3_0 shaders only.
+
+The corpus cannot OBSERVE the w factor: the only two vertex shaders with an unmasked `nrm` (vs_2_0_134, vs_3_0_051) both contain `def c120 = 0 4 1 0`, which overrides the caller's c120, so their nrm source w is 0 and the result w is 0 either way. The numeric check therefore uses a synthetic shader.
 
 ### 2. Pixel Path Differential Audit (commit 17cf15f)
 Corrected authoritative histogram over 294 ps shaders (10210 total instructions):
@@ -43,6 +46,14 @@ Corrected authoritative histogram over 294 ps shaders (10210 total instructions)
 - D3 — O_DSX/O_DSY: MSL skips entirely, WGSL emits dpdx/dpdy. Corpus: dsx 11, dsy 7, all ps_3_0. Live on native (MSL) — those shaders produce a no-op on MSL but correct derivative on WGSL (wasm).
 - D7 — O_REP/ENDREP: MSL skips the loop body, WGSL implements it. Corpus: rep 3, endrep 3, all ps_3_0. Live on native (MSL).
 
-### 3. Regression Test Lifter
-Added lifter/tools/nrm_w_test.sh (commit a945de9) which proves the vertex NRM emitter writes src0.w * 1/|xyz| for every NRM in every vertex shader. Test output: nrm_w_test: OK (29 NRM emissions carry the src0.w factor).
+### 3. Regression Test Lifter (commits a945de9, 3304cc3)
+- `lifter/tools/nrm_w_test.sh` — WGSL text check: every NRM emission in every vertex shader carries the src0.w factor. Output: `nrm_w_test: OK (29 NRM emissions carry the src0.w factor)`.
+- `lifter/tools/nrm_w_all_test.sh` — all three paths: CHECK 1 WGSL text, CHECK 2 MSL text, CHECK 3 a synthetic-shader CPU numeric check (`lifter/tools/cpu_nrm_test.c`, MSL driver `lifter/tools/msl_nrm_test.c`) asserting `oT0.w = src0.w * 1/|(3,4,0)| = 0.4`. From scratch (`rm -rf lifter/tools/build`): `ALL CHECKS PASSED`, exit 0. Falsified by forcing `vs_run`'s NRM `d[3]` to `1.f` (the only diff): `oT0.w = 1`, exit 1.
 
+### Shader Check Tools
+
+- `web/tools/shader-check.mjs` — driver that serves `web/dist-dev`, seeds OPFS at `<save>/shaders` from a dump dir, opens `/test/shadercheck.html`, and prints the `SHADERCHECK {json}` line. Options: `--from <dir>`, `--query '&all2d'`, `--timeout <ms>`, `--port`, `--save`. Exit 0 only when the result has `ok: true`.
+- `web/tools/browser.mjs` — picks the browser: Google Chrome via Playwright's `chrome` channel when installed, else Playwright's Chromium; `NFSU2_BROWSER` forces one.
+- `web/src/test/shadercheck.ts` — the in-browser harness: compiles every WGSL module, builds render pipelines with the ABI's explicit layouts, runs the vertex-pulling compute test against the CPU decoder, and (when the dump carries `.vec`/`.pvec` vectors) the numeric vertex/pixel differential.
+
+The `&all2d` query flag forces EVERY pixel module onto the 2D ABI layout. A corpus dump numbers its pixel modules sequentially, so ids reach `PSCUBE` (256) even though the corpus has no cube twins; the flag lets the harness check a whole corpus dump without a cube built-in. It cannot affect a normal game dump, which has real cube twins at ids >= 256.
