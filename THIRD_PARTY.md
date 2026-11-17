@@ -43,3 +43,22 @@ the runtime's dispatch and memory model.
 * [pefile](https://github.com/erocarrera/pefile) — PE parser (MIT).
 * [innoextract](https://constexpr.org/innoextract/) — used during recon only to
   read the installer and reach `nfs.exe`; not a build dependency (zlib).
+
+## Flags
+
+* [flag-icons](https://github.com/lipis/flag-icons) — MIT-licensed flag SVGs.
+  The tracked `flags.dat` files are rendered from them (plus the Wikimedia
+  Commons Flag of Quebec below) by the reference's `mkflags.mjs`, which is not
+  part of this repository. `flags.dat` is embedded by
+  `web/runtime/web/runtime/roam_game.c` and shown before a player's name over
+  their car in free roam.
+* Flag of Quebec — public-domain SVG from
+  [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Flag_of_Quebec.svg),
+  drawn into `flags.dat` alongside the flag-icons set.
+
+## Audio
+
+* Horn recordings — third-party audio cut from YouTube recordings by the
+  reference's `mkhorns.mjs` (not part of this repository) into
+  `web/src/static/horns.dat`, which `web/runtime/web/runtime/horn.c` embeds for
+  the horn preview.
