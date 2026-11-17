@@ -1,0 +1,51 @@
+#!/bin/bash
+# Build script for D3D9 HLE triangle test (native, no WASM)
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+RUNTIME_DIR="$PROJECT_ROOT/lifter/runtime"
+TEST_DIR="$SCRIPT_DIR"
+
+echo "=== Building D3D9 HLE Triangle Test ==="
+echo "Project root: $PROJECT_ROOT"
+echo "Runtime dir: $RUNTIME_DIR"
+echo "Test dir: $TEST_DIR"
+
+# Build output
+BUILD_DIR="$TEST_DIR/build"
+mkdir -p "$BUILD_DIR"
+
+OUTPUT="$BUILD_DIR/d3d9_hle_htriangle"
+
+# Source files
+SOURCES=(
+    "$TEST_DIR/d3d9_hle_triangle.c"
+    "$RUNTIME_DIR/d3d9_hle.c"
+)
+
+# Include directories
+INCLUDES=(
+    "-I$RUNTIME_DIR"
+    "-I$TEST_DIR"
+)
+
+# Compile flags
+CFLAGS=(
+    -std=c11
+    -Wall -Wextra
+    -O2
+    -g
+    "${INCLUDES[@]}"
+)
+
+echo "Compiling..."
+gcc "${CFLAGS[@]}" "${SOURCES[@]}" -o "$OUTPUT"
+
+echo "Build successful: $OUTPUT"
+echo ""
+echo "=== Running test ==="
+"$OUTPUT"
+echo ""
+echo "=== Test completed successfully ==="

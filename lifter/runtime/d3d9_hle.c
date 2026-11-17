@@ -218,6 +218,7 @@ typedef struct {
     RefCounted base;
     uint32_t width, height, levels;
     uint32_t usage, format, pool;
+    void* data;
 } TextureImpl;
 
 /* ===== Vertex Buffer implementation ===== */
@@ -468,6 +469,10 @@ static uint32_t __stdcall tex_AddRef(struct IDirect3DTexture9* self) {
 
 static uint32_t __stdcall tex_Release(struct IDirect3DTexture9* self) {
     TextureImpl* impl = (TextureImpl*)self;
+    if (impl->base.refcount == 1 && impl->data) {
+        free(impl->data);
+        impl->data = NULL;
+    }
     return ref_release(impl);
 }
 
@@ -585,8 +590,18 @@ static int __stdcall tex_GetSurfaceLevel(struct IDirect3DTexture9* self, uint32_
 }
 
 static int __stdcall tex_LockRect(struct IDirect3DTexture9* self, uint32_t Level, void* pLockedRect, const void* pRect, uint32_t Flags) {
-    (void)self; (void)Level; (void)pLockedRect; (void)pRect; (void)Flags;
-    d3d9_log("IDirect3DTexture9::LockRect");
+    TextureImpl* impl = (TextureImpl*)self;
+    d3d9_log("IDirect3DTexture9::LockRect(Level=%u, Flags=%u)", Level, Flags);
+    if (!pLockedRect) return D3DERR_INVALIDCALL;
+    if (!impl->data) {
+        /* X8R8G8B8 = 4 bytes per pixel; allocate the level-0 image */
+        uint32_t row_pitch = impl->width * 4u;
+        impl->data = calloc(1, row_pitch * impl->height);
+        if (!impl->data) return D3DERR_INVALIDCALL;
+    }
+    D3DLOCKED_RECT* lr = (D3DLOCKED_RECT*)pLockedRect;
+    lr->Pitch = (int32_t)(impl->width * 4u);
+    lr->pBits = impl->data;
     return D3D_OK;
 }
 
