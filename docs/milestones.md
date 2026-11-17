@@ -30,3 +30,19 @@
 | **F5** Game systems: race | (race track/raceplay) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 
 **REP/ENDREP lowered to WGSL for loop:** The ps emitter now emits a real for loop for ps_3_0 pixel shaders (ps_3_0_066/067/068). The gap is closed — these shaders pass naga validation. See commit 5b77bf2 for the emitter change.
+
+## Latest State Updates (Commit a945de9 + 17cf15f)
+
+### 1. Vertex NRM w-Factor Fix (commit a945de9)
+The vertex shader nrm (normalize) emitter now correctly writes src0.w * 1/|xyz| for the w component, matching D3D9. Previously a bare 1.0 was emitted. Verified with lifter/tools/nrm_w_test.sh: OK (29 NRM emissions carry the src0.w factor). The fix is applied to all three vertex implementations (CPU vs_run, the WGSL emitter, and the MSL emitter), which are kept in step; the corpus contains vs_2_0 and vs_3_0 shaders only.
+
+### 2. Pixel Path Differential Audit (commit 17cf15f)
+Corrected authoritative histogram over 294 ps shaders (10210 total instructions):
+- nrm: 178 instructions in 67 shaders, all with .xyz destination mask only → the w-component is dead code (not live). No web-target divergence.
+- D2 — O_TEXKILL: MSL tests only .xyz, WGSL tests all 4 comps. Corpus: texkill 38, all ps_2_0. Live on native (MSL) if any shader's texkill register has negative .w; wasm (WGSL) is correct.
+- D3 — O_DSX/O_DSY: MSL skips entirely, WGSL emits dpdx/dpdy. Corpus: dsx 11, dsy 7, all ps_3_0. Live on native (MSL) — those shaders produce a no-op on MSL but correct derivative on WGSL (wasm).
+- D7 — O_REP/ENDREP: MSL skips the loop body, WGSL implements it. Corpus: rep 3, endrep 3, all ps_3_0. Live on native (MSL).
+
+### 3. Regression Test Lifter
+Added lifter/tools/nrm_w_test.sh (commit a945de9) which proves the vertex NRM emitter writes src0.w * 1/|xyz| for every NRM in every vertex shader. Test output: nrm_w_test: OK (29 NRM emissions carry the src0.w factor).
+
