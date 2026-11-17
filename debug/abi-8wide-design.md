@@ -83,7 +83,7 @@ makes binding 0 a `texture_cube<f32>`; every other texture is `texture_2d<f32>`.
 * `O_TEXKILL`, `R_ADDR`: `i.uv%d` with `RN(y->dst) & 7`.
 * `w_textures`: 8 textures then 8 samplers.
 
-### 5. Pixel oracle (`web/runtime/web/vsemu_psref.inc`, `web/runtime/web/runtime/vsemu.h`)
+### 5. Pixel oracle (`web/runtime/web/vsemu_psref.inc`, `web/runtime/web/wgsl.h`)
 
 * `PSRefIn { float col[2][4], uv[8][4], fog; }` (41 floats; was `uv[4][4]`).
 * `PSRefPar` unchanged (`proj[4]`).
@@ -193,8 +193,9 @@ hand-off is 4 wide.  Widen it end to end:
 `web/runtime/web/gpu_proto.h`, `web/runtime/web/runtime/com.c`,
 `web/runtime/web/null_platform.c`.
 
-**Half B — oracle / harness / vectors.**  `web/runtime/web/runtime/vsemu.h`,
-`web/runtime/web/vsemu_psref.inc`, `web/tools/wgsl-xl.c`,
+**Half B — oracle / harness / vectors.**  `web/runtime/web/wgsl.h` (where
+`PSRefIn` actually lives; `web/runtime/web/runtime/vsemu.h` only declares
+`VSOut`), `web/runtime/web/vsemu_psref.inc`, `web/tools/wgsl-xl.c`,
 `web/src/test/shadercheck.ts`.
 
 The two halves meet only through this document.
