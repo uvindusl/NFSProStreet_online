@@ -319,7 +319,7 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
     if (!bodybuf) return 0;
     WBuf bb; wb_init(&bb, bodybuf, cap);
     char *ex = malloc(WEX), *s0 = malloc(WEX), *s1 = malloc(WEX), *s2 = malloc(WEX), *val = malloc(WEX);
-    int rc = 0;
+    int rc = 0, nrep = 0;
     if (!ex || !s0 || !s1 || !s2 || !val) goto done;
 
     /* ps_2_0: `dcl tN` coordinate registers, loaded as D3D does.  The Mac
@@ -432,6 +432,24 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
                            " abs((%s).x) * exp2(-floor(log2(max(abs((%s).x), 1e-38)))),"
                            " log2(max(abs((%s).x), 1e-38)), 1.0)", s0, s0, s0, s0); break;
         case O_LOG:    w = snprintf(ex, WEX, "vec4f(select(log2(abs((%s).x)), -3.4e+38, (%s).x == 0.0))", s0, s0); break;
+        case O_REP: {
+            /* ps_3_0 REP: repeat the enclosed body count times.  Only a
+             * constant integer register (defi) is lowered, as on the Mac;
+             * anything else keeps the current skip.  iN is already declared
+             * as a vec4f in w_decls, so i32(iN.x) is the loop bound. */
+            if (y->nsrc > 0 && RT(y->src[0]) == R_CONSTINT){
+                int ci = RN(y->src[0]);
+                if (ci >= 0 && ci < 16 && p->defi[ci][0] > 0){
+                    wb_put(&bb, "  for (var _rep%d = 0; _rep%d < i32(i%d.x); _rep%d = _rep%d + 1) {\n",
+                           nrep, nrep, ci, nrep, nrep);
+                    nrep++;
+                    continue;
+                }
+            }
+            continue; }
+        case O_ENDREP:
+            if (nrep > 0){ wb_put(&bb, "  }\n"); nrep--; }
+            continue;
         default:
             continue;                   /* unsupported: skipped, as on the Mac */
         }
