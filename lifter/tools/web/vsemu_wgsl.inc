@@ -630,7 +630,7 @@ int vs_to_wgsl(const VSProg *p, int id, const int decl[16][2], char *out, size_t
                      w = snprintf(ex, WEX, "vec4f(select(log2(abs((%s).x)), -3.4e+38, (%s).x == 0.0))", s0, s0); break;
         case O_POW:  w = snprintf(ex, WEX, "vec4f(pow(abs((%s).x), (%s).x))", s0, s1); break;
         case O_CRS:  w = snprintf(ex, WEX, "vec4f(cross((%s).xyz, (%s).xyz), 1.0)", s0, s1); break;
-        case O_NRM:  w = snprintf(ex, WEX, "vec4f(select(normalize((%s).xyz), vec3f(0.0), length((%s).xyz) == 0.0), 1.0)", s0, s0); break;
+        case O_NRM:  w = snprintf(ex, WEX, "vec4f(select(normalize((%s).xyz), vec3f(0.0), length((%s).xyz) == 0.0), (%s).w * select(1.0/length((%s).xyz), 3.402823466e+38, length((%s).xyz) == 0.0))", s0, s0, s0, s0, s0); break;
         case O_SGN:  w = snprintf(ex, WEX, "sign(%s)", s0); break;
         case O_M4x4: case O_M4x3: case O_M3x3: case O_M3x4: case O_M3x2: {
             /* m?x? dst, src0, src1: rows are consecutive registers from src1

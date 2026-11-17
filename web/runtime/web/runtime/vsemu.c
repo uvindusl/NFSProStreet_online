@@ -477,8 +477,8 @@ int vs_run(const VSProg *p, const VSConst *k, const float v[16][4], VSOut *o){
                     d[2]=s[0][0]*s[1][1]-s[0][1]*s[1][0];
                     DSTW(x,d); break;
         case O_NRM: { float l=sqrtf(s[0][0]*s[0][0]+s[0][1]*s[0][1]+s[0][2]*s[0][2]);
-                      float r=(l==0.f)?0.f:1.f/l;
-                      d[0]=s[0][0]*r; d[1]=s[0][1]*r; d[2]=s[0][2]*r; d[3]=r;
+                      float r=(l==0.f)?3.402823466e+38f:1.f/l;
+                      d[0]=s[0][0]*r; d[1]=s[0][1]*r; d[2]=s[0][2]*r; d[3]=s[0][3]*r;
                       DSTW(x,d); } break;
         case O_POW: { float b=fabsf(s[0][0]); float r=(b==0.f)?0.f:powf(b,s[1][0]);
                       d[0]=d[1]=d[2]=d[3]=r; DSTW(x,d); } break;
@@ -1367,7 +1367,7 @@ int vs_to_msl(const VSProg *p, int id, const int decl[16][2], char *out, size_t 
                         "float4((%s).x==0.0?-3.4e38:log2(abs((%s).x)))", s0, s0); break;
         case O_POW:  snprintf(ex,sizeof ex,"float4(pow(abs((%s).x),(%s).x))", s0, s1); break;
         case O_CRS:  snprintf(ex,sizeof ex,"float4(cross((%s).xyz,(%s).xyz),1.0)", s0, s1); break;
-        case O_NRM:  snprintf(ex,sizeof ex,"float4(length((%s).xyz)==0.0?float3(0.0):normalize((%s).xyz),1.0)", s0, s0); break;
+        case O_NRM:  snprintf(ex,sizeof ex,"float4(length((%s).xyz)==0.0?float3(0.0):normalize((%s).xyz), (%s).w * (length((%s).xyz)==0.0 ? 3.402823466e+38 : 1.0/length((%s).xyz)))", s0, s0, s0, s0, s0); break;
         case O_SGN:  snprintf(ex,sizeof ex,"sign(%s)", s0); break;
         case O_M4x4: case O_M4x3: case O_M3x3: case O_M3x4: case O_M3x2: {
             /* m?x? dst, src0, src1 : src1 is the first of CONSECUTIVE constant
