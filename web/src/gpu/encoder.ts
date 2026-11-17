@@ -126,6 +126,7 @@ export class Encoder {
   private pool: GPUBuffer | null = null;
   private vsMods = new Map<number, GPUShaderModule>();
   private psMods = new Map<number, GPUShaderModule>();
+  private psDepth = new Map<number, boolean>();          // ps id -> WGSL fragment writes @builtin(frag_depth) (PSOut)
   private samplers = new Map<number, GPUSampler>();
   private pipes = new Map<number, GPURenderPipeline | null>();
   private bg1 = new Map<string, GPUBindGroup>();
@@ -292,6 +293,7 @@ export class Encoder {
           const text = new TextDecoder().decode(this.u8.slice(data, data + Math.max(0, a1 - 1)));
           const mod = this.module(`${op === Op.ShaderVs ? 'vs' : 'ps'}_${a0}`, text);
           (op === Op.ShaderVs ? this.vsMods : this.psMods).set(a0, mod);
+          if (op === Op.ShaderPs) this.psDepth.set(a0, text.includes('PSOut'));
           if (this.logShaders) this.log(`[shader ${op === Op.ShaderVs ? 'vs' : 'ps'}_${a0}]\n${text}\n[/shader]`);
           const h = fnv(text);
           if (op === Op.ShaderVs) { this.vsHash.set(a0, h); this.vsByHash.set(h, a0); } else { this.psHash.set(a0, h); this.psByHash.set(h, a0); }
@@ -646,7 +648,9 @@ export class Encoder {
       fragment: { module: fmod, entryPoint: pq ? undefined : 'fs_ff', targets: [{ format: 'bgra8unorm', blend: bs, writeMask: mask }],
         constants: { ALPHA_FUNC: alphaFunc(nd ? 0 : 1) } },
       primitive: { topology: 'triangle-list', frontFace: 'cw', cullMode: cull === 1 ? 'none' : cull === 2 ? 'front' : 'back' },
-      depthStencil: { format: 'depth32float', depthWriteEnabled: (dm & 2) !== 0, depthCompare: (dm & 1) ? CMP[(dm >> 2) & 7] : 'always' },
+      // a ps_2_0 shader that writes oDepth returns PSOut with @builtin(frag_depth);
+      // without a depth-stencil attachment the write is dropped, so enable it.
+      depthStencil: { format: 'depth32float', depthWriteEnabled: ((dm & 2) !== 0) || (pq ? this.psDepth.get(ps) === true : false), depthCompare: (dm & 1) ? CMP[(dm >> 2) & 7] : 'always' },
       // a pass on a 4-sample target (runtime/com.c MULTISAMPLING)
       ...(ms ? { multisample: { count: 4 } } : {}),
     };
