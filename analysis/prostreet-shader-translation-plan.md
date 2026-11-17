@@ -40,6 +40,8 @@ So the runtime can look up a pre-translated module, the D3D9 HLE layer must hand
 
 - **Constant buffer bindings:** The `PSPar` constant buffer layout (`P.c[0..31]`, `t[0..3]`, `v[0..1]`) that the WGSL emitter already emits; the runtime just has to bind the same constants at draw time.
 
+- **Offline declaration limitation:** The offline tool `lifter/tools/shader2wgsl` translates a standalone shader blob, which carries no D3DVERTEXELEMENT9 vertex declaration. Every vertex input is emitted as `FLOAT1` at offset 0 as a placeholder — this output is for naga validation only. The runtime passes the real declaration to `vs_to_wgsl` in `com.c` `gpuvs_id`, where `decl[i] = (byte offset, D3DDECLTYPE)` per `vsemu.h` line 46.
+
 ### (d) Open questions
 
 - **Depth output for the 58 ps_2_0 shaders:** The `vsemu_wgsl.inc` emitter already handles depth output via the `PSOut` struct. The fix adds `R_DEPTHOUT` to the destination allow-list and changes the fragment epilogue to emit `PSOut(%s, depth.x)` — the scalar depth value from the vec4 `depth` component. No `fragmentDepth()` call is emitted — WGSL has no such built-in; depth is written via the WebGPU depth-stencil attachment.
