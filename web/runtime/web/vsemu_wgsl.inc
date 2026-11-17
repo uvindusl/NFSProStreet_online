@@ -420,6 +420,8 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
         case O_ABS:    w = snprintf(ex, WEX, "abs(%s)", s0); break;
         case O_CMP:    w = snprintf(ex, WEX, "select((%s), (%s), (%s) >= vec4f(0.0))", s2, s1, s0); break;
         case O_CND:    w = snprintf(ex, WEX, "select((%s), (%s), (%s) > vec4f(0.5))", s2, s1, s0); break;
+        case O_DSX:    w = snprintf(ex, WEX, "dpdx(%s)", s0); break;
+        case O_DSY:    w = snprintf(ex, WEX, "dpdy(%s)", s0); break;
         case O_POW:    w = snprintf(ex, WEX, "vec4f(pow(abs((%s).x), (%s).x))", s0, s1); break;
         case O_NRM:    w = snprintf(ex, WEX, "vec4f(select(normalize((%s).xyz), vec3f(0.0), length((%s).xyz) == 0.0), 1.0)", s0, s0); break;
         case O_EXP:    w = snprintf(ex, WEX, "vec4f(exp2((%s).x))", s0); break;
