@@ -23,7 +23,7 @@ int wgsl_pull_test_module(char *out, size_t cap);
 /* Native test tools only: reference pixel shader interpreter with the Mac's
  * semantics (runtime/web/vsemu_psref.inc), the oracle of the differential
  * test in web/tools/wgsl-xl.c. */
-typedef struct { float col[2][4], uv[4][4], fog; } PSRefIn;
+typedef struct { float col[2][4], uv[8][4], fog; } PSRefIn;
 typedef struct { float aref, proj[4], c[32][4], fog[4]; } PSRefPar;
 typedef void (*PSRefTex)(int stage, const float *coord, int ncoord, float out[4]);
 int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex tex,

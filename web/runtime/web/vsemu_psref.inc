@@ -22,7 +22,6 @@ static void psr_reg(PSRefExec *e, unsigned tok, float o[4]){
     int ty = RT(tok), n = RN(tok);
     const float *b = 0; static const float z[4] = { 0, 0, 0, 0 };
     switch (ty){
-    
     case R_TEMP:     b = e->r[n & 15]; break;
     case R_INPUT:    b = e->v[n & 1]; break;
     case R_ADDR:     b = e->t[n & 7]; break;
@@ -51,8 +50,8 @@ static void psr_src(PSRefExec *e, unsigned tok, float o[4]){
         switch (SMOD(tok)){
         case 1: x = -x; break;            case 2: x = x - 0.5f; break;
         case 3: x = -(x - 0.5f); break;   case 4: x = 2.f*x - 1.f; break;
-        case 5: x = -(2.f*x - 1.f); break; case 6: x = 2.f*x; break;
-        case 7: x = -2.f*x; break;         case 8: x = -fabsf(x); break;
+        case 5: x = -(2.f*x - 1.f); break; case 6: x = 1.f - x; break;
+        case 7: x = 2.f*x; break;          case 8: x = -2.f*x; break;
         case 11: x = fabsf(x); break;      case 12: x = -fabsf(x); break;
         default: break;
         }

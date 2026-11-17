@@ -37,7 +37,7 @@ async function readDump(path: string): Promise<{ files: Map<string, string>; vec
 // ---- differential test: the WGSL vertex function vs the CPU interpreter ----
 // vs_<id>.vec comes from web/tools/wgsl-xl --pairs (vs_run on the same bytes
 // and constants).  The vertex entry point becomes a plain function called by
-// a compute shader that stores the 29 VOut floats per vertex.
+// a compute shader that stores the 45 VOut floats per vertex.
 interface DiffResult { modules: number; vertices: number; components: number; bad: number; maxRel: number; worst: string;
   /** pixel shaders: alpha-test decisions that differ only because alpha is within the tolerance of aref */
   edgeFlips?: number }
@@ -47,7 +47,7 @@ async function vsDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   const nv = u[1], stride = u[2];
   const vbBytes = new Uint8Array(vec, 16, nv * stride);
   const consts = new Float32Array(vec, 16 + nv * stride, 1024);
-  const want = new Float32Array(vec, 16 + nv * stride + 4096, nv * 29);
+  const want = new Float32Array(vec, 16 + nv * stride + 4096, nv * 45);
   const head = code.match(/@vertex fn (vs_\d+)\(@builtin\(vertex_index\) vid: u32, @builtin\(instance_index\) iid: u32\) -> VOut \{/);
   if (!head) { failures.push(`${name}: no vertex entry point`); return; }
   // the draw's K block at row KB of the window, as the renderer passes it in firstInstance
@@ -55,14 +55,15 @@ async function vsDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   const cs = code.replace(head[0], 'fn vsfn(vid: u32, iid: u32) -> VOut {') + `
 @group(0) @binding(3) var<storage, read_write> OUTV: array<f32>;
 @compute @workgroup_size(64) fn cs(@builtin(global_invocation_id) g: vec3u) {
-  if (g.x >= arrayLength(&OUTV) / 29u) { return; }
+  if (g.x >= arrayLength(&OUTV) / 45u) { return; }
   let o = vsfn(g.x, ${KB}u);
-  let b = g.x * 29u;
+  let b = g.x * 45u;
   for (var c = 0u; c < 4u; c++) {
     OUTV[b + c] = o.pos[c]; OUTV[b + 4u + c] = o.col0[c]; OUTV[b + 8u + c] = o.col1[c];
     OUTV[b + 12u + c] = o.uv0[c]; OUTV[b + 16u + c] = o.uv1[c]; OUTV[b + 20u + c] = o.uv2[c]; OUTV[b + 24u + c] = o.uv3[c];
+    OUTV[b + 28u + c] = o.uv4[c]; OUTV[b + 32u + c] = o.uv5[c]; OUTV[b + 36u + c] = o.uv6[c]; OUTV[b + 40u + c] = o.uv7[c];
   }
-  OUTV[b + 28u] = o.fog;
+  OUTV[b + 44u] = o.fog;
 }`;
   const module = device.createShaderModule({ code: cs, label: name + '.cs' });
   const ci = await module.getCompilationInfo();
@@ -81,28 +82,28 @@ async function vsDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   new Float32Array(k, KB * 16 + 16, 1024).set(consts);
   const kb = device.createBuffer({ size: KWIN_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
   device.queue.writeBuffer(kb, 0, k);
-  const out = device.createBuffer({ size: nv * 29 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
-  const rd = device.createBuffer({ size: nv * 29 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const out = device.createBuffer({ size: nv * 45 * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const rd = device.createBuffer({ size: nv * 45 * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
   const bg = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
     { binding: 0, resource: { buffer: vb } }, { binding: 1, resource: { buffer: kb } }, { binding: 3, resource: { buffer: out } }] });
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass(); pass.setPipeline(pipe); pass.setBindGroup(0, bg); pass.dispatchWorkgroups(Math.ceil(nv / 64)); pass.end();
-  enc.copyBufferToBuffer(out, 0, rd, 0, nv * 29 * 4);
+  enc.copyBufferToBuffer(out, 0, rd, 0, nv * 45 * 4);
   device.queue.submit([enc.finish()]);
   await rd.mapAsync(GPUMapMode.READ);
   const got = new Float32Array(rd.getMappedRange().slice(0)); rd.unmap();
   vb.destroy(); kb.destroy(); out.destroy(); rd.destroy();
-  const FIELD = ['pos', 'col0', 'col1', 'uv0', 'uv1', 'uv2', 'uv3'];
+  const FIELD = ['pos', 'col0', 'col1', 'uv0', 'uv1', 'uv2', 'uv3', 'uv4', 'uv5', 'uv6', 'uv7'];
   let bad = 0;
-  for (let i = 0; i < nv * 29; i++) {
+  for (let i = 0; i < nv * 45; i++) {
     const g = got[i], w = want[i];
     res.components++;
     if (g === w || (Number.isNaN(g) && Number.isNaN(w))) continue;
     const rel = Math.abs(g - w) / Math.max(1, Math.abs(w));
-    if (rel > res.maxRel) { res.maxRel = rel; res.worst = `${name} v${Math.floor(i / 29)} ${i % 29 === 28 ? 'fog' : FIELD[Math.floor((i % 29) / 4)] + '.' + 'xyzw'[i % 29 % 4]}: gpu ${g} cpu ${w}`; }
+    if (rel > res.maxRel) { res.maxRel = rel; res.worst = `${name} v${Math.floor(i / 45)} ${i % 45 === 44 ? 'fog' : FIELD[Math.floor((i % 45) / 4)] + '.' + 'xyzw'[i % 45 % 4]}: gpu ${g} cpu ${w}`; }
     if (!(rel <= 1e-4)) {
       bad++;
-      if (bad <= 3) failures.push(`${name} vertex ${Math.floor(i / 29)} out ${i % 29}: gpu ${g} cpu ${w}`);
+      if (bad <= 3) failures.push(`${name} vertex ${Math.floor(i / 45)} out ${i % 45}: gpu ${g} cpu ${w}`);
     }
   }
   res.modules++; res.vertices += nv; res.bad += bad;
@@ -208,8 +209,8 @@ async function psDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   if (u[0] !== 0x31565350) { failures.push(`${name}.pvec: bad magic`); return; }
   const np = u[1], cubemask = u[2];
   const par = new Uint8Array(vec, 16, 560);
-  const inputs = new Float32Array(vec, 576, np * 25);
-  const want = new Float32Array(vec, 576 + np * 100, np * 5);
+  const inputs = new Float32Array(vec, 576, np * 41);
+  const want = new Float32Array(vec, 576 + np * 164, np * 5);
   // Accept both @location(0) vec4f and PSOut return forms
   const head = code.match(/@fragment fn (ps_\d+)\(i: VOut\) -> (@location\(0\) vec4f|PSOut) \{/);
   if (!head) { failures.push(`${name}: no fragment entry point`); return; }
@@ -225,7 +226,7 @@ var<private> KILL: u32;
 @group(0) @binding(5) var<storage, read_write> POUT: array<f32>;
 @compute @workgroup_size(64) fn cs(@builtin(global_invocation_id) g: vec3u) {
   if (g.x >= arrayLength(&POUT) / 5u) { return; }
-  let b = g.x * 25u;
+  let b = g.x * 41u;
   var i: VOut;
   i.pos = vec4f(0.0);
   i.col0 = vec4f(PIN[b], PIN[b + 1u], PIN[b + 2u], PIN[b + 3u]);
@@ -234,7 +235,11 @@ var<private> KILL: u32;
   i.uv1 = vec4f(PIN[b + 12u], PIN[b + 13u], PIN[b + 14u], PIN[b + 15u]);
   i.uv2 = vec4f(PIN[b + 16u], PIN[b + 17u], PIN[b + 18u], PIN[b + 19u]);
   i.uv3 = vec4f(PIN[b + 20u], PIN[b + 21u], PIN[b + 22u], PIN[b + 23u]);
-  i.fog = PIN[b + 24u];
+  i.uv4 = vec4f(PIN[b + 24u], PIN[b + 25u], PIN[b + 26u], PIN[b + 27u]);
+  i.uv5 = vec4f(PIN[b + 28u], PIN[b + 29u], PIN[b + 30u], PIN[b + 31u]);
+  i.uv6 = vec4f(PIN[b + 32u], PIN[b + 33u], PIN[b + 34u], PIN[b + 35u]);
+  i.uv7 = vec4f(PIN[b + 36u], PIN[b + 37u], PIN[b + 38u], PIN[b + 39u]);
+  i.fog = PIN[b + 40u];
   KILL = 0u;
   let c = ${isPSOut} ? psfn(i).col : psfn(i);
   let o = g.x * 5u;
@@ -248,7 +253,7 @@ var<private> KILL: u32;
   const mk = (size: number, usage: number) => device.createBuffer({ size, usage });
   const pb = mk(560, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   device.queue.writeBuffer(pb, 0, par);
-  const ib = mk(np * 100, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+  const ib = mk(np * 164, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
   device.queue.writeBuffer(ib, 0, inputs);
   const ob = mk(np * 20, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const rd = mk(np * 20, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
