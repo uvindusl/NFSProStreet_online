@@ -5,8 +5,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOLS_DIR="$SCRIPT_DIR"
-SHADER2WGSL="/home/uvindu/Projects/nfsprostree-recompile/out/tools/shader2wgsl"
-SHADER_DIR="/tmp/opencode/ps-shaders"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SHADER2WGSL="$ROOT/out/tools/shader2wgsl"
+SHADER_DIR="${SHADER_DIR:-/tmp/opencode/ps-shaders}"
 
 echo "=== Shader2WGSL Validation ==="
 echo "Testing $(ls "$SHADER_DIR"/*.bin | wc -l) blobs..."
