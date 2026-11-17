@@ -72,9 +72,37 @@ int main(int argc, char *argv[])
     int do_test = 0, do_selftest = 0;
 
     /* Parse args */
+    int decl_set = 0;
+    static const int vdecl_placeholder[16][2] = {{0}};
+    static int vdecl[16][2];
+    for (int i = 0; i < 16; i++) for (int j = 0; j < 2; j++) vdecl[i][j] = -1;
     for (int i = 1; i < argc; i++){
         if (strcmp(argv[i], "--test") == 0) do_test = 1;
         else if (strcmp(argv[i], "--selftest") == 0) do_selftest = 1;
+        else if (strncmp(argv[i], "--decl=", 7) == 0){
+            /* --decl reg:offset:type,reg:offset:type,...  D3DDECLTYPE.
+             * Parsed into an int[16][2] (offset,type), -1 = unused.  The
+             * runtime's com.c passes the same layout to vs_to_wgsl. */
+            char *s = argv[i] + 7;
+            decl_set = 1;
+            while (*s){
+                char *end;
+                int reg = (int)strtol(s, &end, 10);
+                if (end == s || *end != ':'){ fprintf(stderr, "bad --decl entry: %s\n", s); return 1; }
+                s = end + 1;
+                int off = (int)strtol(s, &end, 10);
+                if (end == s || *end != ':'){ fprintf(stderr, "bad --decl entry: %s\n", s); return 1; }
+                s = end + 1;
+                int typ = (int)strtol(s, &end, 10);
+                if (end == s || (end[0] != ',' && end[0] != '\0')){
+                    fprintf(stderr, "bad --decl entry: %s\n", s); return 1;
+                }
+                if (reg < 0 || reg >= 16){ fprintf(stderr, "bad --decl reg %d\n", reg); return 1; }
+                vdecl[reg][0] = off;
+                vdecl[reg][1] = typ;
+                s = (*end == ',') ? end + 1 : end;
+            }
+        }
         else if (argv[i][0] == '-'){ /* skip unrecognized flags */ }
         else if (!infile) infile = argv[i];
         else if (!outfile) outfile = argv[i];
@@ -131,10 +159,9 @@ int main(int argc, char *argv[])
      * FLOAT1 at offset 0.  This is a placeholder for naga validation only, not
      * a claim about the real draw.  The runtime passes the true declaration to
      * vs_to_wgsl (com.c gpuvs_id), where decl[i] = (byte offset, D3DDECLTYPE)
-     * -- see vsemu.h:46. */
-    static const int vdecl_placeholder[16][2] = {{0}};
+     * -- see vsemu.h:46.  --decl reg:offset:type,... overrides the placeholder. */
     int w = is_ps ? ps_to_wgsl(p, 0, wgsl, wcap)
-                  : vs_to_wgsl(p, 0, vdecl_placeholder, wgsl, wcap);
+                  : vs_to_wgsl(p, 0, decl_set ? vdecl : vdecl_placeholder, wgsl, wcap);
     if (w <= 0){ fprintf(stderr, "WGSL emission failed (rc=%d)\n", w); free(wgsl); free(p); free(blob); return 1; }
 
     /* ---- optional --test: run the reference interpreter on the same program ---- */
