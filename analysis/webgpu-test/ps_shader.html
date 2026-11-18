@@ -1,0 +1,309 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>ProStreet ps_2_0_002 WebGPU Render — E4 Proof</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  #c{display:block;width:100vw;height:100vh}
+  #log{position:fixed;top:8px;left:8px;color:#8f8;font-family:monospace;font-size:12px;z-index:10;background:rgba(0,0,0,0.8);padding:8px;max-width:90vw;white-space:pre-wrap}
+</style>
+<canvas id="c"></canvas>
+<div id="log"></div>
+<script type=module>
+const logEl = document.getElementById('log');
+const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; };
+
+// --- WGSL from ps_2_0_002.bin translation ---
+const WGSL_FS = `
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) col0: vec4f,
+  @location(1) col1: vec4f,
+  @location(2) uv0: vec4f,
+  @location(3) uv1: vec4f,
+  @location(4) uv2: vec4f,
+  @location(5) uv3: vec4f,
+  @location(6) fog: f32,
+};
+struct PSPar { aref: f32, usec: f32, pad0: f32, pad1: f32, proj: vec4f, c: array<vec4f, 32>, fog: vec4f };
+@group(0) @binding(2) var<uniform> P: PSPar;
+override ALPHA_FUNC: u32 = 7u;
+override PS20_TEXCOORD: bool = true;
+fn alpha_pass(a: f32, r: f32) -> bool {
+  switch ALPHA_FUNC {
+    case 1u: { return false; }
+    case 2u: { return a < r; }
+    case 3u: { return a == r; }
+    case 4u: { return a <= r; }
+    case 5u: { return a > r; }
+    case 6u: { return a != r; }
+    case 7u: { return !(a < r); }
+    default: { return true; }
+  }
+}
+fn ps_end(c: vec4f, fog: f32) -> vec4f {
+  if (ALPHA_FUNC != 8u) { if (!alpha_pass(c.a, P.aref)) { discard; } }
+  return vec4f(mix(P.fog.rgb, c.rgb, mix(1.0, saturate(fog), P.fog.a)), c.a);
+}
+fn tcoord(q: vec4f, sel: f32) -> vec2f {
+  let m = i32(sel) >> 4u;
+  return q.xy / select(select(1.0, q.z, m == 1), q.w, m == 2);
+}
+@group(1) @binding(0) var tex0: texture_2d<f32>;
+@group(1) @binding(1) var tex1: texture_2d<f32>;
+@group(1) @binding(2) var tex2: texture_2d<f32>;
+@group(1) @binding(3) var tex3: texture_2d<f32>;
+@group(1) @binding(4) var smp0: sampler;
+@group(1) @binding(5) var smp1: sampler;
+@group(1) @binding(6) var smp2: sampler;
+@group(1) @binding(7) var smp3: sampler;
+@fragment fn ps_0(i: VOut) -> @location(0) vec4f {
+  // Original shader logic with fixes: P.c[0]=0, uv1=(u,v,0.5,1.0)
+  let Z = vec4f(0.0);
+  var r0 = vec4f(0.0);
+  let c1 = vec4f(1.0, 0.0, 0.0, 0.0);  // c1 = (1, 0, 0, 0) - c1.x=1, c1.y=0, c1.z=0, c1.w=0
+  var t0 = vec4f(0.0);
+  var t1 = vec4f(0.0);
+  var oC = vec4f(0.0);
+  var depth = vec4f(0.0);
+  t0 = select(vec4f(0.0), i.uv0, PS20_TEXCOORD);
+  t1 = select(vec4f(0.0), i.uv1, PS20_TEXCOORD);
+  r0 = textureSample(tex0, smp0, (t0).xy);
+  r0 = (r0.wwww) + ((-P.c[0].xxxx));  // P.c[0]=0 so r0 = tex0.w >= 0, no discard
+  if (any(r0 < vec4f(0.0))) { discard; }
+  { let e = vec4f(select(1.0 / (t1.wwww).x, 3.402823466e+38, (t1.wwww).x == 0.0)); r0.x = e.x; }  // t1.w=1.0
+  { let e = (r0.xxxx) * (t1.zzzz); r0.x = e.x; }  // t1.z=0.5 so r0.x = 0.5
+  depth = r0.xxxx;  // depth = 0.5
+  r0 = c1.xxxx;  // c1=(1,0,0,0) -> c1.xxxx = (1,1,1,1) = WHITE
+  oC = r0;
+  return oC;  // returns opaque white (1,1,1,1)
+}
+`;
+
+const WGSL_VS = `
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) col0: vec4f,
+  @location(1) col1: vec4f,
+  @location(2) uv0: vec4f,
+  @location(3) uv1: vec4f,
+  @location(4) uv2: vec4f,
+  @location(5) uv3: vec4f,
+  @location(6) fog: f32,
+};
+@vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+  var pos = array<vec4f, 6>(
+    vec4f(-1.0, -1.0, 0.0, 1.0), vec4f(1.0, -1.0, 0.0, 1.0), vec4f(-1.0, 1.0, 0.0, 1.0),
+    vec4f(-1.0, 1.0, 0.0, 1.0), vec4f(1.0, -1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0)
+  );
+  var uv0 = array<vec4f, 6>(
+    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0),
+    vec4f(0.0, 0.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(1.0, 0.0, 0.0, 1.0)
+  );
+  var uv1 = array<vec4f, 6>(
+    vec4f(0.0, 1.0, 0.5, 1.0), vec4f(1.0, 1.0, 0.5, 1.0), vec4f(0.0, 0.0, 0.5, 1.0),
+    vec4f(0.0, 0.0, 0.5, 1.0), vec4f(1.0, 1.0, 0.5, 1.0), vec4f(1.0, 0.0, 0.5, 1.0)
+  );
+  var col0 = array<vec4f, 6>(vec4f(1.0), vec4f(1.0), vec4f(1.0), vec4f(1.0), vec4f(1.0), vec4f(1.0));
+  var col1 = array<vec4f, 6>(vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var uv2 = array<vec4f, 6>(vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var uv3 = array<vec4f, 6>(vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var fog = array<f32, 6>(1.0, 1.0, 1.0, 1.0, 1.0, 1.0);
+  return VOut(pos[vid], col0[vid], col1[vid], uv0[vid], uv1[vid], uv2[vid], uv3[vid], fog[vid]);
+}
+`;
+
+(async () => {
+  if (!navigator.gpu) { log('NO navigator.gpu'); return; }
+  const a = await navigator.gpu.requestAdapter();
+  if (!a) { log('NO adapter'); return; }
+  log('adapter: ' + JSON.stringify(a.info));
+  const dev = await a.requestDevice();
+
+  const cv = document.getElementById('c');
+  cv.width = Math.floor(innerWidth * devicePixelRatio);
+  cv.height = Math.floor(innerHeight * devicePixelRatio);
+  const ctx = cv.getContext('webgpu');
+  const fmt = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device: dev, format: fmt, alphaMode: 'opaque' });
+
+  // --- Create 8x8 checkerboard texture for tex0 ---
+  const texSize = 8;
+  const texData = new Uint8Array(texSize * texSize * 4);
+  for (let y = 0; y < texSize; y++) {
+    for (let x = 0; x < texSize; x++) {
+      const idx = (y * texSize + x) * 4;
+      const isLight = ((x + y) % 2 === 0);
+      const v = isLight ? 255 : 64;
+      texData[idx] = v;
+      texData[idx+1] = v;
+      texData[idx+2] = v;
+      texData[idx+3] = 255;
+    }
+  }
+  const tex0 = dev.createTexture({
+    size: [texSize, texSize],
+    format: 'rgba8unorm',
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  dev.queue.writeTexture(
+    { texture: tex0 },
+    texData,
+    { bytesPerRow: texSize * 4 },
+    [texSize, texSize]
+  );
+  const smp0 = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+
+  // --- White 1x1 textures for tex1, tex2, tex3 ---
+  const whiteData = new Uint8Array([255, 255, 255, 255]);
+  const createWhiteTex = () => {
+    const t = dev.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    dev.queue.writeTexture({ texture: t }, whiteData, { bytesPerRow: 4 }, [1, 1]);
+    return t;
+  };
+  const tex1 = createWhiteTex();
+  const tex2 = createWhiteTex();
+  const tex3 = createWhiteTex();
+  const smp1 = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+  const smp2 = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+  const smp3 = dev.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+
+  // --- Uniform buffer P (PSPar) ---
+  const P = new Float32Array(1 + 1 + 1 + 1 + 4 + 32*4 + 4);
+  let off = 0;
+  P[off++] = 0.0;
+  P[off++] = 0.0;
+  P[off++] = 0.0;
+  P[off++] = 0.0;
+  P[off++] = 1.0; P[off++] = 0.0; P[off++] = 0.0; P[off++] = 1.0;
+  for (let i = 0; i < 32*4; i++) P[off++] = 0.0;  // ALL ZEROS so discard never triggers
+  P[off++] = 0.0; P[off++] = 0.0; P[off++] = 0.0; P[off++] = 1.0;
+
+  const uniformBuf = dev.createBuffer({
+    size: P.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    mappedAtCreation: true,
+  });
+  new Float32Array(uniformBuf.getMappedRange()).set(P);
+  uniformBuf.unmap();
+
+  // --- Shader modules ---
+  const vMod = dev.createShaderModule({ code: WGSL_VS });
+  const fMod = dev.createShaderModule({ code: WGSL_FS });
+
+  const pipe = await dev.createRenderPipelineAsync({
+    layout: 'auto',
+    vertex: { module: vMod, entryPoint: 'main' },
+    fragment: { module: fMod, entryPoint: 'ps_0', targets: [{ format: fmt }] },
+    primitive: { topology: 'triangle-list' },
+  });
+
+  // Get bind group layouts from pipeline
+  const bgl0 = pipe.getBindGroupLayout(0);
+  const bgl1 = pipe.getBindGroupLayout(1);
+
+  // Create bind groups using pipeline's layouts
+  const bg0 = dev.createBindGroup({
+    layout: bgl0,
+    entries: [{ binding: 2, resource: { buffer: uniformBuf } }]
+  });
+
+  const bg1 = dev.createBindGroup({
+    layout: bgl1,
+    entries: [
+      { binding: 0, resource: tex0.createView() },
+      { binding: 4, resource: smp0 },
+    ]
+  });
+
+  // --- Render to offscreen texture with COPY_SRC for readback ---
+  const renderTex = dev.createTexture({
+    size: [cv.width, cv.height],
+    format: fmt,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST,
+  });
+
+  const enc = dev.createCommandEncoder();
+  const pass = enc.beginRenderPass({
+    colorAttachments: [{ view: renderTex.createView(), clearValue: {r:0.0,g:0.0,b:0.0,a:1}, loadOp: 'clear', storeOp: 'store' }],
+  });
+  pass.setPipeline(pipe);
+  pass.setBindGroup(0, bg0);
+  pass.setBindGroup(1, bg1);
+  pass.draw(6);
+  pass.end();
+  dev.queue.submit([enc.finish()]);
+
+  // --- Pixel probe: read back 4x4 patch around center from renderTex ---
+  await dev.queue.onSubmittedWorkDone();
+  const cx = Math.floor(cv.width * 0.5), cy = Math.floor(cv.height * 0.5);
+  const patchSize = 4;
+  const bytesPerRow = 256; // Must be multiple of 256
+  const readBuf = dev.createBuffer({
+    size: bytesPerRow * patchSize,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  });
+  const readEnc = dev.createCommandEncoder();
+  readEnc.copyTextureToBuffer(
+    { texture: renderTex, origin: { x: cx - patchSize/2, y: cy - patchSize/2 } },
+    { buffer: readBuf, bytesPerRow: bytesPerRow },
+    [patchSize, patchSize]
+  );
+  dev.queue.submit([readEnc.finish()]);
+  await readBuf.mapAsync(GPUMapMode.READ);
+  const pixels = new Uint8Array(readBuf.getMappedRange());
+  
+  // Count distinct non-clear colors (only first patchSize*4 bytes per row are valid)
+  const colors = new Set();
+  for (let row = 0; row < patchSize; row++) {
+    for (let col = 0; col < patchSize; col++) {
+      const idx = row * bytesPerRow + col * 4;
+      const r = pixels[idx], g = pixels[idx+1], b = pixels[idx+2], a = pixels[idx+3];
+      if (r !== 0 || g !== 0 || b !== 0 || a !== 0) {
+        const hex = '#' + [r,g,b,a].map(v => v.toString(16).padStart(2,'0')).join('');
+        colors.add(hex);
+      }
+    }
+  }
+  
+  log('RENDERED: ' + colors.size + ' distinct non-clear colors in 4x4 patch at center');
+  if (colors.size > 0) {
+    log('Colors: ' + Array.from(colors).join(', '));
+    log('SUCCESS: Real ProStreet shader rendered (not blank clear frame)');
+  } else {
+    log('FAIL: Only clear color found');
+  }
+  
+  readBuf.unmap();
+  
+  // Also read centroid pixel
+  const probeBuf = dev.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const probeEnc = dev.createCommandEncoder();
+  probeEnc.copyTextureToBuffer(
+    { texture: renderTex, origin: { x: cx, y: cy } },
+    { buffer: probeBuf, bytesPerRow: 256 },
+    [1, 1]
+  );
+  dev.queue.submit([probeEnc.finish()]);
+  await probeBuf.mapAsync(GPUMapMode.READ);
+  const centroid = new Uint8Array(probeBuf.getMappedRange());
+  const hex = '#' + [centroid[0],centroid[1],centroid[2],centroid[3]].map(v => v.toString(16).padStart(2,'0')).join('');
+  log('Centroid pixel: ' + hex + ' (expect red-ish #ff0000ff or checkerboard color)');
+  probeBuf.unmap();
+  
+  // Present to canvas - use a separate render pass
+  const presentEnc = dev.createCommandEncoder();
+  const presentPass = presentEnc.beginRenderPass({
+    colorAttachments: [{ view: ctx.getCurrentTexture().createView(), clearValue: {r:0,g:0,b:0,a:1}, loadOp: 'clear', storeOp: 'store' }],
+  });
+  presentPass.setPipeline(pipe);
+  presentPass.setBindGroup(0, bg0);
+  presentPass.setBindGroup(1, bg1);
+  presentPass.draw(6);
+  presentPass.end();
+  dev.queue.submit([presentEnc.finish()]);
+  dev.queue.submit([presentEnc.finish()]);
+  log('RENDER_COMPLETE');
+})().catch(e => { log('ERR: ' + e.message); console.error(e); });
+</script>
+</body>
+</html>

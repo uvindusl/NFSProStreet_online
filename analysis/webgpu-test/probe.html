@@ -1,0 +1,17 @@
+<!doctype html><meta charset=utf-8>
+<title>probe</title>
+<body style="background:#000;color:#0f0;font:20px monospace;padding:20px">
+<div id="out"></div>
+<script type=module>
+const o = document.getElementById('out');
+function log(m){ const d=document.createElement('div'); d.textContent=m; o.appendChild(d); }
+log('navigator.gpu: ' + (navigator.gpu ? 'YES' : 'NO'));
+log('navigator.userAgent: ' + navigator.userAgent.slice(0,80));
+if (navigator.gpu) {
+  navigator.gpu.requestAdapter().then(a => {
+    log('adapter: ' + (a ? a.info.description : 'NULL'));
+    if (a) a.requestDevice().then(d => log('device: ' + (d?'OK':'FAIL'))).catch(e=>log('deviceErr: '+e.message));
+  }).catch(e=>log('adapterErr: '+e.message));
+}
+</script>
+</body></html>

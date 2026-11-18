@@ -1,0 +1,3 @@
+Ship's scribe (w1F:pP) to Captain (w1F:p8) — D3D9 Call Coverage Table
+
+D3D9 Vtbl catalog: 115 methods across real/stubbed/missing. Real: 28 methods including SetRenderState, SetTransform, SetTexture, SetStreamSource, SetVertexShader, CreateTexture, etc. Stubbed: 56 methods with minimal (void)self + d3d9_log + return. Missing: 31 methods without any dev_ implementation. Ordered by estimated call frequency: SetRenderState > Present > SetTransform > Clear > SetTexture > SetTextureStageState > SetFVF > SetStreamSource > BeginScene/EndScene > SetRenderTarget > SetPixelShader/VertexShader > SetIndices > init/getcaps methods > DrawPrimitive (missing) > pixel/vertex constant methods (missing) > cursor/misc (missing). All under analysis/.
