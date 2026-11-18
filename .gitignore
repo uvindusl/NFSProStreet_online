@@ -60,3 +60,8 @@ debug/untracked-notes-inventory.md
 
 # generated shader galleries (analysis/webgpu-test)
 analysis/webgpu-test/corpus.html
+
+# generated esbuild bundle + scratch dir for the encoder smoke pages
+# (the capture scripts rebuild the bundle; tmp/ holds throwaway captures)
+analysis/webgpu-test/*.bundle.mjs
+analysis/webgpu-test/tmp/
