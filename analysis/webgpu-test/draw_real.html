@@ -10,8 +10,8 @@ html,body{margin:0;height:100%;background:#000;color:#0f0;font-family:monospace;
 const logEl = document.getElementById('log');
 const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; console.log(m); };
 
-const WGSL_PS = "// ps_0: ps_2_0, 3 instructions\nstruct VOut {\n  @builtin(position) pos: vec4f,\n  @location(0) col0: vec4f, @location(1) col1: vec4f,\n  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n  @location(6) fog: f32,\n}\nstruct PSPar { aref: f32, usec: f32, pad0: f32, pad1: f32, proj: vec4f, c: array<vec4f, 32>, fog: vec4f }\n@group(0) @binding(2) var<uniform> P: PSPar;\noverride ALPHA_FUNC: u32 = 7u;\noverride PS20_TEXCOORD: bool = true;\nfn alpha_pass(a: f32, r: f32) -> bool {\n  switch ALPHA_FUNC {\n    case 1u: { return false; }\n    case 2u: { return a < r; }\n    case 3u: { return a == r; }\n    case 4u: { return a <= r; }\n    case 5u: { return a > r; }\n    case 6u: { return a != r; }\n    case 7u: { return !(a < r); }\n    default: { return true; }\n  }\n}\nfn ps_end(c: vec4f, fog: f32) -> vec4f {\n  if (ALPHA_FUNC != 8u) { if (!alpha_pass(c.a, P.aref)) { discard; } }\n  return vec4f(mix(P.fog.rgb, c.rgb, mix(1.0, saturate(fog), P.fog.a)), c.a);\n}\nfn tcoord(q: vec4f, sel: f32) -> vec2f {\n  let m = i32(sel) >> 4u;\n  return q.xy / select(select(1.0, q.z, m == 1), q.w, m == 2);\n}\nstruct PSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };\n@group(1) @binding(0) var tex0: texture_2d<f32>;\n@group(1) @binding(1) var tex1: texture_2d<f32>;\n@group(1) @binding(2) var tex2: texture_2d<f32>;\n@group(1) @binding(3) var tex3: texture_2d<f32>;\n@group(1) @binding(4) var smp0: sampler;\n@group(1) @binding(5) var smp1: sampler;\n@group(1) @binding(6) var smp2: sampler;\n@group(1) @binding(7) var smp3: sampler;\n@fragment fn ps_042(i: VOut) -> @location(0) vec4f {\n  var r0 = vec4f(0.0);\n  let c0 = vec4f(1.0, 1.0, 1.0, 0.5);\n  var oC = vec4f(0.0);\n  r0 = c0;\n  oC = r0;\n  return ps_end(oC, i.fog);\n}\n";
-const WGSL_VS = "\nstruct VOut {\n  @builtin(position) pos: vec4f,\n  @location(0) col0: vec4f, @location(1) col1: vec4f,\n  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n  @location(6) fog: f32,\n};\n@vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {\n  // NOTE: placeholder vertex shader, NOT the real emitted VS. Draws one\n  // full-screen triangle so the real ProStreet pixel shader can run.\n  var pos = array<vec4f, 3>(\n    vec4f(-1.0, -1.0, 0.0, 1.0),\n    vec4f(3.0, -1.0, 0.0, 1.0),\n    vec4f(-1.0, 3.0, 0.0, 1.0)\n  );\n  var uv0 = array<vec4f, 3>(\n    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0)\n  );\n  var uv1 = array<vec4f, 3>(\n    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0)\n  );\n  var fog = array<f32, 3>(1.0, 1.0, 1.0);\n  var col0 = array<vec4f, 3>(vec4f(1.0), vec4f(1.0), vec4f(1.0));\n  var col1 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv2 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv3 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  return VOut(pos[vid], col0[vid], col1[vid], uv0[vid], uv1[vid], uv2[vid], uv3[vid], fog[vid]);\n}\n";
+const WGSL_PS = "// ps_0: ps_2_0, 3 instructions\nstruct VOut {\n  @builtin(position) pos: vec4f,\n  @location(0) col0: vec4f, @location(1) col1: vec4f,\n  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n  @location(6) uv4: vec4f, @location(7) uv5: vec4f, @location(8) uv6: vec4f, @location(9) uv7: vec4f,\n  @location(10) fog: f32,\n}\nstruct PSPar { aref: f32, usec: f32, pad0: f32, pad1: f32, proj: vec4f, c: array<vec4f, 32>, fog: vec4f }\n@group(0) @binding(2) var<uniform> P: PSPar;\noverride ALPHA_FUNC: u32 = 7u;\noverride PS20_TEXCOORD: bool = true;\nfn alpha_pass(a: f32, r: f32) -> bool {\n  switch ALPHA_FUNC {\n    case 1u: { return false; }\n    case 2u: { return a < r; }\n    case 3u: { return a == r; }\n    case 4u: { return a <= r; }\n    case 5u: { return a > r; }\n    case 6u: { return a != r; }\n    case 7u: { return !(a < r); }\n    default: { return true; }\n  }\n}\nfn ps_end(c: vec4f, fog: f32) -> vec4f {\n  if (ALPHA_FUNC != 8u) { if (!alpha_pass(c.a, P.aref)) { discard; } }\n  return vec4f(mix(P.fog.rgb, c.rgb, mix(1.0, saturate(fog), P.fog.a)), c.a);\n}\nfn tcoord(q: vec4f, sel: f32) -> vec2f {\n  let m = i32(sel) >> 4u;\n  return q.xy / select(select(1.0, q.z, m == 1), q.w, m == 2);\n}\nstruct PSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };\n@group(1) @binding(0) var tex0: texture_2d<f32>;\n@group(1) @binding(1) var tex1: texture_2d<f32>;\n@group(1) @binding(2) var tex2: texture_2d<f32>;\n@group(1) @binding(3) var tex3: texture_2d<f32>;\n@group(1) @binding(4) var tex4: texture_2d<f32>;\n@group(1) @binding(5) var tex5: texture_2d<f32>;\n@group(1) @binding(6) var tex6: texture_2d<f32>;\n@group(1) @binding(7) var tex7: texture_2d<f32>;\n@group(1) @binding(8) var smp0: sampler;\n@group(1) @binding(9) var smp1: sampler;\n@group(1) @binding(10) var smp2: sampler;\n@group(1) @binding(11) var smp3: sampler;\n@group(1) @binding(12) var smp4: sampler;\n@group(1) @binding(13) var smp5: sampler;\n@group(1) @binding(14) var smp6: sampler;\n@group(1) @binding(15) var smp7: sampler;\n@fragment fn ps_042(i: VOut) -> @location(0) vec4f {\n  var r0 = vec4f(0.0);\n  let c0 = vec4f(1.0, 1.0, 1.0, 0.5);\n  var oC = vec4f(0.0);\n  r0 = c0;\n  oC = r0;\n  return ps_end(oC, i.fog);\n}\n";
+const WGSL_VS = "struct VOut {\n  @builtin(position) pos: vec4f,\n  @location(0) col0: vec4f, @location(1) col1: vec4f,\n  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n  @location(6) uv4: vec4f, @location(7) uv5: vec4f, @location(8) uv6: vec4f, @location(9) uv7: vec4f,\n  @location(10) fog: f32,\n};\n@vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {\n  // NOTE: placeholder vertex shader, NOT the real emitted VS. Draws one\n  // full-screen triangle so the real ProStreet pixel shader can run.\n  var pos = array<vec4f, 3>(\n    vec4f(-1.0, -1.0, 0.0, 1.0),\n    vec4f(3.0, -1.0, 0.0, 1.0),\n    vec4f(-1.0, 3.0, 0.0, 1.0)\n  );\n  var uv0 = array<vec4f, 3>(\n    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0)\n  );\n  var uv1 = array<vec4f, 3>(\n    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0)\n  );\n  var fog = array<f32, 3>(1.0, 1.0, 1.0);\n  var col0 = array<vec4f, 3>(vec4f(1.0), vec4f(1.0), vec4f(1.0));\n  var col1 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv2 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv3 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv4 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv5 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv6 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  var uv7 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));\n  return VOut(pos[vid], col0[vid], col1[vid], uv0[vid], uv1[vid], uv2[vid], uv3[vid], uv4[vid], uv5[vid], uv6[vid], uv7[vid], fog[vid]);\n}\n";
 
 // Real ABI sizes (mirror web/src/gpu/shader-abi.ts).
 const KWIN_SIZE = 65536;
@@ -42,10 +42,18 @@ const HLPAR_SIZE = 656;
     { binding: 1, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
     { binding: 2, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
     { binding: 3, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
-    { binding: 4, visibility: F, sampler: { type: 'filtering' } },
-    { binding: 5, visibility: F, sampler: { type: 'filtering' } },
-    { binding: 6, visibility: F, sampler: { type: 'filtering' } },
-    { binding: 7, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 4, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
+    { binding: 5, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
+    { binding: 6, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
+    { binding: 7, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } },
+    { binding: 8, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 9, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 10, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 11, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 12, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 13, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 14, visibility: F, sampler: { type: 'filtering' } },
+    { binding: 15, visibility: F, sampler: { type: 'filtering' } },
   ]});
   const pipelineLayout = device.createPipelineLayout({
     label: 'abi.layout2d',
@@ -114,10 +122,18 @@ const HLPAR_SIZE = 656;
       { binding: 1, resource: tex0.createView() },
       { binding: 2, resource: tex0.createView() },
       { binding: 3, resource: tex0.createView() },
-      { binding: 4, resource: smp0 },
-      { binding: 5, resource: smp0 },
-      { binding: 6, resource: smp0 },
-      { binding: 7, resource: smp0 },
+      { binding: 4, resource: tex0.createView() },
+      { binding: 5, resource: tex0.createView() },
+      { binding: 6, resource: tex0.createView() },
+      { binding: 7, resource: tex0.createView() },
+      { binding: 8, resource: smp0 },
+      { binding: 9, resource: smp0 },
+      { binding: 10, resource: smp0 },
+      { binding: 11, resource: smp0 },
+      { binding: 12, resource: smp0 },
+      { binding: 13, resource: smp0 },
+      { binding: 14, resource: smp0 },
+      { binding: 15, resource: smp0 },
     ],
   });
 
