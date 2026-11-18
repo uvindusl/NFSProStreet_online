@@ -137,10 +137,10 @@ export class Encoder {
   private bufGen = 0; private bg0: (GPUBindGroup | null)[] = [null, null, null]; private bg0Gen = -1;
   private pStage = new Float32Array(192 * 1024);
   // per-draw scratch, reused so that a draw allocates nothing: group 0's dynamic
-  // offsets, and the group 1 tuple of the previous draw (cube, 4 texture serials,
-  // 4 sampler keys; [0] = -1 when the pass has none bound yet)
+  // offsets, and the group 1 tuple of the previous draw (cube, 8 texture serials,
+  // 8 sampler keys; [0] = -1 when the pass has none bound yet)
   private dyn = new Uint32Array(3);
-  private b1 = new Int32Array(9);
+  private b1 = new Int32Array(17);
 
   // layouts and built-in pipelines
   private bgl0: GPUBindGroupLayout; private bgl1: GPUBindGroupLayout; private bgl1c: GPUBindGroupLayout;
@@ -1057,11 +1057,17 @@ export class Encoder {
       }
       const kb = koff >= 0 ? (koff - cK) >> 4 : 0;
 
-      // group 1: textures and samplers (a texture bound as this pass's target samples white)
+      // group 1: textures and samplers (a texture bound as this pass's target samples white).
+      // The 8-wide ABI carries 8 texture stages and 8 samplers.  Stages 0..3 come from the game's
+      // draw (GwDraw tex/tex1/tex2/tex3); stages 4..7 have no game texture source yet (com.c
+      // g_tex_stage is 4 wide, but g_raw_tex tracks 8) so they bind white -- while their sampler
+      // keys are real, because com.c smp_push now fills all 8.
       const cube = psEff >= PSCUBE;
       const t1 = u32[w + D.tex1], t2 = u32[w + D.tex2], t3 = u32[w + D.tex3];
-      let s0 = u32[w + D.smp], s1 = u32[w + D.smp + 1], s2 = u32[w + D.smp + 2], s3 = u32[w + D.smp + 3];
       const v0 = this.texFor(t0, cube, passCube), v1 = this.texFor(t1, false, passCube), v2 = this.texFor(t2, false, passCube), v3 = this.texFor(t3, false, passCube);
+      const v4 = this.white, v5 = this.white, v6 = this.white, v7 = this.white;
+      let s0 = u32[w + D.smp], s1 = u32[w + D.smp + 1], s2 = u32[w + D.smp + 2], s3 = u32[w + D.smp + 3];
+      let s4 = u32[w + D.smp + 4], s5 = u32[w + D.smp + 5], s6 = u32[w + D.smp + 6], s7 = u32[w + D.smp + 7];
       // a 1024 skin (HQ vinyls) has its mipmaps: sampled with them, whatever the game's 512 one (one level) asked for
       if (this.over.size) {
         if (this.over.get(t0) === v0) s0 = overSmp(s0);
@@ -1069,23 +1075,36 @@ export class Encoder {
         if (this.over.get(t2) === v2) s2 = overSmp(s2);
         if (this.over.get(t3) === v3) s3 = overSmp(s3);
       }
-      if (this.pointTex) { s0 = this.pointKey(s0, v0); s1 = this.pointKey(s1, v1); s2 = this.pointKey(s2, v2); s3 = this.pointKey(s3, v3); }
-      else if (this.aniso) { s0 = this.anisoKey(s0, v0); s1 = this.anisoKey(s1, v1); s2 = this.anisoKey(s2, v2); s3 = this.anisoKey(s3, v3); }
+      if (this.pointTex) {
+        s0 = this.pointKey(s0, v0); s1 = this.pointKey(s1, v1); s2 = this.pointKey(s2, v2); s3 = this.pointKey(s3, v3);
+        s4 = this.pointKey(s4, v4); s5 = this.pointKey(s5, v5); s6 = this.pointKey(s6, v6); s7 = this.pointKey(s7, v7);
+      } else if (this.aniso) {
+        s0 = this.anisoKey(s0, v0); s1 = this.anisoKey(s1, v1); s2 = this.anisoKey(s2, v2); s3 = this.anisoKey(s3, v3);
+        s4 = this.anisoKey(s4, v4); s5 = this.anisoKey(s5, v5); s6 = this.anisoKey(s6, v6); s7 = this.anisoKey(s7, v7);
+      }
       // the same textures and samplers as the previous draw (the common case): nothing to do
       if (b1[0] !== (cube ? 1 : 0) || b1[1] !== v0.serial || b1[2] !== v1.serial || b1[3] !== v2.serial || b1[4] !== v3.serial
-          || b1[5] !== s0 || b1[6] !== s1 || b1[7] !== s2 || b1[8] !== s3) {
-        const k1 = `${cube ? 1 : 0}${v0.serial},${v1.serial},${v2.serial},${v3.serial}|${s0},${s1},${s2},${s3}`;
+          || b1[5] !== v4.serial || b1[6] !== v5.serial || b1[7] !== v6.serial || b1[8] !== v7.serial
+          || b1[9] !== s0 || b1[10] !== s1 || b1[11] !== s2 || b1[12] !== s3
+          || b1[13] !== s4 || b1[14] !== s5 || b1[15] !== s6 || b1[16] !== s7) {
+        const k1 = `${cube ? 1 : 0}${v0.serial},${v1.serial},${v2.serial},${v3.serial},${v4.serial},${v5.serial},${v6.serial},${v7.serial}|${s0},${s1},${s2},${s3},${s4},${s5},${s6},${s7}`;
         let g = this.bg1.get(k1);
         if (!g) {
           g = dev.createBindGroup({ layout: cube ? this.bgl1c : this.bgl1, entries: [
             { binding: 0, resource: v0.view }, { binding: 1, resource: v1.view }, { binding: 2, resource: v2.view }, { binding: 3, resource: v3.view },
-            { binding: 4, resource: this.sampler(s0) }, { binding: 5, resource: this.sampler(s1) },
-            { binding: 6, resource: this.sampler(s2) }, { binding: 7, resource: this.sampler(s3) }] });
+            { binding: 4, resource: v4.view }, { binding: 5, resource: v5.view }, { binding: 6, resource: v6.view }, { binding: 7, resource: v7.view },
+            { binding: 8, resource: this.sampler(s0) }, { binding: 9, resource: this.sampler(s1) },
+            { binding: 10, resource: this.sampler(s2) }, { binding: 11, resource: this.sampler(s3) },
+            { binding: 12, resource: this.sampler(s4) }, { binding: 13, resource: this.sampler(s5) },
+            { binding: 14, resource: this.sampler(s6) }, { binding: 15, resource: this.sampler(s7) }] });
           this.bg1.set(k1, g); this.calls.bg1New++;
         }
         p.setBindGroup(1, g); this.calls.bg1++;
-        b1[0] = cube ? 1 : 0; b1[1] = v0.serial; b1[2] = v1.serial; b1[3] = v2.serial; b1[4] = v3.serial;
-        b1[5] = s0; b1[6] = s1; b1[7] = s2; b1[8] = s3;
+        b1[0] = cube ? 1 : 0;
+        b1[1] = v0.serial; b1[2] = v1.serial; b1[3] = v2.serial; b1[4] = v3.serial;
+        b1[5] = v4.serial; b1[6] = v5.serial; b1[7] = v6.serial; b1[8] = v7.serial;
+        b1[9] = s0; b1[10] = s1; b1[11] = s2; b1[12] = s3;
+        b1[13] = s4; b1[14] = s5; b1[15] = s6; b1[16] = s7;
       }
       const bcol = u32[w + D.bcol];
       if (bcol !== cBcol) { p.setBlendConstant({ r: ((bcol >>> 16) & 255) / 255, g: ((bcol >>> 8) & 255) / 255, b: (bcol & 255) / 255, a: (bcol >>> 24) / 255 }); cBcol = bcol; this.calls.blend++; }

@@ -20,7 +20,7 @@
 #include <stddef.h>
 
 #define GW_MAGIC   0x55504757u          /* "WGPU" */
-#define GW_VERSION 7u                   /* 7: immutable per-draw headlights */
+#define GW_VERSION 8u                   /* 8: 8-wide inter-stage ABI (smp[8]) */
 #define GW_NBUF    2                    /* record buffers: one being written, one handed off */
 
 /* GwDraw.kind */
@@ -44,7 +44,7 @@ typedef struct {
     uint32_t rawoff;      /* raw arena byte offset (raw draw) or pool offset of vertex 0 (indexed) */
     uint32_t koff;        /* VS constant block offset in the K arena (16-byte aligned) */
     float    proj[4];     /* per stage: TEXCOORDINDEX + 16 * projection mode */
-    uint32_t smp[4];      /* packed sampler keys (com.c smp_push) */
+    uint32_t smp[8];      /* packed sampler keys (com.c smp_push) */
     uint32_t blit_src;    /* GW_BLIT: source texture id; GW_DRAW: headlight block byte offset */
     uint32_t bcol;        /* D3DRS_BLENDFACTOR (ARGB) */
     uint32_t cull;        /* D3DCULL: 1 none, 2 CW, 3 CCW */
@@ -283,15 +283,15 @@ typedef struct { uint32_t magic, state, n, target, gen, ack, tile, want; float f
 /* Layout word: changes whenever a struct above changes shape. */
 #define GW_LAYOUT ((uint32_t)(sizeof(GwDraw) | sizeof(GwFrame) << 8 | (sizeof(GwCtl) & 0xFFF) << 16) ^ (GW_VERSION << 28))
 
-_Static_assert(sizeof(GwDraw) == 180, "GwDraw");
+_Static_assert(sizeof(GwDraw) == 196, "GwDraw");
 _Static_assert(offsetof(GwDraw, kind) == 16 && offsetof(GwDraw, aref) == 24 && offsetof(GwDraw, depth) == 28, "GwDraw a");
 _Static_assert(offsetof(GwDraw, ps) == 44 && offsetof(GwDraw, psci) == 48 && offsetof(GwDraw, vsid) == 52, "GwDraw b");
 _Static_assert(offsetof(GwDraw, rawoff) == 56 && offsetof(GwDraw, koff) == 60 && offsetof(GwDraw, proj) == 64, "GwDraw c");
-_Static_assert(offsetof(GwDraw, smp) == 80 && offsetof(GwDraw, blit_src) == 96 && offsetof(GwDraw, bcol) == 100, "GwDraw d");
-_Static_assert(offsetof(GwDraw, cull) == 104 && offsetof(GwDraw, fogv) == 108 && offsetof(GwDraw, clr_argb) == 124, "GwDraw e");
-_Static_assert(offsetof(GwDraw, clr_flags) == 128 && offsetof(GwDraw, clr_z) == 132 && offsetof(GwDraw, ksz) == 136, "GwDraw f");
-_Static_assert(offsetof(GwDraw, ix_isz) == 140 && offsetof(GwDraw, ix_ib) == 144 && offsetof(GwDraw, ix_base) == 148, "GwDraw g");
-_Static_assert(offsetof(GwDraw, clip) == 152, "GwDraw h");
+_Static_assert(offsetof(GwDraw, smp) == 80 && offsetof(GwDraw, blit_src) == 112 && offsetof(GwDraw, bcol) == 116, "GwDraw d");
+_Static_assert(offsetof(GwDraw, cull) == 120 && offsetof(GwDraw, fogv) == 124 && offsetof(GwDraw, clr_argb) == 140, "GwDraw e");
+_Static_assert(offsetof(GwDraw, clr_flags) == 144 && offsetof(GwDraw, clr_z) == 148 && offsetof(GwDraw, ksz) == 152, "GwDraw f");
+_Static_assert(offsetof(GwDraw, ix_isz) == 156 && offsetof(GwDraw, ix_ib) == 160 && offsetof(GwDraw, ix_base) == 164, "GwDraw g");
+_Static_assert(offsetof(GwDraw, clip) == 168, "GwDraw h");
 _Static_assert(sizeof(GwFrame) == 156 && offsetof(GwFrame, rq_end) == 44 && offsetof(GwFrame, dump_label) == 72, "GwFrame");
 _Static_assert(offsetof(GwFrame, rb_id) == 136 && offsetof(GwFrame, rb_rows) == 152, "GwFrame rb");
 _Static_assert(offsetof(GwCtl, state) == 16 && offsetof(GwCtl, bell) == 20 && offsetof(GwCtl, attached) == 24, "GwCtl a");

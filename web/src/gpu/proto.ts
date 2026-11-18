@@ -4,7 +4,7 @@
 // the renderer refuses a control block whose layout word differs.
 
 export const GW_MAGIC = 0x55504757;
-export const GW_VERSION = 7;
+export const GW_VERSION = 8;
 export const GW_NBUF = 2;
 // GwHL: the other cars' headlights at this byte offset of every frame's VS constant arena (group 0 binding 3)
 export const K_HL = 256, HL_BYTES = 656, HL_MAX = 8;
@@ -32,12 +32,12 @@ export const KWIN_ROWS = 4096;
 
 // GwDraw: 180 bytes, all 32-bit fields (word index = byte offset / 4).  A blit's first and count: its source
 // rectangle, left | top << 16 and right | bottom << 16 (count 0 = the whole source)
-export const DRAW_BYTES = 180, DRAW_WORDS = 45;
+export const DRAW_BYTES = 196, DRAW_WORDS = 49;
 export const enum D {
   first = 0, count = 1, tex = 2, target = 3, kind = 4, blend = 5, aref = 6, depth = 7,
   tex1 = 8, tex2 = 9, tex3 = 10, ps = 11, psci = 12, vsid = 13, rawoff = 14, koff = 15,
-  proj = 16, smp = 20, blitSrc = 24, bcol = 25, cull = 26, fogv = 27, clrArgb = 31, clrFlags = 32,
-  clrZ = 33, ksz = 34, ixIsz = 35, ixIb = 36, ixBase = 37, clip = 38, viewport = 39,
+  proj = 16, smp = 20, blitSrc = 28, bcol = 29, cull = 30, fogv = 31, clrArgb = 35, clrFlags = 36,
+  clrZ = 37, ksz = 38, ixIsz = 39, ixIb = 40, ixBase = 41, clip = 42, viewport = 43,
 }
 export const enum Kind { Draw = 0, Clear = 1, Blit = 2 }
 

@@ -47,7 +47,8 @@ static const char W_VOUT[] =
     "  @builtin(position) pos: vec4f,\n"
     "  @location(0) col0: vec4f, @location(1) col1: vec4f,\n"
     "  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,\n"
-    "  @location(6) fog: f32,\n"
+    "  @location(6) uv4: vec4f, @location(7) uv5: vec4f, @location(8) uv6: vec4f, @location(9) uv7: vec4f,\n"
+    "  @location(10) fog: f32,\n"
     "}\n";
 /* K is a 64 KB window of the frame's VS constant arena, bound once for many
  * draws; a draw's block {stride, tsel, base, target w | h << 16; c[0..255]} starts at row
@@ -135,11 +136,11 @@ static const char W_PSPAR[] =
     "struct PSOut { @location(0) col: vec4f, @builtin(frag_depth) depth: f32 };\n";
 
 static void w_textures(WBuf *b, unsigned cubemask){
-    for (int k = 0; k < 4; k++)
+    for (int k = 0; k < 8; k++)
         wb_put(b, "@group(1) @binding(%d) var tex%d: %s;\n", k, k,
                ((cubemask >> k) & 1u) ? "texture_cube<f32>" : "texture_2d<f32>");
-    for (int k = 0; k < 4; k++)
-        wb_put(b, "@group(1) @binding(%d) var smp%d: sampler;\n", 4 + k, k);
+    for (int k = 0; k < 8; k++)
+        wb_put(b, "@group(1) @binding(%d) var smp%d: sampler;\n", 8 + k, k);
 }
 
 /* f32 literal that survives a round trip (9 significant digits) and always
@@ -171,7 +172,7 @@ static void w_reg(WCtx *x, char *o, size_t cap, unsigned tok, unsigned rel){
     case R_INPUT: n &= vs ? 15 : 1;  x->v |= 1u << n; snprintf(o, cap, "v%d", n); return;
     case R_ADDR:
         if (vs){ x->a0 = 1; snprintf(o, cap, "vec4f(a0)"); }
-        else   { n &= 3; x->t |= 1u << n; snprintf(o, cap, "t%d", n); }
+        else   { n &= 7; x->t |= 1u << n; snprintf(o, cap, "t%d", n); }
         return;
     case R_LOOP:     x->aL = 1; snprintf(o, cap, "vec4f(f32(aL))"); return;
     case R_COLOROUT: x->oC = 1; snprintf(o, cap, "oC"); return;
@@ -331,7 +332,7 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
         for (unsigned q = 0; q < p->n; q++){
             const VSIns *y = &p->ins[q];
             if (y->op != O_DCL || RT(y->dst) != R_ADDR) continue;
-            int k = RN(y->dst) & 3;
+            int k = RN(y->dst) & 7;
             x.t |= 1u << k;
             wb_put(&bb, "  t%d = select(vec4f(0.0), i.uv%d, PS20_TEXCOORD);\n", k, k);
         }
@@ -342,11 +343,14 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
     for (unsigned q = 0; q < p->n; q++){
         const VSIns *y = &p->ins[q];
         if (y->op != O_TEX && y->op != O_TEXLDD && y->op != O_TEXLDL) continue;
-        if (y->nsrc == 1 && RT(y->src[0]) == R_ADDR) tcuse |= 1u << (RN(y->src[0]) & 3);
-        else if (y->nsrc == 0)                       tcuse |= 1u << (RN(y->dst) & 3);
+        if (y->nsrc == 1 && RT(y->src[0]) == R_ADDR) tcuse |= 1u << (RN(y->src[0]) & 7);
+        else if (y->nsrc == 0)                       tcuse |= 1u << (RN(y->dst) & 7);
     }
-    for (int k = 0; k < 4; k++)
-        if (tcuse & (1u << k)) wb_put(&bb, "  let tc%d = tcoord(i.uv%d, P.proj[%d]);\n", k, k, k);
+    for (int k = 0; k < 8; k++)
+        if (tcuse & (1u << k)){
+            if (k < 4) wb_put(&bb, "  let tc%d = tcoord(i.uv%d, P.proj[%d]);\n", k, k, k);
+            else       wb_put(&bb, "  let tc%d = tcoord(i.uv%d, 0.0);\n", k, k);
+        }
 
     int hl_mul = -1, hl_used = 0;
     for (unsigned q = 0; q < p->n && bb.ok && !x.bad; q++){
@@ -365,11 +369,12 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
              * ps_1_4 "texld rN, tM": sampler N, coordinate M
              * ps_1_4 "texld rN, rM": dependent read at rM.xy
              * ps_2_0 "texld d, src, sN": sampler N at src.xy
-             * A cube stage samples the 3-component vector (no divide). */
+             * A cube stage samples the 3-component vector (no divide).
+             * ps_1_x dn (sampler for tex/texld/texldd) stays & 3 (ps_1_x has 4 stages). */
             int dn = RN(y->dst) & 3, smp, crd = -1;
             const char *cs = 0;
-            if (y->nsrc >= 2){ smp = RN(y->src[1]) & 3; cs = s0; }
-            else if (y->nsrc == 1 && RT(y->src[0]) == R_ADDR){ smp = dn; crd = RN(y->src[0]) & 3; }
+            if (y->nsrc >= 2){ smp = RN(y->src[1]) & 7; cs = s0; }
+            else if (y->nsrc == 1 && RT(y->src[0]) == R_ADDR){ smp = dn; crd = RN(y->src[0]) & 7; }
             else if (y->nsrc == 1){ smp = dn; cs = s0; }
             else { smp = dn; crd = dn; }
             int cube = (cubemask >> smp) & 1u;
@@ -383,7 +388,7 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
         case O_TEXCOORD: {
             /* texcoord tN / texcrd: t[N] = uvN (the Mac uses the destination
              * number for both, also for ps_1_4 texcrd rN, tM) */
-            int dn = RN(y->dst) & 3;
+            int dn = RN(y->dst) & 7;
             x.t |= 1u << dn;
             wb_put(&bb, "  t%d = i.uv%d;\n", dn, dn);
             continue; }
@@ -397,7 +402,7 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
              * NFSU2's shaders have no texkill. */
             int kty = RT(y->dst);
             char kr[64];
-            if (kty == R_ADDR && p->version < 0x0200) snprintf(kr, sizeof kr, "i.uv%d", RN(y->dst) & 3);
+            if (kty == R_ADDR && p->version < 0x0200) snprintf(kr, sizeof kr, "i.uv%d", RN(y->dst) & 7);
             else if (kty == R_TEMP || kty == R_ADDR) w_reg(&x, kr, sizeof kr, y->dst, 0);
             else { x.bad = 1; continue; }
             if (p->version >= 0x0200) wb_put(&bb, "  if (any(%s < vec4f(0.0))) { discard; }\n", kr);
@@ -504,12 +509,16 @@ int ps_to_wgsl_ex2(const VSProg *p, int id, char *out, size_t cap, unsigned cube
     declbuf = NULL;
     if (x.v & 1u) wb_put(&ob, "  var v0 = i.col0;\n");
     if (x.v & 2u) wb_put(&ob, "  var v1 = i.col1;\n");
-    for (int t = 0; t < 4; t++) if (x.t & (1u << t)) wb_put(&ob, "  var t%d = vec4f(0.0);\n", t);
+    for (int t = 0; t < 8; t++) if (x.t & (1u << t)) wb_put(&ob, "  var t%d = vec4f(0.0);\n", t);
     if (x.oC) wb_put(&ob, "  var oC = vec4f(0.0);\n");
     if (x.oD) wb_put(&ob, "  var depth = vec4f(0.0);\n");
     wb_put(&ob, "%s", bodybuf);
     if (x.oD){
-        wb_put(&ob, "  return PSOut(%s, depth.x);\n}\n", usec ? "oC" : "r0");
+        /* The depth-writing form still needs the alpha test and the fog mix:
+         * both are D3D9 fixed-function stages applied after the shader, and
+         * both the CPU oracle (ps_ref_run) and the MSL emitter (ps_to_msl)
+         * apply them for every shader.  ps_end does exactly that. */
+        wb_put(&ob, "  return PSOut(ps_end(%s, i.fog), depth.x);\n}\n", usec ? "oC" : "r0");
     } else {
         wb_put(&ob, "  return ps_end(%s, i.fog);\n}\n", usec ? "oC" : "r0");
     }
@@ -560,8 +569,10 @@ static int decl_read_wgsl(char *o, size_t cap, unsigned type, unsigned off){
     return 1;
 }
 
-/* Destination of a vertex shader write (vs_dst_msl): oT4..7 alias oT0..3 and
- * unknown registers go to a scratch variable, exactly as on the Mac. */
+/* Destination of a vertex shader write (vs_dst_msl): oT0..oT7 are the
+ * inter-stage outputs; oT8 and above are dropped (the CPU oracle drops them
+ * too, so the differential stays consistent).  Unknown registers go to a
+ * scratch variable, exactly as on the Mac. */
 static int w_vsdst(WCtx *x, char *o, size_t cap, unsigned tok){
     int ty = RT(tok), n = RN(tok);
     switch (ty){
@@ -571,7 +582,8 @@ static int w_vsdst(WCtx *x, char *o, size_t cap, unsigned tok){
                     if (n == 1){ snprintf(o, cap, "oFog"); return 0; }
                     x->dummy = 1; snprintf(o, cap, "dummy"); return 0;
     case R_ATTROUT: snprintf(o, cap, "oD%d", n & 1); return 0;
-    case R_OUTPUT:  snprintf(o, cap, "oT%d", n & 3); return 0;
+    case R_OUTPUT:  if (n < 8){ snprintf(o, cap, "oT%d", n); return 0; }
+                    x->dummy = 1; snprintf(o, cap, "dummy"); return 0;
     default:        x->dummy = 1; snprintf(o, cap, "dummy"); return 0;
     }
 }
@@ -704,6 +716,7 @@ int vs_to_wgsl(const VSProg *p, int id, const int decl[16][2], char *out, size_t
     wb_put(&ob, "  var oPos = vec4f(0.0, 0.0, 0.0, 1.0);\n"
                 "  var oD0 = vec4f(1.0); var oD1 = vec4f(0.0);\n"
                 "  var oT0 = vec4f(0.0); var oT1 = vec4f(0.0); var oT2 = vec4f(0.0); var oT3 = vec4f(0.0);\n"
+                "  var oT4 = vec4f(0.0); var oT5 = vec4f(0.0); var oT6 = vec4f(0.0); var oT7 = vec4f(0.0);\n"
                 "  var oFog = vec4f(1.0);\n");
     wb_put(&ob, "%s", bodybuf);
     /* Epilogue: D3D9's pixel centres, no colour clamp; D3DTSS_TEXCOORDINDEX
@@ -721,6 +734,7 @@ int vs_to_wgsl(const VSProg *p, int id, const int decl[16][2], char *out, size_t
                 "  o.uv1 = tpick((KH.y >> 8u) & 3u, oT0, oT1, oT2, oT3);\n"
                 "  o.uv2 = tpick((KH.y >> 16u) & 3u, oT0, oT1, oT2, oT3);\n"
                 "  o.uv3 = tpick((KH.y >> 24u) & 3u, oT0, oT1, oT2, oT3);\n"
+                "  o.uv4 = oT4; o.uv5 = oT5; o.uv6 = oT6; o.uv7 = oT7;\n"
                 "  o.fog = oFog.x;\n"
                 "  return o;\n}\n");
     if (ob.ok) rc = (int)ob.n;

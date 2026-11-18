@@ -16,8 +16,8 @@ export const HLPAR_SIZE = 656;
 export const TVERT_SIZE = 112;
 /** Pixel shader id offset of the stage-0 cube twin (com.c / metal.m PSCUBE). */
 export const PSCUBE = 256;
-/** Interstage locations used by VOut (col0, col1, uv0..uv3, fog). */
-export const VOUT_LOCATIONS = 7;
+/** Interstage locations used by VOut (col0, col1, uv0..uv7, fog). */
+export const VOUT_LOCATIONS = 11;
 
 /** D3DCMP values for the ALPHA_FUNC override: 7 = the Mac's "a >= aref" test, 8 = no test, no discard. */
 export const ALPHA_GREATEREQUAL = 7;
@@ -37,9 +37,9 @@ export function isCubePs(id: number): boolean { return id >= PSCUBE; }
 export interface ShaderAbi {
   /** group 0: VB (storage), K and P (uniform, dynamic offsets in that order), H (uniform, the frame's). */
   group0: GPUBindGroupLayout;
-  /** group 1: tex0..tex3 (2d) at bindings 0..3, smp0..smp3 at 4..7. */
+  /** group 1: tex0..tex7 (2d) at bindings 0..7, smp0..smp7 at 8..15. */
   group1: GPUBindGroupLayout;
-  /** group 1 with tex0 as a cube texture. */
+  /** group 1 with tex0 as a cube texture (8 textures, 8 samplers). */
   group1Cube: GPUBindGroupLayout;
   layout2d: GPUPipelineLayout;
   layoutCube: GPUPipelineLayout;
@@ -58,9 +58,9 @@ export function createShaderAbi(device: GPUDevice): ShaderAbi {
   });
   const textures = (cube: boolean): GPUBindGroupLayoutEntry[] => {
     const e: GPUBindGroupLayoutEntry[] = [];
-    for (let k = 0; k < 4; k++)
+    for (let k = 0; k < 8; k++)
       e.push({ binding: k, visibility: F, texture: { sampleType: 'float', viewDimension: cube && k === 0 ? 'cube' : '2d' } });
-    for (let k = 0; k < 4; k++) e.push({ binding: 4 + k, visibility: F, sampler: { type: 'filtering' } });
+    for (let k = 0; k < 8; k++) e.push({ binding: 8 + k, visibility: F, sampler: { type: 'filtering' } });
     return e;
   };
   const group1 = device.createBindGroupLayout({ label: 'abi.group1', entries: textures(false) });

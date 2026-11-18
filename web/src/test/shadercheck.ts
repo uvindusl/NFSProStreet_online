@@ -7,7 +7,7 @@
 //
 //   /test/shadercheck.html?opfs=<dir>/<sub>   the dump in OPFS (default shadercheck/shaders)
 //   &cross                                    also every game VS (ids < 1000) x every game PS
-import { ALPHA_ALWAYS, ALPHA_GREATEREQUAL, KWIN_SIZE, HLPAR_SIZE, createShaderAbi, isCubePs, type ShaderAbi } from '../gpu/shader-abi';
+import { ALPHA_ALWAYS, ALPHA_GREATEREQUAL, KWIN_SIZE, HLPAR_SIZE, PSPAR_SIZE, createShaderAbi, isCubePs, type ShaderAbi } from '../gpu/shader-abi';
 
 const q = new URLSearchParams(location.search);
 const pre = document.createElement('pre'); document.body.append(pre);
@@ -215,11 +215,14 @@ async function psDiff(device: GPUDevice, name: string, code: string, vec: ArrayB
   const head = code.match(/@fragment fn (ps_\d+)\(i: VOut\) -> (@location\(0\) vec4f|PSOut) \{/);
   if (!head) { failures.push(`${name}: no fragment entry point`); return; }
   const retType = head[2];  // '@location(0) vec4f' or 'PSOut'
-  // Rewrite entry point to fn psfn(i: VOut) -> <retType> {
-  const body = code.replace(head[0], `fn psfn(i: VOut) -> ${retType} {`).replaceAll('{ discard; }', '{ KILL = 1u; }')
-    .replace(/textureSample\(tex(\d), smp\d, /g, (_m, k) => ((cubemask >> +k) & 1) ? `ftex3(${k}u, ` : `ftex2(${k}u, `);
-  // Determine call convention: PSOut form accesses .col, vec4f form returns directly
+  // Determine call convention: PSOut form accesses .col, vec4f form returns directly.
+  // The plain function's return type must drop @location (an interpolation attribute
+  // is only valid on an entry point), so '@location(0) vec4f' becomes 'vec4f'.
   const isPSOut = retType === 'PSOut';
+  const fnRet = isPSOut ? 'PSOut' : 'vec4f';
+  // Rewrite entry point to fn psfn(i: VOut) -> <fnRet> {
+  const body = code.replace(head[0], `fn psfn(i: VOut) -> ${fnRet} {`).replaceAll('{ discard; }', '{ KILL = 1u; }')
+    .replace(/textureSample\(tex(\d), smp\d, /g, (_m, k) => ((cubemask >> +k) & 1) ? `ftex3(${k}u, ` : `ftex2(${k}u, `);
   const cs = body + FTEX + `
 var<private> KILL: u32;
 @group(0) @binding(4) var<storage, read> PIN: array<f32>;
@@ -241,7 +244,7 @@ var<private> KILL: u32;
   i.uv7 = vec4f(PIN[b + 36u], PIN[b + 37u], PIN[b + 38u], PIN[b + 39u]);
   i.fog = PIN[b + 40u];
   KILL = 0u;
-  let c = ${isPSOut} ? psfn(i).col : psfn(i);
+  let c = ${isPSOut ? 'psfn(i).col' : 'psfn(i)'};
   let o = g.x * 5u;
   POUT[o] = c.x; POUT[o + 1u] = c.y; POUT[o + 2u] = c.z; POUT[o + 3u] = c.w; POUT[o + 4u] = f32(KILL);
 }`;
@@ -249,7 +252,21 @@ var<private> KILL: u32;
   const ci = await module.getCompilationInfo();
   const errs = ci.messages.filter(m => m.type === 'error');
   if (errs.length) { failures.push(`${name} (compute twin): ${errs.map(m => m.message).join('; ')}`); return; }
-  const pipe = await device.createComputePipelineAsync({ layout: 'auto', compute: { module } });
+  // the lit pixel shaders also read H, the other cars' headlights: none (n = 0), as the
+  // reference interpreter has no such term (a web-only addition)
+  const hasH = /@group\(0\) @binding\(3\)/.test(code);
+  // An explicit compute layout: 'auto' drops any binding the module does not
+  // statically use, and a pixel shader that writes only oDepth never reads P
+  // (it returns PSOut without ps_end), so its auto layout would not carry
+  // binding 2 and the bind group below would be rejected -- the dispatch then
+  // silently writes zeros and every pixel looks like a mismatch.
+  const cbgl = device.createBindGroupLayout({ label: 'psdiff', entries: [
+    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform', minBindingSize: PSPAR_SIZE } },
+    { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
+    { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+    ...(hasH ? [{ binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' as const, minBindingSize: HLPAR_SIZE } }] : []),
+  ] });
+  const pipe = await device.createComputePipelineAsync({ layout: device.createPipelineLayout({ bindGroupLayouts: [cbgl] }), compute: { module } });
   const mk = (size: number, usage: number) => device.createBuffer({ size, usage });
   const pb = mk(560, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
   device.queue.writeBuffer(pb, 0, par);
@@ -257,9 +274,7 @@ var<private> KILL: u32;
   device.queue.writeBuffer(ib, 0, inputs);
   const ob = mk(np * 20, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
   const rd = mk(np * 20, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST);
-  // the lit pixel shaders also read H, the other cars' headlights: none (n = 0), as the
-  // reference interpreter has no such term (a web-only addition)
-  const hb = /@group\(0\) @binding\(3\)/.test(code) ? mk(HLPAR_SIZE, GPUBufferUsage.UNIFORM) : null;
+  const hb = hasH ? mk(HLPAR_SIZE, GPUBufferUsage.UNIFORM) : null;
   const bg = device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
     { binding: 2, resource: { buffer: pb } }, { binding: 4, resource: { buffer: ib } }, { binding: 5, resource: { buffer: ob } },
     ...(hb ? [{ binding: 3, resource: { buffer: hb } }] : [])] });

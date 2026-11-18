@@ -5,7 +5,7 @@
 // from the translator (track gpu-shaders) over the same bindings:
 //   group 0: VB (storage, vertex pulling), K (VS constants, dynamic offset),
 //            P (PS parameters, dynamic offset)
-//   group 1: t0..t3 at bindings 0..3, s0..s3 at bindings 4..7
+//   group 1: tex0..tex7 at bindings 0..7, smp0..smp7 at bindings 8..15
 // and the same inter-stage block (VOut), so a translated pixel shader can sit
 // behind the TVert vertex stage and the other way round.
 
@@ -18,7 +18,11 @@ struct VOut {
   @location(3) uv1: vec4f,
   @location(4) uv2: vec4f,
   @location(5) uv3: vec4f,
-  @location(6) fog: f32,
+  @location(6) uv4: vec4f,
+  @location(7) uv5: vec4f,
+  @location(8) uv6: vec4f,
+  @location(9) uv7: vec4f,
+  @location(10) fog: f32,
 }`;
 
 const PSPAR = /* wgsl */`
@@ -28,6 +32,7 @@ struct PSPar { aref: f32, usec: f32, pad0: f32, pad1: f32, proj: vec4f, c: array
 // The CPU vertex path (com.c draw_up -> metal_draw_tv): clip-space vertices,
 // both colours and four 4-component texture coordinates, pulled from the
 // frame's TVert arena (28 floats per vertex).  As metal.m vmain: no fog.
+// TVert stride is NOT widened (stays 28 floats = 112 bytes): uv4..uv7 zero-filled.
 export const TVERT_VS = /* wgsl */`
 ${VOUT}
 @group(0) @binding(0) var<storage, read> VB: array<f32>;
@@ -41,6 +46,7 @@ ${VOUT}
   o.uv1  = vec4f(VB[b + 16u], VB[b + 17u], VB[b + 18u], VB[b + 19u]);
   o.uv2  = vec4f(VB[b + 20u], VB[b + 21u], VB[b + 22u], VB[b + 23u]);
   o.uv3  = vec4f(VB[b + 24u], VB[b + 25u], VB[b + 26u], VB[b + 27u]);
+  o.uv4  = vec4f(0.0); o.uv5  = vec4f(0.0); o.uv6  = vec4f(0.0); o.uv7  = vec4f(0.0);
   o.fog  = 1.0;
   return o;
 }`;
@@ -53,7 +59,7 @@ export const FF_FS = (cube: boolean) => /* wgsl */`
 ${VOUT}
 ${PSPAR}
 @group(1) @binding(0) var t0: ${cube ? 'texture_cube<f32>' : 'texture_2d<f32>'};
-@group(1) @binding(4) var s0: sampler;
+@group(1) @binding(8) var s0: sampler;
 override ALPHA_FUNC: u32 = 7u;
 @fragment fn fs_ff(i: VOut) -> @location(0) vec4f {
   var c = i.col0 * textureSample(t0, s0, ${cube ? 'i.uv0.xyz' : 'i.uv0.xy'});

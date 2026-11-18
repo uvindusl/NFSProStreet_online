@@ -1596,9 +1596,9 @@ static const VSConst *fixmat_apply(const VSConst *vsk){
  *          9=MAXMIPLEVEL 10=MAXANISOTROPY
  * Previously all of it was ignored and everything was drawn linear+mip-linear. */
 static void smp_push(void){
-    void metal_set_samplers(const unsigned k[4]);
-    unsigned k[4];
-    for (int st = 0; st < 4; st++){
+    void metal_set_samplers(const unsigned k[8]);
+    unsigned k[8];
+    for (int st = 0; st < 8; st++){
         unsigned mn = g_smp_raw[st][6], mg = g_smp_raw[st][5], mp = g_smp_raw[st][7];
         unsigned au = g_smp_raw[st][1], av = g_smp_raw[st][2], an = g_smp_raw[st][10];
         if (mn < 1u || mn > 3u) mn = 2u;          /* invalid/unset -> LINEAR */

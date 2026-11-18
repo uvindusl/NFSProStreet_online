@@ -92,7 +92,7 @@ static int      g_cur_ps;
 static float    g_cur_psc[PSC_N][4];
 static unsigned g_psc_ver = 1;
 static float    g_cur_proj[4];
-static unsigned g_cur_smp[4];
+static unsigned g_cur_smp[8];
 static float    g_cur_aref;
 static float    g_cur_fog[4];
 static unsigned g_clear_argb = 0;            /* last colour Clear set (frame header) */
@@ -627,7 +627,7 @@ void web_set_viewport(unsigned x, unsigned y, unsigned w, unsigned h, float z0, 
     g_viewport[4] = z0; g_viewport[5] = z1;
 }
 void metal_set_render_target(unsigned t){ g_cur_target = t; memset(g_viewport, 0, sizeof g_viewport); }
-void metal_set_samplers(const unsigned k[4]){ for (int i = 0; i < 4; i++) g_cur_smp[i] = k[i]; }
+void metal_set_samplers(const unsigned k[8]){ for (int i = 0; i < 8; i++) g_cur_smp[i] = k[i]; }
 void metal_set_stage_tex(unsigned a, unsigned b, unsigned c3){ g_cur_tex1 = a; g_cur_tex2 = b; g_cur_tex3 = c3; }
 void metal_set_ps(int id, const float *c32){
     g_cur_ps = id;
@@ -697,11 +697,11 @@ static uint32_t target_wh(void){
 }
 /* the four stages' sampler keys (com.c smp_push: U at bits 6-8, V at 9-11,
  * 1 = WRAP, 3 = CLAMP), WRAP made CLAMP on a screen-sized render target */
-static void smp_eff(unsigned tex, uint32_t out[4]){
-    const unsigned t[4] = { tex, g_cur_tex1, g_cur_tex2, g_cur_tex3 };
+static void smp_eff(unsigned tex, uint32_t out[8]){
+    const unsigned t[8] = { tex, g_cur_tex1, g_cur_tex2, g_cur_tex3, 0, 0, 0, 0 };
     unsigned bw = 0, bh = 0;
     if (halfpx_on()) screen_wh(&bw, &bh);
-    for (int i = 0; i < 4; i++){
+    for (int i = 0; i < 8; i++){
         uint32_t k = g_cur_smp[i];
         unsigned id = t[i];
         if (bw && id && id < MAXTEX && g_tex[id].live && g_tex[id].rt && !g_tex[id].cube
@@ -809,7 +809,7 @@ static GwDraw *raw_merge(Buf *B, unsigned stride, unsigned tex, int vsid, const 
     uint32_t tsel = 0;
     for (int q = 0; q < 4; q++) tsel |= ((uint32_t)((int)g_cur_proj[q]) & 3u) << (8 * q);
     if (h[0] != stride || h[1] != tsel || h[3] != target_wh() || memcmp(h + 4, k, nk * 16u)) return NULL;
-    uint32_t smp[4]; smp_eff(tex, smp);
+    uint32_t smp[8]; smp_eff(tex, smp);
     if (P->tex != tex || P->target != g_cur_target || P->blend != g_cur_blend || memcmp(&P->aref, &g_cur_aref, 4)
         || P->depth != g_cur_depth || P->tex1 != g_cur_tex1 || P->tex2 != g_cur_tex2 || P->tex3 != g_cur_tex3
         || P->ps != ps_of(tex) || P->psci != psc_put(B) || memcmp(P->proj, g_cur_proj, sizeof P->proj)
