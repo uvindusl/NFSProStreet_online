@@ -1,0 +1,246 @@
+<!doctype html>
+<meta charset=utf-8>
+<title>Encoder 8-wide group-1 smoke test</title>
+<style>
+html,body{margin:0;height:100%;background:#000;color:#0f0;font-family:monospace;font-size:12px;overflow:hidden}
+#log{position:fixed;top:8px;left:8px;color:#0f0;background:rgba(0,0,0,0.85);padding:8px;z-index:10;max-width:96vw;max-height:90vh;overflow:auto;white-space:pre-wrap}
+</style>
+<div id="log"></div>
+<script type=module>
+const logEl = document.getElementById('log');
+const log = (m) => { logEl.textContent += m + '\n'; logEl.scrollTop = logEl.scrollHeight; console.log(m); };
+
+// ---- Approach note ----
+// The real Encoder (web/src/gpu/encoder.ts) is TypeScript with a deep dependency
+// chain (proto, wgsl, shader-abi, dxt, viewport, astc, host/memory, hqskin) and
+// there is no built JS bundle in web/dist for it.  Importing it directly in a
+// headless page is impractical without a bundler.  Instead this page replicates
+// the bind-group-layout and bind-group creation exactly as encoder.ts does
+// (web/src/gpu/encoder.ts:219-221, :1093-1099): 8 textures at bindings 0..7 and
+// 8 samplers at bindings 8..15 in group 1, group 0 as VB/K/P/H, pipeline layout
+// [group0, group1], then draws against a real WGSL fragment shader that reads all
+// 8 texture stages and asserts readback.
+
+// Real ABI sizes (mirror web/src/gpu/shader-abi.ts, 8-wide).
+const KWIN_SIZE = 65536;
+const PSPAR_SIZE = 560;
+const HLPAR_SIZE = 656;
+
+// WGSL fragment shader that reads all 8 texture stages + 8 samplers.
+const WGSL_FS = `
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) col0: vec4f, @location(1) col1: vec4f,
+  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,
+  @location(6) fog: f32,
+};
+struct PSPar { aref: f32, usec: f32, pad0: f32, pad1: f32, proj: vec4f, c: array<vec4f, 32>, fog: vec4f }
+@group(0) @binding(2) var<uniform> P: PSPar;
+override ALPHA_FUNC: u32 = 8u;
+override PS20_TEXCOORD: bool = true;
+@group(1) @binding(0)  var tex0: texture_2d<f32>;
+@group(1) @binding(1)  var tex1: texture_2d<f32>;
+@group(1) @binding(2)  var tex2: texture_2d<f32>;
+@group(1) @binding(3)  var tex3: texture_2d<f32>;
+@group(1) @binding(4)  var tex4: texture_2d<f32>;
+@group(1) @binding(5)  var tex5: texture_2d<f32>;
+@group(1) @binding(6)  var tex6: texture_2d<f32>;
+@group(1) @binding(7)  var tex7: texture_2d<f32>;
+@group(1) @binding(8)  var smp0: sampler;
+@group(1) @binding(9)  var smp1: sampler;
+@group(1) @binding(10) var smp2: sampler;
+@group(1) @binding(11) var smp3: sampler;
+@group(1) @binding(12) var smp4: sampler;
+@group(1) @binding(13) var smp5: sampler;
+@group(1) @binding(14) var smp6: sampler;
+@group(1) @binding(15) var smp7: sampler;
+@fragment fn main(i: VOut) -> @location(0) vec4f {
+  let s = textureSample(tex0, smp0, i.uv0.xy)
+      + textureSample(tex1, smp1, i.uv0.xy)
+      + textureSample(tex2, smp2, i.uv0.xy)
+      + textureSample(tex3, smp3, i.uv0.xy)
+      + textureSample(tex4, smp4, i.uv0.xy)
+      + textureSample(tex5, smp5, i.uv0.xy)
+      + textureSample(tex6, smp6, i.uv0.xy)
+      + textureSample(tex7, smp7, i.uv0.xy);
+  return vec4f(s.rgb / 8.0, 1.0);
+}
+`;
+
+// Placeholder vertex shader (NOT the real emitted VS; its VOut matches the FS).
+const WGSL_VS = `
+struct VOut {
+  @builtin(position) pos: vec4f,
+  @location(0) col0: vec4f, @location(1) col1: vec4f,
+  @location(2) uv0: vec4f, @location(3) uv1: vec4f, @location(4) uv2: vec4f, @location(5) uv3: vec4f,
+  @location(6) fog: f32,
+};
+@vertex fn main(@builtin(vertex_index) vid: u32) -> VOut {
+  var pos = array<vec4f, 3>(
+    vec4f(-1.0, -1.0, 0.0, 1.0),
+    vec4f(1.0, -1.0, 0.0, 1.0),
+    vec4f(-1.0, 1.0, 0.0, 1.0)
+  );
+  var uv0 = array<vec4f, 3>(
+    vec4f(0.0, 1.0, 0.0, 1.0), vec4f(1.0, 1.0, 0.0, 1.0), vec4f(0.0, 0.0, 0.0, 1.0)
+  );
+  var col0 = array<vec4f, 3>(vec4f(1.0), vec4f(1.0), vec4f(1.0));
+  var col1 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var uv1 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var uv2 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var uv3 = array<vec4f, 3>(vec4f(0.0), vec4f(0.0), vec4f(0.0));
+  var fog = array<f32, 3>(1.0, 1.0, 1.0);
+  return VOut(pos[vid], col0[vid], col1[vid], uv0[vid], uv1[vid], uv2[vid], uv3[vid], fog[vid]);
+}
+`;
+
+(async () => {
+  if (!navigator.gpu) { log('FATAL: NO navigator.gpu'); return; }
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) { log('FATAL: NO adapter'); return; }
+  log('adapter: ' + JSON.stringify(adapter.info));
+  const device = await adapter.requestDevice();
+  log('device ready');
+
+  // ---- Replicate encoder.ts widened group-1 layout exactly ----
+  // encoder.ts:219-221: this.bgl1 = abi.group1 where group1 has
+  //   tex0..tex7 at bindings 0..7, smp0..smp7 at 8..15
+  const V = GPUShaderStage.VERTEX, F = GPUShaderStage.FRAGMENT;
+  const bgl1entries = [];
+  for (let k = 0; k < 8; k++)
+    bgl1entries.push({ binding: k, visibility: F, texture: { sampleType: 'float', viewDimension: '2d' } });
+  for (let k = 0; k < 8; k++) bgl1entries.push({ binding: 8 + k, visibility: F, sampler: { type: 'filtering' } });
+  const bgl1 = device.createBindGroupLayout({ label: 'smoke.bgl1', entries: bgl1entries });
+  log('bgl1 created: 8 textures bindings 0..7, 8 samplers bindings 8..15');
+
+  const bgl0 = device.createBindGroupLayout({
+    label: 'smoke.bgl0',
+    entries: [
+      { binding: 0, visibility: V, buffer: { type: 'read-only-storage' } },
+      { binding: 1, visibility: V, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: KWIN_SIZE } },
+      { binding: 2, visibility: F, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: PSPAR_SIZE } },
+      { binding: 3, visibility: F, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: HLPAR_SIZE } },
+    ],
+  });
+  const pl2d = device.createPipelineLayout({
+    label: 'smoke.layout2d',
+    bindGroupLayouts: [bgl0, bgl1],
+  });
+  log('pipeline layout [group0, group1] created');
+
+  const vsMod = device.createShaderModule({ code: WGSL_VS });
+  const fsMod = device.createShaderModule({ code: WGSL_FS });
+  log('shader modules created');
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 256;
+  canvas.style.border = '1px solid #0f0';
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('webgpu');
+  const fmt = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format: fmt, alphaMode: 'opaque' });
+
+  const texW = 256, texH = 256;
+  const renderTex = device.createTexture({
+    size: [texW, texH], format: fmt,
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
+
+  const vbBuf = device.createBuffer({ size: 256, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const kBuf = device.createBuffer({ size: KWIN_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const pBuf = device.createBuffer({ size: PSPAR_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const hBuf = device.createBuffer({ size: HLPAR_SIZE, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  // 8 white 1x1 textures + 8 filtering samplers (like encoder.ts white tex)
+  const whiteData = new Uint8Array([255, 255, 255, 255]);
+  const texs = [], smps = [];
+  for (let k = 0; k < 8; k++) {
+    const t = device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+    device.queue.writeTexture({ texture: t }, whiteData, { bytesPerRow: 4 }, [1, 1]);
+    texs.push(t);
+    smps.push(device.createSampler({ magFilter: 'linear', minFilter: 'linear' }));
+  }
+
+  const pipeline = device.createRenderPipeline({
+    layout: pl2d,
+    vertex: { module: vsMod, entryPoint: 'main' },
+    fragment: { module: fsMod, entryPoint: 'main', targets: [{ format: fmt }] },
+    primitive: { topology: 'triangle-list' },
+  });
+  log('pipeline created with widened group-1 layout');
+
+  const bg0 = device.createBindGroup({
+    layout: bgl0,
+    entries: [
+      { binding: 0, resource: { buffer: vbBuf } },
+      { binding: 1, resource: { buffer: kBuf, offset: 0, size: KWIN_SIZE } },
+      { binding: 2, resource: { buffer: pBuf, offset: 0, size: PSPAR_SIZE } },
+      { binding: 3, resource: { buffer: hBuf, offset: 0, size: HLPAR_SIZE } },
+    ],
+  });
+  const b1entries = [];
+  for (let k = 0; k < 8; k++) b1entries.push({ binding: k, resource: texs[k].createView() });
+  for (let k = 0; k < 8; k++) b1entries.push({ binding: 8 + k, resource: smps[k] });
+  const bg1 = device.createBindGroup({ layout: bgl1, entries: b1entries });
+  log('bind group 1 created: 8 texture views + 8 samplers, bindings 0..15');
+
+  // Draw into offscreen texture
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginRenderPass({
+    colorAttachments: [{
+      view: renderTex.createView(),
+      clearValue: { r: 0, g: 0, b: 0, a: 1 },
+      loadOp: 'clear', storeOp: 'store',
+    }],
+  });
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bg0, [0, 0, 0]);
+  pass.setBindGroup(1, bg1);
+  pass.draw(3);
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  await device.queue.onSubmittedWorkDone();
+
+  // Read back a pixel inside the triangle (64,128 -> inside lower-left half) and
+  // the centre (128,128 -> on the diagonal edge, outside coverage).
+  const insideX = 64, insideY = 128;
+  const cx = Math.floor(texW / 2), cy = Math.floor(texH / 2);
+  const probe = device.createBuffer({ size: 512, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+  const p2 = device.createCommandEncoder();
+  p2.copyTextureToBuffer(
+    { texture: renderTex, origin: { x: insideX, y: insideY } },
+    { buffer: probe, bytesPerRow: 256, offset: 0 },
+    [1, 1]
+  );
+  p2.copyTextureToBuffer(
+    { texture: renderTex, origin: { x: cx, y: cy } },
+    { buffer: probe, bytesPerRow: 256, offset: 256 },
+    [1, 1]
+  );
+  device.queue.submit([p2.finish()]);
+  await device.queue.onSubmittedWorkDone();
+  await probe.mapAsync(GPUMapMode.READ);
+  const mapped = probe.getMappedRange();
+  const cInside = new Uint8Array(mapped.slice(0, 4));
+  const cCenter = new Uint8Array(mapped.slice(256, 260));
+  probe.unmap();
+  probe.destroy();
+
+  // All 8 textures are white (255,255,255,255), textureSample returns (1,1,1,1),
+  // averaged -> (1,1,1,1) = [255,255,255,255] inside the triangle.
+  const okInside = cInside[0] === 255 && cInside[1] === 255 && cInside[2] === 255 && cInside[3] === 255;
+  // centre is on the triangle's diagonal edge: outside coverage -> clear color.
+  const okCenter = cCenter[0] === 0 && cCenter[1] === 0 && cCenter[2] === 0 && cCenter[3] === 255;
+  const ok = okInside && okCenter;
+
+  log('SMOKE ' + JSON.stringify({
+    ok,
+    inside: [cInside[0], cInside[1], cInside[2], cInside[3]],
+    center: [cCenter[0], cCenter[1], cCenter[2], cCenter[3]],
+    expectedInside: [255, 255, 255, 255],
+    expectedCenter: [0, 0, 0, 255],
+    approach: 'replicated encoder.ts bind-group layout+entries (8 textures bindings 0..7, 8 samplers 8..15); real pipeline; real WGSL reading all 8 stages',
+  }));
+  log('SMOKE_DONE');
+})().catch(e => { log('ERR: ' + e.message); console.error(e); });
+</script>
