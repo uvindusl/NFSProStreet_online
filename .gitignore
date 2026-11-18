@@ -46,9 +46,15 @@ analysis/securom-data-patch-map.md
 analysis/milestones-reconciliation.md
 # ctor-13 / protection details (game-derived addresses, init chain, patch paths)
 analysis/ctor13-dispatch-roadmap.md
+analysis/ctor13-dispatch-summary.md
 analysis/ship-scribe-status.md
 debug/96726c-writer-trace.md
 debug/ctor13-dispatch-analysis.md
+# pool allocator / TLS fault analysis (game-derived .data addresses)
+debug/pool-allocator-finalize.md
+debug/pool-allocator-fix.md
+debug/prostreet-tls-fault.md
+debug/prostreet-tls-latent.md
 
 # generated shader galleries (analysis/webgpu-test)
 analysis/webgpu-test/corpus.html
