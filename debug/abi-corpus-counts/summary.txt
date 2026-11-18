@@ -1,0 +1,112 @@
+=== Shader dcl Corpus Analysis ===
+Generated: Wed Nov 18 05:12:31 AM +0530 2026
+
+Processing vertex shaders...
+Processing pixel shaders...
+
+=== Vertex Shader Versions ===
+  vs_1: 27 blobs
+  vs_3: 71 blobs
+  vs_2: 199 blobs
+
+=== Pixel Shader Versions ===
+  ps_3: 71 blobs
+  ps_2: 223 blobs
+
+=== Vertex Input Usage Histogram ===
+  v0 POSITION0: 297
+  v1 TEXCOORD0: 79
+  v1 COLOR0: 65
+  v3 TEXCOORD0: 61
+  v1 NORMAL0: 58
+  v2 COLOR0: 43
+  v2 TEXCOORD0: 38
+  v6 TEXCOORD3: 30
+  v5 TEXCOORD2: 30
+  v4 TEXCOORD1: 30
+  v2 NORMAL0: 20
+  v3 TEXCOORD1: 14
+  v7 TANGENT0: 13
+  v3 NORMAL0: 12
+  v4 TEXCOORD0: 8
+  v3 COLOR0: 8
+  v2 TANGENT0: 8
+  v4 TEXCOORD2: 7
+  v5 TEXCOORD3: 5
+  v4 TEXCOORD3: 5
+  v4 TANGENT0: 5
+  v6 NORMAL0: 4
+  v2 BLENDINDICES0: 4
+  v1 BLENDWEIGHT0: 4
+  v7 TEXCOORD4: 3
+  v5 BLENDINDICES0: 3
+  v4 BLENDWEIGHT0: 3
+  v3 BLENDINDICES0: 3
+  v2 BLENDWEIGHT0: 3
+  v9 TEXCOORD6: 2
+  v8 TEXCOORD5: 2
+  v6 TANGENT0: 2
+  v2 TEXCOORD1: 2
+  v11 TEXCOORD8: 2
+  v10 TEXCOORD7: 2
+  v8 TEXCOORD7: 1
+  v7 TEXCOORD6: 1
+  v6 TEXCOORD5: 1
+  v5 TEXCOORD4: 1
+  v3 TEXCOORD2: 1
+
+=== Vertex TEXCOORD Index Histogram ===
+  TEXCOORD0: 186
+  TEXCOORD1: 46
+  TEXCOORD2: 38
+  TEXCOORD3: 40
+  TEXCOORD4: 4
+  TEXCOORD5: 3
+  TEXCOORD6: 3
+  TEXCOORD7: 3
+  TEXCOORD8: 2
+
+=== Pixel Sampler (s#) Histogram ===
+  s0: 189
+  s1: 93
+  s2: 70
+  s3: 48
+  s4: 26
+  s5: 12
+  s6: 6
+
+=== Pixel Texture Register (t#) Histogram ===
+
+=== Pixel Attribute (a#) Histogram ===
+  a0: 183
+  a1: 80
+  a2: 13
+  a3: 12
+  a4: 6
+  a5: 3
+  a6: 3
+  a7: 1
+
+=== Design Doc Verification ===
+Design doc claims:
+  dcl s: s0=189,s1=93,s2=70,s3=48,s4=26,s5=12,s6=6
+  dcl a: a0=183,a1=80,a2=13,a3=12,a4=6,a5=3,a6=3,a7=1
+
+Measured:
+  s0: 189
+  s1: 93
+  s2: 70
+  s3: 48
+  s4: 26
+  s5: 12
+  s6: 6
+  a0: 183
+  a1: 80
+  a2: 13
+  a3: 12
+  a4: 6
+  a5: 3
+  a6: 3
+  a7: 1
+
+Done. Raw data in /home/uvindu/Projects/nfsprostree-recompile/debug/abi-corpus-counts
