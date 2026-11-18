@@ -55,6 +55,8 @@ debug/pool-allocator-finalize.md
 debug/pool-allocator-fix.md
 debug/prostreet-tls-fault.md
 debug/prostreet-tls-latent.md
+# inventory of the above: itself quotes the same game-derived addresses
+debug/untracked-notes-inventory.md
 
 # generated shader galleries (analysis/webgpu-test)
 analysis/webgpu-test/corpus.html
