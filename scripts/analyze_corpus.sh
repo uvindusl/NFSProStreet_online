@@ -1,9 +1,10 @@
 #!/bin/bash
 # Corpus dcl analysis script
 
-DISASM="/home/uvindu/Projects/nfsprostree-recompile/lifter/tools/build/shader_disasm"
-SHADER_DIR="/tmp/opencode/ps-shaders"
-OUTPUT_DIR="/home/uvindu/Projects/nfsprostree-recompile/debug/abi-corpus-counts"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+DISASM="$ROOT/lifter/tools/build/shader_disasm"
+SHADER_DIR="${SHADER_DIR:-/tmp/opencode/ps-shaders}"
+OUTPUT_DIR="$ROOT/debug/abi-corpus-counts"
 mkdir -p "$OUTPUT_DIR"
 
 # Output files
@@ -30,7 +31,7 @@ declare -A PS_VERSIONS
 
 # Process vertex shaders
 echo "Processing vertex shaders..." | tee -a "$SUMMARY"
-for blob in /tmp/opencode/ps-shaders/vs_*.bin; do
+for blob in "$SHADER_DIR"/vs_*.bin; do
     [ -e "$blob" ] || continue
     name=$(basename "$blob" .bin)
     version=$(echo "$name" | cut -d'_' -f1-2)  # vs_2_0, vs_3_0, vs_1_1
@@ -57,7 +58,7 @@ done
 
 # Process pixel shaders
 echo "Processing pixel shaders..." | tee -a "$SUMMARY"
-for blob in /tmp/opencode/ps-shaders/ps_*.bin; do
+for blob in "$SHADER_DIR"/ps_*.bin; do
     [ -e "$blob" ] || continue
     name=$(basename "$blob" .bin)
     version=$(echo "$name" | cut -d'_' -f1-2)  # ps_2_0, ps_3_0

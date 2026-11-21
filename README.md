@@ -91,8 +91,10 @@ More detail is in [`docs/`](docs/).
 | `web/` | browser host and web build |
 | `scripts/` | lift, build, and boot drivers |
 | `tests/` | native graphics and shader tests |
-| `docs/` | milestones and design notes |
-| `analysis/`, `debug/` | working notes; some are historical and may be out of date, so prefer `docs/milestones.md` |
+| `docs/` | design docs and milestone tracking — see [`docs/README.md`](docs/README.md) for an index |
+| `analysis/` | working investigation notes and WebGPU test pages (may be outdated) |
+| `debug/` | debug session logs and deep-dive notes (may be outdated) — see [`debug/README.md`](debug/README.md) for a topic index |
+| `app/` | game configuration data (registry defaults) |
 
 ## Credits
 

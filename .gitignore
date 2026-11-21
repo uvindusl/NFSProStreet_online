@@ -65,3 +65,8 @@ analysis/webgpu-test/corpus.html
 # (the capture scripts rebuild the bundle; tmp/ holds throwaway captures)
 analysis/webgpu-test/*.bundle.mjs
 analysis/webgpu-test/tmp/
+
+# capture screenshots (generated, not source)
+analysis/webgpu-test/encoder-real-smoke.png
+analysis/webgpu-test/encoder-real-smoke.html
+analysis/webgpu-test/encoder-real-smoke_capture.js
