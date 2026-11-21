@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """x86-32 -> C lifter.  Translates a function into C that runs on the CPU state."""
-import sys, struct, collections
+import sys, struct, collections, os
 import pefile
 from split_reloc import operand as split_operand
 from capstone import *
@@ -403,9 +403,17 @@ class Lifter:
         # functions .text reaches only through 'jmp [abs]' stubs.  TVA/TSZ/
         # TDATA keep naming the primary section for the callers that assume it;
         # in_text()/region_of()/fetch() span all of them.
+        #
+        # LIFT_SECTIONS=name[,name...] restricts that to the named sections.  Use
+        # it on an image that keeps executable-flagged sections which are not
+        # game code (for example copy-protection sections), whose contents
+        # would otherwise be disassembled as functions.  Unset = every
+        # executable section, as before.
+        only={n.strip() for n in os.environ.get('LIFT_SECTIONS','').split(',') if n.strip()}
         self.xr=[]
         for s in pe.sections:
             if not (s.Characteristics & 0x20000000): continue
+            if only and s.Name.rstrip(b'\x00').decode('latin1').strip() not in only: continue
             d=s.get_data(); sz=min(len(d), s.Misc_VirtualSize or len(d))
             if sz: self.xr.append((self.IB+s.VirtualAddress, sz, bytes(d[:sz])))
         self.TVA,self.TSZ,self.TDATA = next((va,vs,d) for nm,va,vs,d in self.secs if nm=='.text')
