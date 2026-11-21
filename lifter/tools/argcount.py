@@ -190,6 +190,9 @@ KNOWN={
  'wsprintfA':0,   # cdecl variadic: the caller cleans up -> the callee NEVER does
  'timeSetEvent':5,'timeKillEvent':1,'timeGetDevCaps':2,
  'shutdown':2,'getpeername':3,'WSAIoctl':9,
+ # overlapped-I/O Winsock calls ProStreet's server.dll imports (stdcall, arg counts from the Winsock 2 API)
+ 'WSACloseEvent':1,'WSACreateEvent':0,'WSAGetOverlappedResult':5,'WSARecv':7,'WSARecvFrom':9,
+ 'WSAResetEvent':1,'WSASetEvent':1,'WSAWaitForMultipleEvents':5,'__WSAFDIsSet':2,
  'timeGetTime':0,'timeBeginPeriod':1,'timeEndPeriod':1,'joyGetPosEx':2,'joyGetNumDevs':0,
  'joyGetDevCapsA':3,
  'Direct3DCreate9':1,'DirectInput8Create':5,'DirectDrawCreate':3,'DirectSoundCreate':3,'#1':3,
