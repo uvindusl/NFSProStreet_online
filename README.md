@@ -10,6 +10,26 @@ The game's x86 code is translated to C ahead of time. That C is compiled into a 
 
 > Not affiliated with or endorsed by Electronic Arts. *Need for Speed* and *ProStreet* are trademarks of Electronic Arts Inc.
 
+## Target executable
+
+The lifter works on an **unpacked, unprotected** memory image of the ProStreet PC executable. The project verifies the image with `scripts/verify_target.py`; the expected fingerprint is:
+
+| Property | Value |
+|---|---|
+| File size | **23,756,800 bytes** |
+| `.text` SHA-256 | `963934d66f447eb21e81ca66f0df8d8e8d2a598acc9f0726c3dc1e68b5e65e31` |
+| Machine | i386 (`0x014c`) |
+| Image base | `0x00400000` |
+| Entry point | `0x00828c25` (`_WinMainCRTStartup`) |
+| Sections | `.text`, `.rdata`, `.data`, `.tls`, `.rsrc`, `diabolus` (6 sections) |
+| `.text` size | 5,656,699 bytes (`0x56507b`) |
+| Functions lifted | 47,514 (+ 4,950 diabolus functions) |
+| Imports bound | 371 across 15 DLLs |
+
+> The overall file SHA-256 is **not** checked — it differs between dump methods because the PE layout is rebuilt. Only the `.text` section hash is verified, ensuring the game code is identical.
+
+The image must be placed at `artifacts/nfs.exe.unpacked` (or passed as an argument to the scripts). This file is git-ignored and never committed.
+
 ## Status
 
 Each row is only marked ✅ when there is a command that reproduces it on the current build. Anything else is listed as not done.
@@ -31,7 +51,7 @@ Each row is only marked ✅ when there is a command that reproduces it on the cu
 | A real ProStreet shader rendered correctly in WebGPU | ❌ not yet; output does not match expected colour | in progress |
 | Game files, audio, input, menus, racing | ❌ not started | — |
 
-The full milestone table is in [`docs/milestones.md`](docs/milestones.md).
+The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The roadmap to a playable game is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues
 
