@@ -215,10 +215,210 @@ int main(int argc, char **argv) {
     if (mem_load_pe(pe)) return 1;
     overlay_clean_data(pe, argc, argv);
     apply_zero_env();
+
+    /* Initialize Pool descriptor circular sentinels to clean empty state */
+    if (mem_is_committed(0x00b4dbf0)) {
+        for (int i = 0; i < 32; i++) {
+            uint32_t p = MR32(0x00b4dbf0 + i * 4);
+            if (p && mem_is_committed(p)) {
+                MR32(p + 0x04) = p + 0x04;
+                MR32(p + 0x08) = p + 0x04;
+                MR32(p + 0x0c) = p + 0x0c;
+                MR32(p + 0x10) = p + 0x0c;
+                MR32(p + 0x14) = p + 0x14;
+                MR32(p + 0x18) = p + 0x14;
+                MR32(p + 0x1c) = 0;
+                MR32(p + 0x20) = 0;
+                MR32(p + 0x24) = 0;
+                MR32(p + 0x28) = 0;
+                MR32(p + 0x2c) = 0;
+                MR32(p + 0x30) = 0;
+                MR32(p + 0x34) = 0;
+                MR32(p + 0x38) = 0;
+                MR32(p + 0x3c) = 0;
+                MR32(p + 0x40) = 0xffffffff;
+            }
+        }
+    }
+
+    /* Stale pool pointer from dump; must be 0 for sub_006cd3b0 to initialize pool */
+    if (mem_is_committed(0x00abafb0)) {
+        MR32(0x00abafb0) = 0;
+    }
+
+    /* Circular list sentinels that must point to themselves when empty */
+    if (mem_is_committed(0x00a61110)) {
+        MR32(0x00a61110) = 0x00a61110;
+        MR32(0x00a61114) = 0x00a61110;
+    }
+    if (mem_is_committed(0x00a61118)) {
+        MR32(0x00a6111c) = 0x00a6111c;
+        MR32(0x00a61120) = 0x00a6111c;
+        MR32(0x00a61124) = 0x00a6111c;
+        MR8(0x00a61128) = 1;
+        MR8(0x00a61129) = 1;
+        MR32(0x00a6112c) = 0;
+    }
+    if (mem_is_committed(0x00a61138)) {
+        MR32(0x00a61138) = 0x00a61138;
+        MR32(0x00a6113c) = 0x00a61138;
+        MR32(0x00a61140) = 0x00a61138;
+        MR8(0x00a61144) = 1;
+        MR8(0x00a61145) = 1;
+        MR32(0x00a61148) = 0;
+    }
+    if (mem_is_committed(0x00a61228)) {
+        for (uint32_t a = 0x00a61228; a <= 0x00a61258; a += 8) {
+            MR32(a) = a;
+            MR32(a + 4) = a;
+        }
+    }
+    if (mem_is_committed(0x00a79ba4)) {
+        MR32(0x00a79ba4) = 0x00a79ba4;
+        MR32(0x00a79ba8) = 0x00a79ba4;
+    }
+    if (mem_is_committed(0x00a9e18c)) {
+        for (uint32_t a = 0x00a9e18c; a <= 0x00a9e1ac; a += 8) {
+            MR32(a) = a;
+            MR32(a + 4) = a;
+        }
+    }
+    if (mem_is_committed(0x00a9e21c)) {
+        MR32(0x00a9e21c) = 0x00a9e21c;
+        MR32(0x00a9e220) = 0x00a9e21c;
+    }
+    if (mem_is_committed(0x00a9e08c)) {
+        MR32(0x00a9e08c) = 0x00a9e08c;
+        MR32(0x00a9e090) = 0x00a9e08c;
+    }
+    if (mem_is_committed(0x00a9e09c)) {
+        MR32(0x00a9e09c) = 0x00a9e09c;
+        MR32(0x00a9e0a0) = 0x00a9e09c;
+    }
+    if (mem_is_committed(0x00a9e0d4)) {
+        MR32(0x00a9e0d4) = 0x00a9e0d4;
+        MR32(0x00a9e0d8) = 0x00a9e0d4;
+    }
+    if (mem_is_committed(0x00a9e578)) {
+        MR32(0x00a9e578) = 0x00a9e578;
+        MR32(0x00a9e57c) = 0x00a9e578;
+    }
+    if (mem_is_committed(0x00a4f398)) {
+        for (uint32_t a = 0x00a4f398; a <= 0x00a4f3a8; a += 8) {
+            MR32(a) = a;
+            MR32(a + 4) = a;
+        }
+    }
+    if (mem_is_committed(0x00a610f8)) {
+        MR32(0x00a610f8) = 0x00a610f8;
+        MR32(0x00a610fc) = 0x00a610f8;
+    }
+    if (mem_is_committed(0x00a61110)) {
+        MR32(0x00a61110) = 0x00a61110;
+        MR32(0x00a61114) = 0x00a61110;
+    }
+    if (mem_is_committed(0x00a6111c)) {
+        MR32(0x00a6111c) = 0x00a6111c;
+        MR32(0x00a61120) = 0x00a6111c;
+    }
+    if (mem_is_committed(0x00a63cd0)) {
+        MR32(0x00a63cd0) = 0x00a63cd0;
+        MR32(0x00a63cd4) = 0x00a63cd0;
+    }
+    if (mem_is_committed(0x00a79b4c)) {
+        MR32(0x00a79b4c) = 0x00a79b4c;
+        MR32(0x00a79b50) = 0x00a79b4c;
+    }
+    if (mem_is_committed(0x00a79b80)) {
+        MR32(0x00a79b80) = 0x00a79b80;
+        MR32(0x00a79b84) = 0x00a79b80;
+    }
+    if (mem_is_committed(0x00a84990)) {
+        MR32(0x00a84990) = 0x00a84990;
+        MR32(0x00a84994) = 0x00a84990;
+    }
+    if (mem_is_committed(0x00b418d8)) {
+        for (uint32_t a = 0x00b418d8; a <= 0x00b418e0; a += 8) {
+            MR32(a) = a;
+            MR32(a + 4) = a;
+        }
+    }
+
+    /* Stale singleton pointers from process dump; must be 0 for lazy constructors to run */
+    if (mem_is_committed(0x00b307e0)) {
+        MR32(0x00b307e8) = 0;
+        MR32(0x00b307f4) = 0;
+        MR32(0x00b30814) = 0;
+        MR32(0x00b3081c) = 0;
+        MR32(0x00b30824) = 0;
+        MR32(0x00b30838) = 0;
+        MR32(0x00b30840) = 0;
+        MR32(0x00b3085c) = 0;
+        MR32(0x00b30944) = 0;
+        MR32(0x00b30998) = 0;
+        MR32(0x00b309ac) = 0;
+        MR32(0x00b309b0) = 0;
+        MR32(0x00b309b4) = 0;
+        MR32(0x00b309c0) = 0;
+    }
+    if (mem_is_committed(0x00b340a0)) {
+        MR32(0x00b340a0) = 0;
+        MR32(0x00b340a4) = 0;
+        MR32(0x00b340a8) = 0;
+        MR32(0x00b340c8) = 0;
+        MR32(0x00b340dc) = 0;
+        MR32(0x00b340e0) = 0;
+    }
+
+    /* Stale std::map instances and static initialization guards from process dump */
+    if (mem_is_committed(0x00acd9d0)) {
+        memset(g_mem + 0x00acd9d0, 0, 0x40);
+    }
+    if (mem_is_committed(0x00aaeaf0)) MR32(0x00aaeaf0) = 0;
+    if (mem_is_committed(0x00abab58)) MR32(0x00abab58) = 0;
+    if (mem_is_committed(0x00ffd8f4)) MR32(0x00ffd8f4) = 0;
+    if (mem_is_committed(0x00ac10c4)) MR32(0x00ac10c4) = 0;
+    if (mem_is_committed(0x00ac10a4)) MR32(0x00ac10a4) = 0;
+    if (mem_is_committed(0x00ab2898)) MR32(0x00ab2898) = 0;
+    if (mem_is_committed(0x00bfbe6c)) MR32(0x00bfbe6c) = 0;
+    if (mem_is_committed(0x00bfbea0)) MR32(0x00bfbea0) = 0;
+    if (mem_is_committed(0x00bfbea4)) MR32(0x00bfbea4) = 0;
+
     apply_set_env();
 
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
     win32_init();
+
+    /* Initialize DisplayDevice and RenderParams singletons */
+    if (mem_is_committed(0x00ac6ed4)) {
+        uint32_t dev = MR32(0x00ac6ed4);
+        if (dev) {
+            mem_commit(dev, 0x2000);
+            extern uint32_t com_get_device(void);
+            uint32_t dev_obj = com_get_device();
+            MR32(dev) = dev_obj;
+            if (mem_is_committed(0x00bfc10c)) MR32(0x00bfc10c) = dev_obj;
+            MR32(dev + 0x180) = 0x15;
+            MR32(dev + 0x184) = 0xffffffff;
+            MR8(dev + 0x1a8) = 1;
+            MR32(dev + 0x1ac) = 5;
+            uint32_t cube = gh_alloc(0x40, 1, 16);
+            MR32(dev + 0x1a4) = cube;
+            fprintf(stderr, "boot: DisplayDevice 0x%08x initialized (pDev=0x%08x, 0xbfc10c=0x%08x), cube_struct=0x%08x\n",
+                    dev, dev_obj, MR32(0x00bfc10c), cube);
+        }
+    }
+    if (mem_is_committed(0x00ac6f14)) {
+        uint32_t rp = MR32(0x00ac6f14);
+        if (rp) {
+            mem_commit(rp, 0x84);
+            if (mem_is_committed(0x00990598)) {
+                memcpy(g_mem + rp, g_mem + 0x00990598, 0x84);
+                fprintf(stderr, "boot: RenderParams 0x%08x initialized from template 0x00990598\n", rp);
+            }
+        }
+    }
+
     setup_teb();
     if (getenv("PROSTREET_TLS_TEST") && !win32_tls_selftest()) return 1;
     dispatch_init();

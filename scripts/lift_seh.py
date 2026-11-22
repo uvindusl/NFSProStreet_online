@@ -57,6 +57,12 @@ ENTRIES = [
     # sub_0091c4a0 scope table 0xa42e18
     (0x0091C540, "filter: sub_0091c4a0"),
     (0x0091C550, "handler: sub_0091c4a0"),
+    # sub_0070d010 jump table targets (0x0070d100)
+    (0x0070D07F, "jump table 0x70d100 case 0"),
+    (0x0070D0CB, "jump table 0x70d100 case 1"),
+    (0x0070D092, "jump table 0x70d100 case 2"),
+    (0x0070D0B8, "jump table 0x70d100 case 3"),
+    (0x0070D0A5, "jump table 0x70d100 case 4"),
 ]
 
 

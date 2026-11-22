@@ -9,6 +9,9 @@
 #include "d3dx9_hle.h"
 #include "d3d9_hle.h"
 
+extern uint32_t com_direct3dcreate9(void);
+extern uint32_t com_directinput8create(uint32_t ppvOut);
+
 #include <ctype.h>
 #include <dirent.h>
 #include <errno.h>
@@ -40,7 +43,28 @@ static int g_unimpl_shown;
 
 #define A(i) MR32(c->esp + 4u * (uint32_t)(i))
 
+static inline double arg_f64(CPU *c, uint32_t i) {
+    double v;
+    memcpy(&v, g_mem + c->esp + 4u * i, sizeof(double));
+    return v;
+}
+
 static const char *gs(uint32_t p) { return p ? (const char *)(g_mem + p) : ""; }
+
+static char g_wsbuf[4][1024];
+static int g_wsi;
+static const char *gws(uint32_t p) {
+    char *b = g_wsbuf[g_wsi++ & 3];
+    if (!p || !mem_is_committed(p)) return "";
+    const uint16_t *w = (const uint16_t *)(g_mem + p);
+    size_t i = 0;
+    while (mem_is_committed(p + (uint32_t)i * 2) && w[i] && i < 1023) {
+        b[i] = (char)w[i];
+        i++;
+    }
+    b[i] = 0;
+    return b;
+}
 
 static void x87_push(CPU *c, double v) { FPUSH(v); }
 
@@ -337,6 +361,72 @@ static const char *g_gamedir = "game";
 static char g_pathbuf[4][4096];
 static int g_pathi;
 
+static void resolve_case(char *path) {
+    if (access(path, F_OK) == 0) return;
+    char resolved[4096];
+    char *p = path;
+    int is_abs = (*p == '/');
+    if (is_abs) {
+        resolved[0] = '/';
+        resolved[1] = '\0';
+        p++;
+    } else {
+        resolved[0] = '\0';
+    }
+
+    char comp[256];
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        char *end = strchr(p, '/');
+        size_t len = end ? (size_t)(end - p) : strlen(p);
+        if (len >= sizeof(comp)) len = sizeof(comp) - 1;
+        memcpy(comp, p, len);
+        comp[len] = '\0';
+        p = end ? end : (p + strlen(p));
+
+        char candidate[4096];
+        if (resolved[0]) {
+            snprintf(candidate, sizeof(candidate), "%s/%s", resolved, comp);
+        } else {
+            snprintf(candidate, sizeof(candidate), "%s", comp);
+        }
+
+        struct stat st;
+        if (stat(candidate, &st) == 0) {
+            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            continue;
+        }
+
+        DIR *dir = opendir(resolved[0] ? resolved : ".");
+        if (!dir) {
+            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            continue;
+        }
+
+        struct dirent *de;
+        int found = 0;
+        while ((de = readdir(dir)) != NULL) {
+            if (!strcasecmp(de->d_name, comp)) {
+                char next_resolved[4096];
+                if (resolved[0]) {
+                    snprintf(next_resolved, sizeof(next_resolved), "%s/%s", resolved, de->d_name);
+                } else {
+                    snprintf(next_resolved, sizeof(next_resolved), "%s", de->d_name);
+                }
+                snprintf(resolved, sizeof(resolved), "%s", next_resolved);
+                found = 1;
+                break;
+            }
+        }
+        closedir(dir);
+        if (!found) {
+            snprintf(resolved, sizeof(resolved), "%s", candidate);
+        }
+    }
+    snprintf(path, 4096, "%s", resolved);
+}
+
 static const char *xp(const char *p) {
     char *b = g_pathbuf[g_pathi++ & 3];
     if (!p) p = "";
@@ -348,10 +438,17 @@ static const char *xp(const char *p) {
         } else {
             snprintf(b, 4096, "%s", p);
         }
+        resolve_case(b);
         return b;
     }
-    snprintf(b, 4096, "%s/%s", g_gamedir, p);
+    size_t glen = strlen(g_gamedir);
+    if (strncasecmp(p, g_gamedir, glen) == 0 && (p[glen] == '/' || p[glen] == '\\')) {
+        snprintf(b, 4096, "%s", p);
+    } else {
+        snprintf(b, 4096, "%s/%s", g_gamedir, p);
+    }
     for (char *q = b; *q; q++) if (*q == '\\') *q = '/';
+    resolve_case(b);
     return b;
 }
 
@@ -406,7 +503,7 @@ static int gfmt(char *dst, size_t cap, const char *fmt, uint32_t *base) {
             break; }
         case 'c': { int v = (int)base[ai++]; spec[sl] = 0; strcat(spec, "c"); n = snprintf(tmp, sizeof tmp, spec, v); break; }
         case 's': { uint32_t p = base[ai++]; spec[sl] = 0; strcat(spec, "s");
-            n = snprintf(tmp, sizeof tmp, spec, p ? (const char *)(g_mem + p) : "(null)"); break; }
+            n = snprintf(tmp, sizeof tmp, spec, (p && mem_is_committed(p)) ? (const char *)(g_mem + p) : "(null)"); break; }
         case 'p': { uint32_t p = base[ai++]; spec[sl] = 0; strcat(spec, "08x"); n = snprintf(tmp, sizeof tmp, spec, p); break; }
         case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
             uint64_t bits = (uint64_t)base[ai] | ((uint64_t)base[ai + 1] << 32); ai += 2;
@@ -833,6 +930,33 @@ int win32_call(CPU *c, uint32_t idx) {
         guest_exit(code);
     } else if (str_eq(n, "TerminateProcess") || str_eq(n, "ExitProcess")) {
         fprintf(stderr, "\n*** guest %s(%d)\n", n, (int)A(1));
+        if ((uint32_t)A(1) == 0xC0000409u) {
+            uint32_t fault_addr = MR32(0xb33b98u);
+            uint32_t fault_esp = MR32(0xb33ba4u);
+            uint32_t fault_ebp = MR32(0xb33b94u);
+            uint32_t fault_ecx = MR32(0xb33b8cu);
+            fprintf(stderr, "    GS failure: return/caller=%08x (cookie in ecx=%08x, global_cookie=%08x)\n",
+                    fault_addr, fault_ecx, MR32(0xa8be00u));
+            fprintf(stderr, "    fault esp=%08x ebp=%08x\n", fault_esp, fault_ebp);
+            fprintf(stderr, "    fault stack dump around esp:\n");
+            for (int i = -8; i < 32; i++) {
+                uint32_t a = fault_esp + i * 4;
+                if (mem_is_committed(a)) {
+                    uint32_t val = MR32(a);
+                    fprintf(stderr, "      [%s esp%+3d] %08x: %08x", (i==0 ? "->" : "  "), i*4, a, val);
+                    /* try ascii */
+                    char asc[5] = {0};
+                    memcpy(asc, &val, 4);
+                    for (int j = 0; j < 4; j++) if ((unsigned char)asc[j] < 32 || (unsigned char)asc[j] > 126) asc[j] = '.';
+                    fprintf(stderr, "  '%s'", asc);
+                    /* try utf16le */
+                    uint16_t w0 = (uint16_t)val, w1 = (uint16_t)(val >> 16);
+                    fprintf(stderr, "  w: '%c%c'", (w0>=32 && w0<=126)?w0:'.', (w1>=32 && w1<=126)?w1:'.');
+                    fprintf(stderr, "\n");
+                }
+            }
+        }
+        guest_backtrace(c, 24);
         guest_exit((int)A(1));
 
     /* ---- heap -------------------------------------------------------- */
@@ -971,19 +1095,19 @@ int win32_call(CPU *c, uint32_t idx) {
     /* ---- printf family ---------------------------------------------- */
     } else if (str_eq(n, "printf")) {
         char buf[4096];
-        int len = gfmt(buf, sizeof buf, gs(A(0)), (uint32_t *)(g_mem + c->esp + 8));
+        int len = gfmt(buf, sizeof buf, gs(A(0)), (uint32_t *)(g_mem + c->esp + 4));
         fwrite(buf, 1, (size_t)len, stdout); r = (uint32_t)len;
     } else if (str_eq(n, "fprintf")) {
         char buf[4096];
         FILE *fp = file_of(A(0));
-        int len = gfmt(buf, sizeof buf, gs(A(1)), (uint32_t *)(g_mem + c->esp + 12));
+        int len = gfmt(buf, sizeof buf, gs(A(1)), (uint32_t *)(g_mem + c->esp + 8));
         if (fp) fwrite(buf, 1, (size_t)len, fp);
         r = (uint32_t)len;
     } else if (str_eq(n, "sprintf") || str_eq(n, "_snprintf")) {
         int is_sp = str_eq(n, "sprintf");
         uint32_t cap = is_sp ? 0x7FFFFFFFu : A(1);
         uint32_t fmtva = is_sp ? A(1) : A(2);
-        uint32_t argoff = is_sp ? 12u : 16u;
+        uint32_t argoff = is_sp ? 8u : 12u;
         char buf[4096];
         int len = gfmt(buf, cap < sizeof buf ? cap : sizeof buf, gs(fmtva),
                        (uint32_t *)(g_mem + c->esp + argoff));
@@ -997,7 +1121,7 @@ int win32_call(CPU *c, uint32_t idx) {
         char buf[4096];
         int len;
         if (str_eq(n, "sprintf_s"))
-            len = gfmt(buf, cap < sizeof buf ? cap : sizeof buf, gs(A(2)), (uint32_t *)(g_mem + c->esp + 16));
+            len = gfmt(buf, cap < sizeof buf ? cap : sizeof buf, gs(A(2)), (uint32_t *)(g_mem + c->esp + 12));
         else
             len = gfmt(buf, cap < sizeof buf ? cap : sizeof buf, gs(A(2)), (uint32_t *)(g_mem + A(3)));
         size_t ncopy = strlen(buf) + 1;
@@ -1112,7 +1236,8 @@ int win32_call(CPU *c, uint32_t idx) {
         r = (uint32_t)(str_eq(n, "DeleteFileA") ? remove(xp(gs(A(0)))) : rmdir(xp(gs(A(0)))));
     } else if (str_eq(n, "MoveFileA")) {
         r = (uint32_t)rename(xp(gs(A(0))), xp(gs(A(1))));
-    } else if (str_eq(n, "CreateFileA")) {
+    } else if (str_eq(n, "CreateFileA") || str_eq(n, "CreateFileW")) {
+        int is_w = str_eq(n, "CreateFileW");
         uint32_t acc = A(1), disp = A(4);
         int flags = O_RDONLY;
         if ((acc & 0xC0000000u) == 0xC0000000u) flags = O_RDWR;
@@ -1122,8 +1247,12 @@ int win32_call(CPU *c, uint32_t idx) {
         else if (disp == 2) flags |= O_CREAT | O_TRUNC;
         else if (disp == 4) flags |= O_CREAT;
         else if (disp == 5) flags |= O_TRUNC;
-        int fd = open(xp(gs(A(0))), flags | O_BINARY, 0644);
+        const char *path = is_w ? gws(A(0)) : gs(A(0));
+        const char *resolved = xp(path);
+        int fd = open(resolved, flags | O_BINARY, 0644);
         r = fd >= 0 ? 0x00020000u + (uint32_t)fd : 0xFFFFFFFFu;
+        fprintf(stderr, "win32: %s('%s' -> '%s') = 0x%08x (fd=%d, errno=%d)\n",
+                n, path ? path : "", resolved ? resolved : "", r, fd, errno);
     } else if (str_eq(n, "ReadFile")) {
         r = (uint32_t)read((int)(A(0) - 0x20000u), g_mem + A(1), A(2));
         if (A(3)) MR32(A(3)) = r;
@@ -1138,6 +1267,16 @@ int win32_call(CPU *c, uint32_t idx) {
         lseek((int)(A(0) - 0x20000u), cur, SEEK_SET);
         if (A(1)) MR32(A(1)) = 0;
         r = (uint32_t)end;
+    } else if (str_eq(n, "GetFileSizeEx")) {
+        int fd = (int)(A(0) - 0x20000u);
+        off_t cur = lseek(fd, 0, SEEK_CUR);
+        off_t end = lseek(fd, 0, SEEK_END);
+        lseek(fd, cur, SEEK_SET);
+        if (A(1) && mem_is_committed(A(1))) {
+            MR32(A(1)) = (uint32_t)end;
+            MR32(A(1) + 4) = (uint32_t)((uint64_t)end >> 32);
+        }
+        r = (end >= 0);
     } else if (str_eq(n, "CloseHandle")) {
         HEnt *h = h_get(A(0));
         if (h && h->kind == HK_THREAD) h->used = 0;
@@ -1247,29 +1386,29 @@ int win32_call(CPU *c, uint32_t idx) {
         r = out;
 
     /* ---- math -------------------------------------------------------- */
-    } else if (str_eq(n, "ceil")) { x87_push(c, ceil(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "floor")) { x87_push(c, floor(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "sqrt")) { x87_push(c, sqrt(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "cos")) { x87_push(c, cos(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "ldexp")) { x87_push(c, ldexp(*(double *)(g_mem + A(0)), (int)A(2)));
-    } else if (str_eq(n, "_CIsqrt")) { x87_push(c, sqrt(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIfmod")) { x87_push(c, fmod(*(double *)(g_mem + A(0)), *(double *)(g_mem + A(2))));
-    } else if (str_eq(n, "_CIpow")) { x87_push(c, pow(*(double *)(g_mem + A(0)), *(double *)(g_mem + A(2))));
-    } else if (str_eq(n, "_CIsin")) { x87_push(c, sin(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIcos")) { x87_push(c, cos(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIatan2")) { x87_push(c, atan2(*(double *)(g_mem + A(0)), *(double *)(g_mem + A(2))));
-    } else if (str_eq(n, "_CIacos")) { x87_push(c, acos(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIasin")) { x87_push(c, asin(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIlog")) { x87_push(c, log(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIlog10")) { x87_push(c, log10(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIexp")) { x87_push(c, exp(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CItan")) { x87_push(c, tan(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CItanh")) { x87_push(c, tanh(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIsinh")) { x87_push(c, sinh(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIcosh")) { x87_push(c, cosh(*(double *)(g_mem + A(0))));
-    } else if (str_eq(n, "_CIatan")) { x87_push(c, atan(*(double *)(g_mem + A(0))));
+    } else if (str_eq(n, "ceil")) { x87_push(c, ceil(arg_f64(c, 0)));
+    } else if (str_eq(n, "floor")) { x87_push(c, floor(arg_f64(c, 0)));
+    } else if (str_eq(n, "sqrt")) { x87_push(c, sqrt(arg_f64(c, 0)));
+    } else if (str_eq(n, "cos")) { x87_push(c, cos(arg_f64(c, 0)));
+    } else if (str_eq(n, "ldexp")) { x87_push(c, ldexp(arg_f64(c, 0), (int)A(2)));
+    } else if (str_eq(n, "_CIsqrt")) { ST(0) = sqrt(ST(0));
+    } else if (str_eq(n, "_CIfmod")) { double y = ST(0), x = ST(1); FPOP(); ST(0) = fmod(x, y);
+    } else if (str_eq(n, "_CIpow")) { double y = ST(0), x = ST(1); FPOP(); ST(0) = pow(x, y);
+    } else if (str_eq(n, "_CIsin")) { ST(0) = sin(ST(0));
+    } else if (str_eq(n, "_CIcos")) { ST(0) = cos(ST(0));
+    } else if (str_eq(n, "_CIatan2")) { double x = ST(0), y = ST(1); FPOP(); ST(0) = atan2(y, x);
+    } else if (str_eq(n, "_CIacos")) { ST(0) = acos(ST(0));
+    } else if (str_eq(n, "_CIasin")) { ST(0) = asin(ST(0));
+    } else if (str_eq(n, "_CIlog")) { ST(0) = log(ST(0));
+    } else if (str_eq(n, "_CIlog10")) { ST(0) = log10(ST(0));
+    } else if (str_eq(n, "_CIexp")) { ST(0) = exp(ST(0));
+    } else if (str_eq(n, "_CItan")) { ST(0) = tan(ST(0));
+    } else if (str_eq(n, "_CItanh")) { ST(0) = tanh(ST(0));
+    } else if (str_eq(n, "_CIsinh")) { ST(0) = sinh(ST(0));
+    } else if (str_eq(n, "_CIcosh")) { ST(0) = cosh(ST(0));
+    } else if (str_eq(n, "_CIatan")) { ST(0) = atan(ST(0));
     } else if (str_eq(n, "_isnan")) {
-        r = (uint32_t)(isnan(*(double *)(g_mem + A(0))) != 0);
+        r = (uint32_t)(isnan(arg_f64(c, 0)) != 0);
 
     /* ---- process / system -------------------------------------------- */
     } else if (str_eq(n, "GetCurrentProcessId")) {
@@ -1491,15 +1630,27 @@ int win32_call(CPU *c, uint32_t idx) {
         const char *s = gs(A(2));
         int len = (int)A(3);
         if (len < 0) len = (int)strlen(s) + 1;
-        wchar_t *d = (wchar_t *)(g_mem + A(4));
-        for (int i = 0; i < len; i++) d[i] = (wchar_t)(unsigned char)s[i];
+        uint32_t out_max = A(5);
+        if (A(4) && out_max > 0) {
+            uint16_t *d = (uint16_t *)(g_mem + A(4));
+            int count = (len < (int)out_max) ? len : (int)out_max;
+            for (int i = 0; i < count; i++) d[i] = (uint16_t)(unsigned char)s[i];
+        }
         r = (uint32_t)len;
     } else if (str_eq(n, "WideCharToMultiByte")) {
-        const wchar_t *s = (const wchar_t *)(g_mem + A(2));
+        const uint16_t *s = (const uint16_t *)(g_mem + A(2));
         int len = (int)A(3);
-        if (len < 0) len = (int)wcslen(s) + 1;
-        char *d = (char *)(g_mem + A(4));
-        for (int i = 0; i < len; i++) d[i] = (char)s[i];
+        if (len < 0) {
+            len = 0;
+            while (mem_is_committed(A(2) + (uint32_t)len * 2) && s[len]) len++;
+            len++;
+        }
+        uint32_t out_max = A(5);
+        if (A(4) && out_max > 0) {
+            char *d = (char *)(g_mem + A(4));
+            int count = (len < (int)out_max) ? len : (int)out_max;
+            for (int i = 0; i < count; i++) d[i] = (char)s[i];
+        }
         r = (uint32_t)len;
 
     /* ---- qsort / bsearch --------------------------------------------- */
@@ -1600,6 +1751,59 @@ int win32_call(CPU *c, uint32_t idx) {
         if (MR32(self + 20) >= 16) gh_free(MR32(self));
         r = 0;
 
+    /* ---- registry (ADVAPI32) ---------------------------------------- */
+    } else if (str_eq(n, "RegOpenKeyExA") || str_eq(n, "RegCreateKeyA")) {
+        uint32_t phkResult = str_eq(n, "RegOpenKeyExA") ? A(4) : A(2);
+        if (phkResult && mem_is_committed(phkResult)) MR32(phkResult) = 0x100;
+        r = 0; /* ERROR_SUCCESS */
+    } else if (str_eq(n, "RegCloseKey") || str_eq(n, "RegSetValueExA")) {
+        r = 0; /* ERROR_SUCCESS */
+    } else if (str_eq(n, "RegQueryValueExA")) {
+        uint32_t nameptr = A(1), ptype = A(3), pdata = A(4), pcb = A(5);
+        const char *vn = (nameptr && mem_is_committed(nameptr)) ? (const char *)(g_mem + nameptr) : "";
+        const char *sval = NULL;
+        uint32_t dval = 0;
+        int have_d = 0;
+
+        if (!strcasecmp(vn, "Install Dir") || !strcasecmp(vn, "InstallDir")) {
+            sval = ".";
+        } else if (!strcasecmp(vn, "Language")) {
+            sval = "English";
+        } else if (!strcasecmp(vn, "Locale")) {
+            sval = "en_US";
+        } else if (!strcasecmp(vn, "VERSION")) {
+            sval = "1.1.0";
+        } else if (!strcasecmp(vn, "NotFirstTime")) {
+            dval = 1; have_d = 1;
+        } else if (!strcasecmp(vn, "g_CarEnvironmentMapEnable")) {
+            dval = 3; have_d = 1;
+        } else if (!strcasecmp(vn, "g_CarShadowEnable")) {
+            dval = 2; have_d = 1;
+        } else if (!strcasecmp(vn, "g_PerformanceLevel")) {
+            dval = 5; have_d = 1;
+        }
+
+        if (sval) {
+            uint32_t need = (uint32_t)strlen(sval) + 1u;
+            if (ptype && mem_is_committed(ptype)) MR32(ptype) = 1u; /* REG_SZ */
+            if (pcb && mem_is_committed(pcb)) {
+                uint32_t cap = MR32(pcb);
+                if (pdata && mem_is_committed(pdata) && cap >= need) {
+                    memcpy(g_mem + pdata, sval, need);
+                }
+                MR32(pcb) = need;
+            }
+            r = 0; /* ERROR_SUCCESS */
+        } else if (have_d) {
+            if (ptype && mem_is_committed(ptype)) MR32(ptype) = 4u; /* REG_DWORD */
+            if (pdata && mem_is_committed(pdata)) MR32(pdata) = dval;
+            if (pcb && mem_is_committed(pcb)) MR32(pcb) = 4u;
+            r = 0; /* ERROR_SUCCESS */
+        } else {
+            if (pcb && mem_is_committed(pcb)) MR32(pcb) = 0;
+            r = 2; /* ERROR_FILE_NOT_FOUND */
+        }
+
     /* ---- misc / graphics: explicit stubs ----------------------------- */
     } else if (str_eq(n, "MessageBoxA")) {
         fprintf(stderr, "\n[MessageBoxA] %s\n[MessageBoxA] %s\n", gs(A(1)), gs(A(2)));
@@ -1622,75 +1826,70 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "GetForegroundWindow") || str_eq(n, "GetDesktopWindow")) {
         r = 0x00010001u;
     } else if (str_eq(n, "Direct3DCreate9")) {
-        uint32_t sdkVersion = A(0);
-        struct IDirect3D9* d3d9 = Direct3DCreate9(sdkVersion);
-        r = (uint32_t)(uintptr_t)d3d9;
+        r = com_direct3dcreate9();
     } else if (str_eq(n, "DirectInput8Create")) {
-        /* DirectInput8Create HLE: create IDirectInput8 interface stub */
-        uint32_t hInst = A(0);
-        uint32_t riidObj = A(1);
         uint32_t ppvOut = A(2);
-        static uint32_t di_initialized = 0;
-        if (!di_initialized) {
-            di_initialized = 1;
-            MR32(ppvOut) = 0x10000000;
-            r = 1;
-        } else {
-            r = 0;
-        }
+        r = com_directinput8create(ppvOut);
         /* Fall through to finish label */
     } else if (strncmp(n, "D3DX", 4) == 0) {
         if (str_eq(n, "D3DXMatrixMultiply")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
-            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)A(1);
-            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)A(2);
+            uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)(g_mem + a0);
+            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)(g_mem + a1);
+            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)(g_mem + a2);
             D3DXMatrixMultiply(pOut, pM1, pM2);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXMatrixMultiplyTranspose")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
-            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)A(1);
-            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)A(2);
+            uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)(g_mem + a0);
+            const D3DXMATRIX* pM1 = (const D3DXMATRIX*)(uintptr_t)(g_mem + a1);
+            const D3DXMATRIX* pM2 = (const D3DXMATRIX*)(uintptr_t)(g_mem + a2);
             D3DXMatrixMultiplyTranspose(pOut, pM1, pM2);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXMatrixTranspose")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(1);
+            uint32_t a0 = A(0), a1 = A(1);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)(g_mem + a0);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)(g_mem + a1);
             D3DXMatrixTranspose(pOut, pM);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXMatrixInverse")) {
-            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)A(0);
-            float* pDeterminant = (float*)(uintptr_t)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
+            uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
+            D3DXMATRIX* pOut = (D3DXMATRIX*)(uintptr_t)(g_mem + a0);
+            float* pDeterminant = a1 ? (float*)(uintptr_t)(g_mem + a1) : NULL;
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)(g_mem + a2);
             D3DXMatrixInverse(pOut, pDeterminant, pM);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXVec3Transform")) {
-            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)A(0);
-            const D3DXVECTOR3* pV = (const D3DXVECTOR3*)(uintptr_t)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
+            uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
+            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)(g_mem + a0);
+            const D3DXVECTOR3* pV = (const D3DXVECTOR3*)(uintptr_t)(g_mem + a1);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)(g_mem + a2);
             D3DXVec3Transform(pOut, pV, pM);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXVec4Transform")) {
-            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)A(0);
-            const D3DXVECTOR4* pV = (const D3DXVECTOR4*)(uintptr_t)A(1);
-            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)A(2);
+            uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
+            D3DXVECTOR4* pOut = (D3DXVECTOR4*)(uintptr_t)(g_mem + a0);
+            const D3DXVECTOR4* pV = (const D3DXVECTOR4*)(uintptr_t)(g_mem + a1);
+            const D3DXMATRIX* pM = (const D3DXMATRIX*)(uintptr_t)(g_mem + a2);
             D3DXVec4Transform(pOut, pV, pM);
-            r = (uint32_t)(uintptr_t)pOut;
+            r = a0;
         } else if (str_eq(n, "D3DXCreateEffectFromResourceA")) {
-            void* pDevice = (void*)(uintptr_t)A(0);
-            void* hSrcModule = (void*)(uintptr_t)A(1);
-            const char* pSrcResource = (const char*)(uintptr_t)A(2);
-            const void* pDefines = (const void*)(uintptr_t)A(3);
-            void* pInclude = (void*)(uintptr_t)A(4);
-            uint32_t Flags = A(5);
-            void* pPool = (void*)(uintptr_t)A(6);
-            void** ppEffect = (void**)(uintptr_t)A(7);
-            void** ppErrorBuffer = (void**)(uintptr_t)A(8);
-            D3DXCreateEffectFromResourceA(pDevice, hSrcModule, pSrcResource, pDefines, pInclude, Flags, pPool, ppEffect, ppErrorBuffer);
-            r = D3D_OK;
+            extern uint32_t com_create_effect(void);
+            uint32_t ppEffect = A(7);
+            uint32_t ppErrorBuffer = A(8);
+            uint32_t eff = com_create_effect();
+            if (ppEffect && mem_is_committed(ppEffect)) {
+                MR32(ppEffect) = eff;
+            }
+            if (ppErrorBuffer && mem_is_committed(ppErrorBuffer)) {
+                MR32(ppErrorBuffer) = 0;
+            }
+            fprintf(stderr, "win32: D3DXCreateEffectFromResourceA created effect 0x%08x -> [0x%08x]\n", eff, ppEffect);
+            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXCreateEffectPool")) {
-            void** ppPool = (void**)(uintptr_t)A(0);
-            D3DXCreateEffectPool(ppPool);
-            r = D3D_OK;
+            uint32_t ppPool = A(0);
+            if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x20000000;
+            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXGetVertexShaderProfile")) {
             void* pDevice = (void*)(uintptr_t)A(0);
             const char* profile = D3DXGetVertexShaderProfile(pDevice);
@@ -1700,35 +1899,19 @@ int win32_call(CPU *c, uint32_t idx) {
             const char* profile = D3DXGetPixelShaderProfile(pDevice);
             r = (uint32_t)(uintptr_t)profile;
         } else if (str_eq(n, "D3DXCreateCubeTextureFromFileInMemory")) {
-            void* pDevice = (void*)(uintptr_t)A(0);
-            const void* pSrcData = (const void*)(uintptr_t)A(1);
-            uint32_t SrcDataSize = A(2);
-            void** ppCubeTexture = (void**)(uintptr_t)A(3);
-            D3DXCreateCubeTextureFromFileInMemory(pDevice, pSrcData, SrcDataSize, ppCubeTexture);
-            r = D3D_OK;
+            extern uint32_t com_new(uint32_t iface, uint32_t extra);
+            uint32_t ppCubeTexture = A(3);
+            if (ppCubeTexture && mem_is_committed(ppCubeTexture)) MR32(ppCubeTexture) = com_new(4, 64);
+            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXCreateVolumeTextureFromFileInMemory")) {
-            void* pDevice = (void*)(uintptr_t)A(0);
-            const void* pSrcData = (const void*)(uintptr_t)A(1);
-            uint32_t SrcDataSize = A(2);
-            void** ppVolumeTexture = (void**)(uintptr_t)A(3);
-            D3DXCreateVolumeTextureFromFileInMemory(pDevice, pSrcData, SrcDataSize, ppVolumeTexture);
-            r = D3D_OK;
+            extern uint32_t com_new(uint32_t iface, uint32_t extra);
+            uint32_t ppVolumeTexture = A(3);
+            if (ppVolumeTexture && mem_is_committed(ppVolumeTexture)) MR32(ppVolumeTexture) = com_new(3, 64);
+            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXSaveSurfaceToFileA")) {
-            const char* pDestFile = (const char*)(uintptr_t)A(0);
-            uint32_t DestFormat = A(1);
-            void* pSrcSurface = (void*)(uintptr_t)A(2);
-            const void* pSrcPalette = (const void*)(uintptr_t)A(3);
-            const void* pSrcRect = (const void*)(uintptr_t)A(4);
-            D3DXSaveSurfaceToFileA(pDestFile, DestFormat, pSrcSurface, pSrcPalette, pSrcRect);
-            r = D3D_OK;
+            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXSaveSurfaceToFileInMemory")) {
-            void** ppDestBuf = (void**)(uintptr_t)A(0);
-            uint32_t DestFormat = A(1);
-            void* pSrcSurface = (void*)(uintptr_t)A(2);
-            const void* pSrcPalette = (const void*)(uintptr_t)A(3);
-            const void* pSrcRect = (const void*)(uintptr_t)A(4);
-            D3DXSaveSurfaceToFileInMemory(ppDestBuf, DestFormat, pSrcSurface, pSrcPalette, pSrcRect);
-            r = D3D_OK;
+            r = 0; /* D3D_OK */
         } else {
             r = 0;
         }
@@ -1906,6 +2089,33 @@ void win32_init(void) {
 
     fprintf(stderr, "win32: %u imports bound (%s data slots), gamedir \"%s\"\n",
             g_imp_count, initenv_idx != 0xFFFFFFFFu ? "__initenv/_adjust_fdiv" : "no", g_gamedir);
+}
+
+int win32_vsprintf(uint32_t dst_va, uint32_t fmt_va, uint32_t args_va) {
+    if (!mem_is_committed(dst_va) || !mem_is_committed(fmt_va)) return 0;
+    const char *fmt = (const char *)(g_mem + fmt_va);
+    uint32_t *base = args_va && mem_is_committed(args_va) ? (uint32_t *)(g_mem + args_va) : NULL;
+    char buf[8192];
+    int len = gfmt(buf, sizeof(buf), fmt, base);
+    size_t ncopy = strlen(buf) + 1;
+    memcpy(g_mem + dst_va, buf, ncopy);
+    return len;
+}
+
+int win32_vsnprintf(uint32_t dst_va, uint32_t max_count, uint32_t fmt_va, uint32_t args_va) {
+    if (!mem_is_committed(dst_va) || !mem_is_committed(fmt_va)) return 0;
+    const char *fmt = (const char *)(g_mem + fmt_va);
+    uint32_t *base = args_va && mem_is_committed(args_va) ? (uint32_t *)(g_mem + args_va) : NULL;
+    char buf[8192];
+    size_t cap = max_count < sizeof(buf) ? max_count : sizeof(buf);
+    int len = gfmt(buf, cap, fmt, base);
+    size_t ncopy = strlen(buf) + 1;
+    if (ncopy > max_count) ncopy = max_count;
+    if (ncopy) {
+        memcpy(g_mem + dst_va, buf, ncopy);
+        g_mem[dst_va + ncopy - 1] = 0;
+    }
+    return len;
 }
 
 void win32_report(void) {

@@ -362,7 +362,7 @@ const ImpEnt g_imp[] = {
   {0x009675b0u,"WS2_32.dll","#112",1},
   {0x009675b4u,"WS2_32.dll","#17",6},
   {0x009675bcu,"d3d9.dll","Direct3DCreate9",1},
-  {0x009675c4u,"d3dx9_34.dll","D3DXCreateEffectFromResourceA",8},
+  {0x009675c4u,"d3dx9_34.dll","D3DXCreateEffectFromResourceA",9},
   {0x009675c8u,"d3dx9_34.dll","D3DXMatrixMultiplyTranspose",3},
   {0x009675ccu,"d3dx9_34.dll","D3DXCreateEffectPool",1},
   {0x009675d0u,"d3dx9_34.dll","D3DXSaveSurfaceToFileA",5},

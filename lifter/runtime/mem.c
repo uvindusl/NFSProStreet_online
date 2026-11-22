@@ -208,8 +208,11 @@ void mem_altstack_install(void) {
 
 static void fault_report(int sig, siginfo_t *si, void *uc_) {
     ucontext_t *uc = (ucontext_t *)uc_;
-    static int nested = 0;
-    if (nested++) _exit(4);
+    static __thread int in_fault = 0;
+    if (in_fault++) {
+        fprintf(stderr, "\n*** RECURSIVE FAULT in signal handler! sig=%d addr=%p\n", sig, si ? si->si_addr : 0);
+        _exit(4);
+    }
     uintptr_t host_addr = (uintptr_t)si->si_addr;
     uint32_t guest_va = 0;
     int in_guest = 0;
@@ -252,6 +255,13 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
         g_wwatch_armed = 0; /* catch first write, then allow progress */
         fprintf(stderr, "    watch: page %08llx set RW, continuing\n",
                 (unsigned long long)plo);
+        in_fault = 0;
+        return;
+    }
+    /* Auto-commit page at fault address in guest address space and continue silently or with log */
+    if (in_guest && guest_va >= 0x10000 && guest_va < 0x70000000) {
+        mem_commit(guest_va, 0x4000);
+        in_fault = 0;
         return;
     }
     fprintf(stderr, "\n*** GUEST FAULT: %s at host %p guest_va=%s%08x\n",
@@ -284,12 +294,6 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
             guest_backtrace(c, 24);
     } else {
         fprintf(stderr, "    cpu: <none> (g_cur_cpu not set on this thread)\n");
-    }
-    /* Phase 5: auto-commit page at fault address and continue */
-    if (in_guest && guest_va >= 0x400000 && guest_va < 0x1aa8000) {
-        mem_commit(guest_va, 0x1000);
-        fprintf(stderr, "    auto-committed guest page at 0x%08x\n", guest_va & ~0xFFFu);
-        return;
     }
     rtlog_dump(24);
     _exit(4);

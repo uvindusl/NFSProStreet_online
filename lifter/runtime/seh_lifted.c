@@ -15,11 +15,144 @@ void sub_009204d8(CPU *restrict c) {
 L_009204d8:; /* --- block --- */
     DISPATCH_TAIL(c, MR32(0x967420u));   /* indirect tail call */
 }
+/* jump table 0x70d100 case 0 */
+/* ===== sub_0070d07f  (18 insns, 2 blocks) ===== */
+void sub_0070d07f(CPU *restrict c) {
+    goto L_0070d07f;
+L_0070d07f:; /* --- block --- */
+    { uint32_t _r=(c->edx) ^ (c->edx); FLAGS_LOG_M(_r,32,0x3fu); c->edx = (uint32_t)(_r); }
+    MR8(c->ebp+0xfffffffbu) = ((uint8_t)c->edx);
+    c->eax = (uint32_t)(MR32(c->ebp+0x14u));
+    PUSH32(c->eax);
+    c->ecx = (uint32_t)((c->ebp+0xfffffffbu));
+    PUSH32(0x70d090u); sub_0070caf0(c);
+    goto L_0070d0dc;
+L_0070d0dc:; /* --- block --- */
+    PUSH32(c->eax);
+    c->eax = (uint32_t)(0xcfcecdccu);
+    c->eax = (uint32_t)(0x70d01fu);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0xcecdcccbu);
+    { uint32_t _t; POP32(_t); c->eax = (uint32_t)(_t); }
+    c->eax = (uint32_t)(MR32(c->ebp+0xfffffffcu));
+    c->esp = (uint32_t)(c->ebp);
+    { uint32_t _t; POP32(_t); c->ebp = (uint32_t)(_t); }
+    POP32(c->eip); return;
+}
+/* jump table 0x70d100 case 1 */
+/* ===== sub_0070d0cb  (17 insns, 1 blocks) ===== */
+void sub_0070d0cb(CPU *restrict c) {
+    goto L_0070d0cb;
+L_0070d0cb:; /* --- block --- */
+    { uint32_t _r=(c->ecx) ^ (c->ecx); FLAGS_LOG_M(_r,32,0x3fu); c->ecx = (uint32_t)(_r); }
+    MR8(c->ebp+0xfffffff7u) = ((uint8_t)c->ecx);
+    c->edx = (uint32_t)(MR32(c->ebp+0x14u));
+    PUSH32(c->edx);
+    c->ecx = (uint32_t)((c->ebp+0xfffffff7u));
+    PUSH32(0x70d0dcu); sub_0070cc80(c);
+    PUSH32(c->eax);
+    c->eax = (uint32_t)(0xcfcecdccu);
+    c->eax = (uint32_t)(0x70d01fu);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0xcecdcccbu);
+    { uint32_t _t; POP32(_t); c->eax = (uint32_t)(_t); }
+    c->eax = (uint32_t)(MR32(c->ebp+0xfffffffcu));
+    c->esp = (uint32_t)(c->ebp);
+    { uint32_t _t; POP32(_t); c->ebp = (uint32_t)(_t); }
+    POP32(c->eip); return;
+}
+/* jump table 0x70d100 case 2 */
+/* ===== sub_0070d092  (18 insns, 2 blocks) ===== */
+void sub_0070d092(CPU *restrict c) {
+    goto L_0070d092;
+L_0070d092:; /* --- block --- */
+    { uint32_t _r=(c->ecx) ^ (c->ecx); FLAGS_LOG_M(_r,32,0x3fu); c->ecx = (uint32_t)(_r); }
+    MR8(c->ebp+0xfffffffau) = ((uint8_t)c->ecx);
+    c->edx = (uint32_t)(MR32(c->ebp+0x14u));
+    PUSH32(c->edx);
+    c->ecx = (uint32_t)((c->ebp+0xfffffffau));
+    PUSH32(0x70d0a3u); sub_0070cce0(c);
+    goto L_0070d0dc;
+L_0070d0dc:; /* --- block --- */
+    PUSH32(c->eax);
+    c->eax = (uint32_t)(0xcfcecdccu);
+    c->eax = (uint32_t)(0x70d01fu);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0xcecdcccbu);
+    { uint32_t _t; POP32(_t); c->eax = (uint32_t)(_t); }
+    c->eax = (uint32_t)(MR32(c->ebp+0xfffffffcu));
+    c->esp = (uint32_t)(c->ebp);
+    { uint32_t _t; POP32(_t); c->ebp = (uint32_t)(_t); }
+    POP32(c->eip); return;
+}
+/* jump table 0x70d100 case 3 */
+/* ===== sub_0070d0b8  (18 insns, 2 blocks) ===== */
+void sub_0070d0b8(CPU *restrict c) {
+    goto L_0070d0b8;
+L_0070d0b8:; /* --- block --- */
+    { uint32_t _r=(c->edx) ^ (c->edx); FLAGS_LOG_M(_r,32,0x3fu); c->edx = (uint32_t)(_r); }
+    MR8(c->ebp+0xfffffff8u) = ((uint8_t)c->edx);
+    c->eax = (uint32_t)(MR32(c->ebp+0x14u));
+    PUSH32(c->eax);
+    c->ecx = (uint32_t)((c->ebp+0xfffffff8u));
+    PUSH32(0x70d0c9u); sub_0070ce50(c);
+    goto L_0070d0dc;
+L_0070d0dc:; /* --- block --- */
+    PUSH32(c->eax);
+    c->eax = (uint32_t)(0xcfcecdccu);
+    c->eax = (uint32_t)(0x70d01fu);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0xcecdcccbu);
+    { uint32_t _t; POP32(_t); c->eax = (uint32_t)(_t); }
+    c->eax = (uint32_t)(MR32(c->ebp+0xfffffffcu));
+    c->esp = (uint32_t)(c->ebp);
+    { uint32_t _t; POP32(_t); c->ebp = (uint32_t)(_t); }
+    POP32(c->eip); return;
+}
+/* jump table 0x70d100 case 4 */
+/* ===== sub_0070d0a5  (18 insns, 2 blocks) ===== */
+void sub_0070d0a5(CPU *restrict c) {
+    goto L_0070d0a5;
+L_0070d0a5:; /* --- block --- */
+    { uint32_t _r=(c->eax) ^ (c->eax); FLAGS_LOG_M(_r,32,0x3fu); c->eax = (uint32_t)(_r); }
+    MR8(c->ebp+0xfffffff9u) = ((uint8_t)c->eax);
+    c->ecx = (uint32_t)(MR32(c->ebp+0x14u));
+    PUSH32(c->ecx);
+    c->ecx = (uint32_t)((c->ebp+0xfffffff9u));
+    PUSH32(0x70d0b6u); sub_0070cf30(c);
+    goto L_0070d0dc;
+L_0070d0dc:; /* --- block --- */
+    PUSH32(c->eax);
+    c->eax = (uint32_t)(0xcfcecdccu);
+    c->eax = (uint32_t)(0x70d01fu);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0x0u);
+    c->eax = (uint32_t)(0xcecdcccbu);
+    { uint32_t _t; POP32(_t); c->eax = (uint32_t)(_t); }
+    c->eax = (uint32_t)(MR32(c->ebp+0xfffffffcu));
+    c->esp = (uint32_t)(c->ebp);
+    { uint32_t _t; POP32(_t); c->ebp = (uint32_t)(_t); }
+    POP32(c->eip); return;
+}
 
 const uint32_t g_seh_fn_addr[] = {
   0x009204d8u,
+  0x0070d07fu,
+  0x0070d0cbu,
+  0x0070d092u,
+  0x0070d0b8u,
+  0x0070d0a5u,
 };
 const guest_fn_t g_seh_fn_ptr[] = {
   sub_009204d8,
+  sub_0070d07f,
+  sub_0070d0cb,
+  sub_0070d092,
+  sub_0070d0b8,
+  sub_0070d0a5,
 };
-const uint32_t g_seh_fn_count = 1;
+const uint32_t g_seh_fn_count = 6;
