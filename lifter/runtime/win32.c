@@ -79,7 +79,7 @@ static uint32_t gh_guest_str(const char *s) {
 /* guest heap: one bump arena, 16-byte aligned, header in front         */
 
 #define HEAP_BASE 0x20000000u
-#define HEAP_END  0x2C000000u
+#define HEAP_END  0x48000000u
 #define HEAP_MAGIC 0x48454150u
 
 static uint32_t g_brk = HEAP_BASE;
@@ -139,8 +139,8 @@ uint32_t gh_realloc(uint32_t p, uint32_t n) {
 /* ------------------------------------------------------------------ */
 /* virtual allocation (VirtualAlloc)                                    */
 
-#define VA_BASE 0x30000000u
-#define VA_END  0x38000000u
+#define VA_BASE 0x48000000u
+#define VA_END  0x4C000000u
 static uint32_t g_va_brk = VA_BASE;
 static pthread_mutex_t g_va_mtx = PTHREAD_MUTEX_INITIALIZER;
 
@@ -1888,7 +1888,7 @@ int win32_call(CPU *c, uint32_t idx) {
             r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXCreateEffectPool")) {
             uint32_t ppPool = A(0);
-            if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x20000000;
+            if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x6e000000;
             r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXGetVertexShaderProfile")) {
             void* pDevice = (void*)(uintptr_t)A(0);

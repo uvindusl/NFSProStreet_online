@@ -383,6 +383,53 @@ int main(int argc, char **argv) {
     if (mem_is_committed(0x00bfbe6c)) MR32(0x00bfbe6c) = 0;
     if (mem_is_committed(0x00bfbea0)) MR32(0x00bfbea0) = 0;
     if (mem_is_committed(0x00bfbea4)) MR32(0x00bfbea4) = 0;
+    if (mem_is_committed(0x00a7a474)) MR32(0x00a7a474) = 0;
+
+    /* Stale streaming manager state from process dump */
+    if (mem_is_committed(0x00a84938)) {
+        MR32(0x00a84990) = 0;
+        MR32(0x00a84994) = 0;
+        MR32(0x00a84998) = 0;
+        MR32(0x00a8499c) = 0;
+        MR32(0x00a849a0) = 0;
+    }
+
+    /* Stale dynamic vertex stream table from process dump */
+    if (mem_is_committed(0x00aa9638)) {
+        memset(g_mem + 0x00aa9638, 0, 0x60);
+        MR32(0x00aa9638) = 0xffffffff;
+        MR32(0x00aa963c) = 0xffffffff;
+        MR32(0x00aa9640) = 0xffffffff;
+        MR32(0x00aa9644) = 0xffffffff;
+        MR32(0x00aa9648) = 0xffffffff;
+        MR32(0x00aa9684) = 0x00aa9638;
+    }
+
+    /* Stale stdext::hash_map and vector from process dump */
+    if (mem_is_committed(0x00ff2520)) {
+        if (mem_is_committed(0x00a99658)) {
+            MR32(0x00a99658) = 0;
+            MR32(0x00a9965c) = 0xffffffff;
+        }
+        MR32(0x00ff2524) = 0x00a99658;
+        MR32(0x00ff2528) = 1;
+        MR32(0x00ff252c) = 0;
+        MR32(0x00ff2530) = 0x3f800000;
+        MR32(0x00ff2534) = 0x40000000;
+        MR32(0x00ff2538) = 0;
+        MR32(0x00ff25d8) = 0;
+        MR32(0x00ff25dc) = 0;
+        MR32(0x00ff25e0) = 0;
+        MR32(0x00ff25cc) = 0;
+        MR32(0x00ff25d0) = 0;
+        MR32(0x00ff25d4) = 0;
+        MR32(0x00ff2614) = 0;
+        MR32(0x00ff2618) = 0x00ff2618;
+        MR32(0x00ff261c) = 0x00ff2618;
+        MR32(0x00ff2620) = 0;
+        MR32(0x00ff2628) = 0;
+        MR32(0x00ff262c) = 0;
+    }
 
     apply_set_env();
 

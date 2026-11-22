@@ -212,7 +212,7 @@ int __stdcall D3DXCreateEffectPool(void** ppPool) {
     d3dx9_log("D3DXCreateEffectPool(ppPool=%p)", ppPool);
     
     if (ppPool) {
-        *ppPool = (void*)0x20000000;
+        *ppPool = (void*)0x6e000000;
     }
     
     return D3D_OK;

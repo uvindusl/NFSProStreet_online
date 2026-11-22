@@ -9,8 +9,8 @@
 #include <stdlib.h>
 
 #define COM_MAGIC 0xE0000000u
-#define COM_BASE  0x38000000u
-#define COM_MAX   0x3C000000u
+#define COM_BASE  0x4C000000u
+#define COM_MAX   0x50000000u
 
 #define NEL(a) ((unsigned)(sizeof(a)/sizeof(*(a))))
 
