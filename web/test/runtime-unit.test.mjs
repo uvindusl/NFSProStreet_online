@@ -21,6 +21,9 @@ const OUT = path.join(REPO, 'out/web/test'); fs.mkdirSync(OUT, { recursive: true
 const skip = process.platform !== 'darwin' ? 'the native runtime builds on macOS only'
   : spawnSync('clang', ['--version'], { encoding: 'utf8' }).status !== 0 && 'no clang';
 
+// a test whose source is not in this repository is skipped, not failed
+const skipFor = name => skip || (!fs.existsSync(path.join(REPO, 'tests', `${name}.c`)) && `tests/${name}.c is not in this repository`);
+
 /** builds tests/<name>.c with its head's flags into out/web/test, runs it; its PASS lines and its output */
 function run(name, flags) {
   const exe = path.join(OUT, name);
@@ -33,21 +36,21 @@ function run(name, flags) {
   return { out, pass: [...out.matchAll(/^PASS (\S+):/mg)].map(m => m[1]) };
 }
 
-test('objtable_unit: the object table takes back finished threads\' slots only', { skip }, () => {
+test('objtable_unit: the object table takes back finished threads\' slots only', { skip: skipFor('objtable_unit') }, () => {
   const { out, pass } = run('objtable_unit', ['-O1', '-g', '-Wall', '-Wno-unused-parameter', '-Wno-unused-function']);
   for (const c of ['below', 'reclaim', 'oldest', 'stale', 'kept', 'waiting']) assert.ok(pass.includes(c), `case ${c} passed`);
   assert.ok(pass.length >= 13, `every check ran (${pass.length})`);
   assert.match(out, /object table unit tests: all passed/);
 });
 
-test('watchdog_unit: no false stall from a stamp ahead of the watchdog\'s clock, a real one reported', { skip, timeout: 120000 }, () => {
+test('watchdog_unit: no false stall from a stamp ahead of the watchdog\'s clock, a real one reported', { skip: skipFor('watchdog_unit'), timeout: 120000 }, () => {
   const { out, pass } = run('watchdog_unit', ['-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-parameter']);
   for (const c of ['ahead-us', 'ahead-s', 'stall', 'short', 'download']) assert.ok(pass.includes(c), `case ${c} passed`);
   assert.ok(pass.length >= 7, `every check ran (${pass.length})`);
   assert.match(out, /watchdog unit tests: all passed/);
 });
 
-test('racenet_unit: the creator\'s list only from the creator, a joiner\'s states only for its own slot', { skip }, () => {
+test('racenet_unit: the creator\'s list only from the creator, a joiner\'s states only for its own slot', { skip: skipFor('racenet_unit') }, () => {
   const { out, pass } = run('racenet_unit', ['-O1', '-g', '-Wall', '-Wno-unused-function']);
   for (const c of ['stranger', 'creator', 'second', 'direct', 'own-slot', 'taken-slot', 'rules', 'reset', 'list-slots', 'old-creator', 'host-list',
     'host-slots']) assert.ok(pass.includes(c), `case ${c} passed`);
@@ -55,14 +58,14 @@ test('racenet_unit: the creator\'s list only from the creator, a joiner\'s state
   assert.match(out, /racenet unit tests: all passed/);
 });
 
-test('racecars_unit: each racer\'s own car states, only for its own car, drawn and driven', { skip }, () => {
+test('racecars_unit: each racer\'s own car states, only for its own car, drawn and driven', { skip: skipFor('racecars_unit') }, () => {
   const { out, pass } = run('racecars_unit', ['-O1', '-g', '-Wall', '-Wno-unused-function', '-ffp-contract=off']);
   for (const c of ['wire', 'stranger', 'own-slot', 'bound', 'rtt', 'drawn', 'ghost', 'hit', 'hit-back', 'driven', 'reset', 'claimed', 'honest',
     'old-creator']) assert.ok(pass.includes(c), `case ${c} passed`);
   assert.match(out, /racecars unit tests: all passed/);
 });
 
-test('catchup_unit: the career\'s rubberbanding as the setting says, outside career races the game\'s own', { skip }, () => {
+test('catchup_unit: the career\'s rubberbanding as the setting says, outside career races the game\'s own', { skip: skipFor('catchup_unit') }, () => {
   const { out, pass } = run('catchup_unit', ['-O1', '-g', '-Wall', '-Wextra', '-Wno-unused-function']);
   for (const m of ['original', 'noboost', 'off'])
     for (const c of ['no-race', 'behind', 'ahead', 'no-car']) assert.ok(pass.includes(`${m}-${c}`), `case ${m}-${c} passed`);
@@ -70,7 +73,7 @@ test('catchup_unit: the career\'s rubberbanding as the setting says, outside car
   assert.match(out, /catchup unit tests: all passed/);
 });
 
-test('modparts_unit: what a profile never holds, kept beside it (MODPARTS.DAT), stances too', { skip, timeout: 120000 }, () => {
+test('modparts_unit: what a profile never holds, kept beside it (MODPARTS.DAT), stances too', { skip: skipFor('modparts_unit'), timeout: 120000 }, () => {
   const { out } = run('modparts_unit', ['-O1', '-g', '-Wall', '-Wno-unused-function']);
   const pass = [...out.matchAll(/^PASS (\S+)/mg)].map(m => m[1]);
   for (const c of ['af-hide', 'af-back', 'trade', 'writefail', 'counter', 'deleted', 'modded-keys', 'stance-basic', 'stance-elsewhere', 'stance-replaced', 'stance-addon',
