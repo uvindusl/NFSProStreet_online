@@ -20,6 +20,10 @@ EXPECTED_ENTRY = 0x00828C25
 EXPECTED_MACHINE = 0x014C
 EXPECTED_SECTIONS = 6
 EXPECTED_TEXT_SHA256 = "963934d66f447eb2"
+# Length of the code in `.text`.  A section's size in the header is rounded up
+# to the section alignment, and the padding after the code differs between
+# images, so the hash covers only these bytes.
+EXPECTED_TEXT_SIZE = 0x56507B
 EXPECTED_IMPORT_COUNT = 365          # recovered from the live IAT
 
 # The game's own section names, from the original header it carries in .HEAVEN.
@@ -94,12 +98,19 @@ def main():
 
     print("\ncode")
     text = next(s for s in pe["sections"] if s["name"] == ".text")
-    body = data[text["va"]:text["va"] + text["vsize"]]
+    # Read at the section's file offset (rawptr), which equals its VA only in a
+    # memory image, and hash just the code, without the section padding.
+    body = data[text["rawptr"]:text["rawptr"] + EXPECTED_TEXT_SIZE]
     th = hashlib.sha256(body).hexdigest()
-    check(th.startswith(EXPECTED_TEXT_SHA256), ".text sha256", th)
+    check(th.startswith(EXPECTED_TEXT_SHA256), ".text sha256",
+          f"{th} (first {EXPECTED_TEXT_SIZE:#x} bytes)")
     # VC8 `_WinMainCRTStartup` opens with `call __security_init_cookie`
     # (e8) and then tail-jumps to `__tmainCRTStartup` (e9).
-    ep = data[pe["entry"] - pe["image_base"]:pe["entry"] - pe["image_base"] + 10]
+    ep_rva = pe["entry"] - pe["image_base"]
+    ep_sec = next((s for s in pe["sections"]
+                   if s["va"] <= ep_rva < s["va"] + s["vsize"]), None)
+    ep_off = ep_rva - ep_sec["va"] + ep_sec["rawptr"] if ep_sec else ep_rva
+    ep = data[ep_off:ep_off + 10]
     check(ep[0] == 0xE8 and ep[5] == 0xE9, "startup stub", ep.hex())
 
     print()
