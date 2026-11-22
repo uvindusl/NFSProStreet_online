@@ -135,7 +135,8 @@ def _p1_key():
         st = os.stat(EXE); h.update(f"{st.st_size}:{int(st.st_mtime)}".encode())
     except OSError:
         h.update(b'-')
-    h.update(f"|jtswitch={os.environ.get('JTSWITCH','')}|seeds={SEEDS}".encode())
+    h.update(f"|jtswitch={os.environ.get('JTSWITCH','')}|seeds={SEEDS}"
+             f"|sections={os.environ.get('LIFT_SECTIONS','')}".encode())
     for p in (SEEDS, RELOCS):
         h.update(b'|')
         try: h.update(open(p, 'rb').read())
