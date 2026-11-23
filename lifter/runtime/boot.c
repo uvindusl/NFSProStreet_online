@@ -47,6 +47,11 @@ static void *guest_main(void *arg) {
     c->gs_base = TEB_BASE;
     g_cur_cpu = c;
 
+    /* Initialize chunk descriptor list at 0x00ab47d4 (C++ constructor sub_0095aa70) */
+    c->ecx = 0x00ab47d4u;
+    guest_call(c, 0x0063da30u);
+    c->esp = STACK_HI - 0x1000u;
+
     fprintf(stderr, "boot: calling entry 0x%08x  esp=0x%08x  teb=0x%08x\n",
             ENTRY_VA, c->esp, TEB_BASE);
 
@@ -246,6 +251,16 @@ int main(int argc, char **argv) {
         MR32(0x00abafb0) = 0;
     }
 
+    /* Stale singleton pointer from dump; must be 0 for sub_00701540 to initialize singleton */
+    if (mem_is_committed(0x00ac107c)) {
+        MR32(0x00ac107c) = 0;
+    }
+
+    /* Stale allocator/cache pointers from dump; must be 0 for sub_00530c60 to reinitialize */
+    if (mem_is_committed(0x00ab0e5c)) {
+        memset(g_mem + 0x00ab0e5c, 0, 0x24);
+    }
+
     /* Circular list sentinels that must point to themselves when empty */
     if (mem_is_committed(0x00a61110)) {
         MR32(0x00a61110) = 0x00a61110;
@@ -405,6 +420,18 @@ int main(int argc, char **argv) {
         MR32(0x00aa9684) = 0x00aa9638;
     }
 
+    /* Stale chunk loader list and pool heads from process dump */
+    if (mem_is_committed(0x00aa9620)) {
+        MR32(0x00aa9620) = 0x00aa9620;
+        MR32(0x00aa9624) = 0x00aa9620;
+        MR32(0x00aa9628) = 0;
+    }
+    if (mem_is_committed(0x00abb060)) {
+        for (uint32_t a = 0x00abb060; a <= 0x00abb09c; a += 4) {
+            MR32(a) = 0;
+        }
+    }
+
     /* Stale stdext::hash_map and vector from process dump */
     if (mem_is_committed(0x00ff2520)) {
         if (mem_is_committed(0x00a99658)) {
@@ -429,6 +456,29 @@ int main(int argc, char **argv) {
         MR32(0x00ff2620) = 0;
         MR32(0x00ff2628) = 0;
         MR32(0x00ff262c) = 0;
+    }
+
+    /* Stale allocator tracking list head from process dump */
+    if (mem_is_committed(0x00a9dee8)) {
+        MR32(0x00a9dee8) = 0;
+        MR32(0x00a9deec) = 0x00a9deec;
+        MR32(0x00a9def0) = 0x00a9deec;
+    }
+
+    /* Stale file/asset manager state from process dump (0x00a61110..0x00a61248) */
+    if (mem_is_committed(0x00a61110)) {
+        MR32(0x00a61110) = 0x00a61110;
+        MR32(0x00a61114) = 0x00a61110;
+        MR32(0x00a6111c) = 0x00a6111c;
+        MR32(0x00a61120) = 0x00a6111c;
+        MR32(0x00a61124) = 0;
+        MR32(0x00a61128) = 0;
+        MR32(0x00a61138) = 0x00a61138;
+        MR32(0x00a6113c) = 0x00a61138;
+        MR32(0x00a61140) = 0;
+        MR32(0x00a61144) = 0;
+        MR32(0x00a61240) = 0x00a61240;
+        MR32(0x00a61244) = 0x00a61240;
     }
 
     apply_set_env();

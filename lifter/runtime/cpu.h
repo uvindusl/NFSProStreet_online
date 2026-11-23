@@ -242,7 +242,7 @@ static inline uint32_t parity8(uint32_t v){ v&=0xff; v^=v>>4; v^=v>>2; v^=v>>1; 
 #define FLAGS_SBB(a,b,cin,res,bits) FLAGS_SBB_M(a,b,cin,res,bits,F_ALL)
 /* logical: CF=OF=0 */
 #define FLAGS_LOG_M(res,bits,M) do{ SETZSP_M(res,bits,M); \
-    if((M)&F_CF) RG_(cf)=0; if((M)&F_OF) RG_(of)=0; if((M)&F_AF) RG_(af)=0; }while(0)
+    if((M)&F_CF) { RG_(cf)=0; } if((M)&F_OF) { RG_(of)=0; } if((M)&F_AF) { RG_(af)=0; } }while(0)
 #define FLAGS_LOG(res,bits) FLAGS_LOG_M(res,bits,F_ALL)
 
 /* ---- stack ------------------------------------------------------------ */

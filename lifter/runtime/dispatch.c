@@ -53,7 +53,13 @@ static int g_diab_miss_n;
  * stack instead, which is what actually matters here. */
 
 /* Lifted helper declarations */
+void sub_004040f0(CPU *c);
 void sub_00435140(CPU *c);
+void sub_0044bfd0(CPU *c);
+void sub_004add90(CPU *c);
+void sub_004c8280(CPU *c);
+void sub_004c9730(CPU *c);
+void sub_00542700(CPU *c);
 void sub_00909210(CPU *c);
 void sub_009096a0(CPU *c);
 
@@ -235,10 +241,12 @@ static void sub_0042857c_impl(CPU *restrict c) {
     if (c->eax != 0) {
         if (mem_is_committed(0xa9dee8) && MR32(0xa9dee8) == 1) {
             uint32_t ecx = MR32(0xa9def0);
-            MR32(ecx) = c->eax;
-            MR32(0xa9def0) = c->eax;
-            MR32(c->eax + 4) = ecx;
-            MR32(c->eax) = 0xa9deec;
+            if (ecx && mem_is_committed(ecx)) {
+                MR32(ecx) = c->eax;
+                MR32(0xa9def0) = c->eax;
+                MR32(c->eax + 4) = ecx;
+                MR32(c->eax) = 0xa9deec;
+            }
         }
     }
     POP32(c->edi);
@@ -293,18 +301,19 @@ static void sub_01a01120_impl(CPU *restrict c) {
     POP32(c->ebp);
     POP32(c->ebx);
     POP32(c->ecx);
-    uint32_t ret_42857c;
-    POP32(ret_42857c);
+    { uint32_t _t; POP32(_t); (void)_t; }
 
     /* Continuation 0x0042857c */
     c->esp += 12;
     if (c->eax != 0) {
         if (mem_is_committed(0xa9dee8) && MR32(0xa9dee8) == 1) {
             uint32_t ecx2 = MR32(0xa9def0);
-            MR32(ecx2) = c->eax;
-            MR32(0xa9def0) = c->eax;
-            MR32(c->eax + 4) = ecx2;
-            MR32(c->eax) = 0xa9deec;
+            if (ecx2 && mem_is_committed(ecx2)) {
+                MR32(ecx2) = c->eax;
+                MR32(0xa9def0) = c->eax;
+                MR32(c->eax + 4) = ecx2;
+                MR32(c->eax) = 0xa9deec;
+            }
         }
     }
     POP32(c->edi);
@@ -340,18 +349,19 @@ static void sub_01a0114c_impl(CPU *restrict c) {
     POP32(c->ebp);
     POP32(c->ebx);
     POP32(c->ecx);
-    uint32_t ret_42857c;
-    POP32(ret_42857c);
+    { uint32_t _t; POP32(_t); (void)_t; }
 
     /* Continuation 0x0042857c */
     c->esp += 12;
     if (c->eax != 0) {
         if (mem_is_committed(0xa9dee8) && MR32(0xa9dee8) == 1) {
             uint32_t ecx2 = MR32(0xa9def0);
-            MR32(ecx2) = c->eax;
-            MR32(0xa9def0) = c->eax;
-            MR32(c->eax + 4) = ecx2;
-            MR32(c->eax) = 0xa9deec;
+            if (ecx2 && mem_is_committed(ecx2)) {
+                MR32(ecx2) = c->eax;
+                MR32(0xa9def0) = c->eax;
+                MR32(c->eax + 4) = ecx2;
+                MR32(c->eax) = 0xa9deec;
+            }
         }
     }
     POP32(c->edi);
@@ -534,9 +544,16 @@ void dispatch_init(void) {
     }
 
     /* Register missing return/continuation points */
+    g_dtab[0x004040f0 - TEXT_BASE] = sub_004040f0;
     g_dtab[0x0042857c - TEXT_BASE] = sub_0042857c_impl;
     g_dtab[0x00431060 - TEXT_BASE] = sub_019f7630_impl;
+    g_dtab[0x0044bfd0 - TEXT_BASE] = sub_0044bfd0;
+    g_dtab[0x004add90 - TEXT_BASE] = sub_004add90;
+    g_dtab[0x004c8280 - TEXT_BASE] = sub_004c8280;
+    g_dtab[0x004c9730 - TEXT_BASE] = sub_004c9730;
+    g_dtab[0x00542700 - TEXT_BASE] = sub_00542700;
     g_dtab[0x004591a0 - TEXT_BASE] = sub_004591a0;
+    g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
     g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
     g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
 
@@ -565,10 +582,484 @@ static void sub_016ba000_impl(CPU *restrict c) {
     dispatch_indirect(c, target);
 }
 
+static void sub_01a11e20_impl(CPU *restrict c) {
+    PUSH32(c->edi);
+    c->eax = c->esi + 0x220u;
+    if (mem_is_committed(0x1a6afed)) {
+        MR32(0x1a6afed)--;
+        if (MR32(0x1a6afed) == 0) {
+            MR32(0x1a6afed) = 0x1c1;
+        }
+    }
+    for (uint32_t i = 0; i < 0x40; i++) {
+        MR32(c->eax + 0xfffffde0u + i * 4) = 0;
+        MR32(c->eax + 0xffffff00u + i * 4) = 0;
+        MR32(c->eax + i * 4) = 0;
+    }
+    c->ecx = 0;
+    c->edi = 0;
+
+    uint32_t arg_eax = MR32(c->esi + 0x100u);
+    c->edx = MR32(c->esi + 0x114u);
+    PUSH32(arg_eax);
+    c->eax = c->esi;
+    PUSH32(0x01a11e78u);
+
+    dispatch_indirect(c, 0x00463f70u);
+
+    if (c->eip == 0x01a11e78u) {
+        c->eip = 0;
+        extern void sub_01a11e78(CPU *);
+        sub_01a11e78(c);
+    }
+
+    if (c->eip == 0x0055fae3u) {
+        c->eax = c->esi;
+        if (mem_is_committed(c->esp)) {
+            uint32_t t;
+            POP32(t); c->esi = t;
+            POP32(c->eip);
+            c->esp += 0x14u;
+        }
+    }
+}
+
+static void sub_01a08500_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg1 = MR32(c->esp);
+    uint32_t arg2 = MR32(c->esp + 4);
+    uint32_t arg3 = MR32(c->esp + 8);
+
+    uint32_t item = 0;
+    if (mem_is_committed(0x00abb064u) && MR32(0x00abb064u) != 0 && mem_is_committed(MR32(0x00abb064u))) {
+        item = MR32(0x00abb064u);
+        MR32(0x00abb064u) = MR32(item);
+    } else {
+        item = gh_alloc(28, 1, 4);
+    }
+
+    MR32(item + 0x00) = 0x009f91f4u;
+    MR32(item + 0x04) = 0;
+    MR32(item + 0x08) = 0;
+    MR32(item + 0x0c) = arg1;
+    MR32(item + 0x10) = arg3;
+    MR32(item + 0x14) = arg2;
+    MR32(item + 0x18) = 0;
+
+    uint32_t node = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        node = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(node);
+    } else {
+        node = gh_alloc(12, 1, 4);
+    }
+    MR32(node + 0x08) = item;
+
+    uint32_t list_head = 0x00aa9620u;
+    uint32_t prev_tail = MR32(0x00aa9624u);
+    if (!prev_tail) prev_tail = list_head;
+    MR32(node + 0x00) = list_head;
+    MR32(node + 0x04) = prev_tail;
+    MR32(prev_tail + 0x00) = node;
+    MR32(0x00aa9624u) = node;
+    MR32(0x00aa9628u) += 1;
+
+    c->eax = node;
+    c->eip = ret_addr;
+}
+
+static void sub_01a15c00_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg0 = MR32(c->esp);
+    uint32_t arg1 = MR32(c->esp + 4);
+    uint32_t arg2 = MR32(c->esp + 8);
+    uint32_t arg3 = MR32(c->esp + 12);
+    uint32_t arg4 = MR32(c->esp + 16);
+
+    if (arg0 && mem_is_committed(arg0)) MR32(arg0) = 0xffffffffu;
+    if (arg1 && mem_is_committed(arg1)) MR32(arg1) = 0xffffffffu;
+
+    uint32_t item = 0;
+    if (mem_is_committed(0x00abb064u) && MR32(0x00abb064u) != 0 && mem_is_committed(MR32(0x00abb064u))) {
+        item = MR32(0x00abb064u);
+        MR32(0x00abb064u) = MR32(item);
+    } else {
+        item = gh_alloc(32, 1, 4);
+    }
+
+    MR32(item + 0x00) = 0x009f9200u;
+    MR32(item + 0x04) = 0;
+    MR32(item + 0x08) = 0;
+    MR32(item + 0x0c) = arg0;
+    MR32(item + 0x10) = arg1;
+    MR32(item + 0x14) = arg2;
+    MR32(item + 0x18) = arg3;
+    MR32(item + 0x1c) = arg4;
+
+    uint32_t node = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        node = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(node);
+    } else {
+        node = gh_alloc(12, 1, 4);
+    }
+    MR32(node + 0x08) = item;
+
+    uint32_t list_head = 0x00aa9620u;
+    uint32_t prev_tail = MR32(0x00aa9624u);
+    if (!prev_tail) prev_tail = list_head;
+    MR32(node + 0x00) = list_head;
+    MR32(node + 0x04) = prev_tail;
+    MR32(prev_tail + 0x00) = node;
+    MR32(0x00aa9624u) = node;
+    MR32(0x00aa9628u) += 1;
+
+    c->eax = node;
+    c->eip = ret_addr;
+}
+
+static void sub_01a04860_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg0 = MR32(c->esp);
+
+    uint32_t item = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        item = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(item);
+    } else {
+        item = gh_alloc(16, 1, 4);
+    }
+    MR32(item + 0x00) = 0x009f91e8u;
+    MR32(item + 0x04) = 0;
+    MR32(item + 0x08) = 0;
+    MR32(item + 0x0c) = arg0;
+
+    uint32_t node = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        node = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(node);
+    } else {
+        node = gh_alloc(12, 1, 4);
+    }
+    MR32(node + 0x08) = item;
+
+    uint32_t list_head = 0x00aa9620u;
+    uint32_t prev_tail = MR32(0x00aa9624u);
+    if (!prev_tail) prev_tail = list_head;
+    MR32(node + 0x00) = list_head;
+    MR32(node + 0x04) = prev_tail;
+    MR32(prev_tail + 0x00) = node;
+    MR32(0x00aa9624u) = node;
+    MR32(0x00aa9628u) += 1;
+
+    c->eax = node;
+    c->eip = ret_addr;
+}
+
+static void sub_01a14870_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+
+    uint32_t item = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        item = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(item);
+    } else {
+        item = gh_alloc(16, 1, 4);
+    }
+    MR32(item + 0x00) = 0x009f91c4u;
+    MR32(item + 0x04) = 0;
+    MR32(item + 0x08) = 0;
+    MR32(item + 0x0c) = 1;
+
+    uint32_t node = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        node = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(node);
+    } else {
+        node = gh_alloc(12, 1, 4);
+    }
+    MR32(node + 0x08) = item;
+
+    uint32_t list_head = 0x00aa9620u;
+    uint32_t prev_tail = MR32(0x00aa9624u);
+    if (!prev_tail) prev_tail = list_head;
+    MR32(node + 0x00) = list_head;
+    MR32(node + 0x04) = prev_tail;
+    MR32(prev_tail + 0x00) = node;
+    MR32(0x00aa9624u) = node;
+    MR32(0x00aa9628u) += 1;
+
+    c->eax = node;
+    c->eip = ret_addr;
+}
+
+static void sub_01a03bc0_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t p = 0;
+    if (mem_is_committed(0x00abb06cu) && MR32(0x00abb06cu) != 0 && mem_is_committed(MR32(0x00abb06cu))) {
+        p = MR32(0x00abb06cu);
+        MR32(0x00abb06cu) = MR32(p);
+    } else {
+        p = gh_alloc(56, 1, 4);
+    }
+    memset((void*)(g_mem + p), 0, 56);
+    c->eax = p;
+    c->eip = ret_addr;
+}
+
+static void sub_01a143a0_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t p = 0;
+    if (mem_is_committed(0x00abb068u) && MR32(0x00abb068u) != 0 && mem_is_committed(MR32(0x00abb068u))) {
+        p = MR32(0x00abb068u);
+        MR32(0x00abb068u) = MR32(p);
+    } else {
+        p = gh_alloc(36, 1, 4);
+    }
+    memset((void*)(g_mem + p), 0, 36);
+    c->eax = p;
+    c->eip = ret_addr;
+}
+
+static void sub_01a03800_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+
+    uint32_t esi = c->esi;
+    if (mem_is_committed(0x00abaeecu) && MR32(0x00abaeecu) != 0) {
+        c->eax = 0;
+        c->eip = ret_addr;
+        return;
+    }
+    if (!mem_is_committed(esi) || (MR8(esi + 0x0e) & 0x10) != 0) {
+        c->eax = 0;
+        c->eip = ret_addr;
+        return;
+    }
+
+    uint32_t arg1 = MR32(esi + 0x10);
+    uint32_t arg2 = MR32(0x019f2e78u);
+
+    uint32_t saved_ebx = c->ebx;
+    uint32_t saved_esi = c->esi;
+    uint32_t saved_edi = c->edi;
+    uint32_t saved_ebp = c->ebp;
+
+    /* Call sub_00458260(arg1, arg2) */
+    PUSH32(arg2);
+    PUSH32(arg1);
+    PUSH32(0x1a0383eu);
+    extern void sub_00458260(CPU *);
+    sub_00458260(c);
+    c->esp += 8;
+
+    uint32_t res = c->eax;
+
+    c->ebx = saved_ebx;
+    c->esi = saved_esi;
+    c->edi = saved_edi;
+    c->ebp = saved_ebp;
+
+    if (!res || !mem_is_committed(res)) {
+        c->eax = 0;
+        c->eip = ret_addr;
+        return;
+    }
+
+    MR16(esi + 0x0e) |= 0x100;
+    MR16(res + 0x0e) |= 0x100;
+
+    if (mem_is_committed(0x00bfbe98u) && MR32(0x00bfbe98u) != 0) {
+        c->eax = 1;
+        c->eip = ret_addr;
+        return;
+    }
+
+    MR16(esi + 0x0e) |= 0x200;
+    MR16(res + 0x0e) |= 0x200;
+    c->eax = 1;
+    c->eip = ret_addr;
+}
+
+static void sub_019f7010_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg0 = MR32(c->esp);
+    uint32_t arg1 = MR32(c->esp + 4);
+    uint32_t arg2 = MR32(c->esp + 8);
+    uint32_t arg3 = MR32(c->esp + 12);
+    uint32_t arg4 = MR32(c->esp + 16);
+    uint32_t arg5 = MR32(c->esp + 20);
+
+    uint32_t item = 0;
+    if (mem_is_committed(0x00abb068u) && MR32(0x00abb068u) != 0 && mem_is_committed(MR32(0x00abb068u))) {
+        item = MR32(0x00abb068u);
+        MR32(0x00abb068u) = MR32(item);
+    } else {
+        item = gh_alloc(36, 1, 4);
+    }
+
+    MR32(item + 0x00) = 0x009f9218u;
+    MR32(item + 0x04) = 0;
+    MR32(item + 0x08) = 0;
+    MR32(item + 0x0c) = arg0;
+    MR32(item + 0x10) = arg1;
+    MR32(item + 0x14) = arg2;
+    MR32(item + 0x18) = arg3;
+    MR32(item + 0x1c) = arg5;
+    MR32(item + 0x20) = arg4;
+
+    uint32_t node = 0;
+    if (mem_is_committed(0x00abb060u) && MR32(0x00abb060u) != 0 && mem_is_committed(MR32(0x00abb060u))) {
+        node = MR32(0x00abb060u);
+        MR32(0x00abb060u) = MR32(node);
+    } else {
+        node = gh_alloc(12, 1, 4);
+    }
+    MR32(node + 0x08) = item;
+
+    uint32_t list_head = 0x00aa9620u;
+    uint32_t prev_tail = MR32(0x00aa9624u);
+    if (!prev_tail) prev_tail = list_head;
+    MR32(node + 0x00) = list_head;
+    MR32(node + 0x04) = prev_tail;
+    MR32(prev_tail + 0x00) = node;
+    MR32(0x00aa9624u) = node;
+    MR32(0x00aa9628u) += 1;
+
+    c->eax = node;
+    c->eip = ret_addr;
+}
+
+static void sub_016be884_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t obj = c->ecx;
+
+    if (mem_is_committed(0x00abaeecu) && MR32(0x00abaeecu) != 0) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    if (!mem_is_committed(obj)) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    int8_t count = (int8_t)MR8(obj + 0x19u);
+    if (count <= 0) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    uint32_t table = MR32(obj + 0x2cu);
+    if (!mem_is_committed(table)) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    extern void sub_00459c10(CPU *);
+
+    for (int32_t i = 0; i < count; i++) {
+        uint32_t entry = table + (uint32_t)i * 8u;
+        if (!mem_is_committed(entry)) break;
+        uint32_t chunk_id = MR32(entry);
+
+        /* Call sub_00459c10(chunk_id, 1, 0) */
+        uint32_t saved_ebx = c->ebx;
+        uint32_t saved_esi = c->esi;
+        uint32_t saved_edi = c->edi;
+        uint32_t saved_ebp = c->ebp;
+
+        PUSH32(0u);           /* arg2 = 0 */
+        PUSH32(1u);           /* arg1 = 1 */
+        PUSH32(chunk_id);     /* arg0 = chunk_id */
+        PUSH32(0x16be8c2u);   /* return address */
+        sub_00459c10(c);
+        c->esp += 12u;        /* clean up 3 stack args */
+
+        uint32_t result = c->eax;
+
+        c->ebx = saved_ebx;
+        c->esi = saved_esi;
+        c->edi = saved_edi;
+        c->ebp = saved_ebp;
+
+        MR32(entry + 4u) = result;
+    }
+
+    c->eip = ret_addr;
+}
+
+static void sub_016be8d7_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t obj = c->eax;
+
+    if (!mem_is_committed(obj)) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    uint32_t table = MR32(obj + 0x3cu);
+    int8_t count = (int8_t)MR8(obj + 0x1au);
+    if (count <= 0 || !mem_is_committed(table)) {
+        c->eip = ret_addr;
+        return;
+    }
+
+    uint32_t default_val = mem_is_committed(0x00bfbf6cu) ? MR32(0x00bfbf6cu) : 0;
+    uint32_t sentinel = 0x00a9e574u;
+
+    uint32_t cur_entry = table;
+    for (int32_t i = 0; i < count; i++) {
+        if (!mem_is_committed(cur_entry)) break;
+        uint32_t key = MR32(cur_entry);
+        uint32_t node = mem_is_committed(0x00a9e578u) ? MR32(0x00a9e578u) : 0;
+        uint32_t found_val = default_val;
+
+        int depth = 0;
+        while (node != 0 && ++depth < 100000) {
+            uint32_t adj = node - 4;
+            if (adj == sentinel || !mem_is_committed(adj)) {
+                found_val = default_val;
+                break;
+            }
+            if (MR32(adj + 0x0cu) == key) {
+                found_val = adj;
+                break;
+            }
+            node = MR32(adj + 0x04u);
+        }
+
+        MR32(cur_entry + 4u) = found_val;
+        cur_entry += 8u;
+    }
+
+    c->eip = ret_addr;
+}
+
 /* Lifted function at a diabolus-section address, or NULL.  The table is sorted
  * by dispatch_init(). */
 static guest_fn_t diabolus_lookup(uint32_t a) {
+    if (a == 0x016be884) return sub_016be884_impl;
+    if (a == 0x016be8d7) return sub_016be8d7_impl;
     if (a == 0x016ba000) return sub_016ba000_impl;
+    if (a == 0x01a11e20) return sub_01a11e20_impl;
+    if (a == 0x01a08500) return sub_01a08500_impl;
+    if (a == 0x01a15c00) return sub_01a15c00_impl;
+    if (a == 0x01a04860) return sub_01a04860_impl;
+    if (a == 0x01a14870) return sub_01a14870_impl;
+    if (a == 0x01a03bc0) return sub_01a03bc0_impl;
+    if (a == 0x01a143a0) return sub_01a143a0_impl;
+    if (a == 0x01a03800) return sub_01a03800_impl;
+    if (a == 0x019f7010) return sub_019f7010_impl;
     if (a == 0x01a01120) return sub_01a01120_impl;
     if (a == 0x01a0114c) return sub_01a0114c_impl;
     if (a == 0x019f7630) return sub_019f7630_impl;
@@ -720,10 +1211,12 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         if (addr == 0x019ff0edu) {
             if (MR32(0x00a9dee8u) == 1) {
                 uint32_t eax = MR32(0x00a9def0u);
-                MR32(eax) = c->esi;
-                MR32(0x00a9def0u) = c->esi;
-                MR32(c->esi + 4) = eax;
-                MR32(c->esi) = 0x00a9deecu;
+                if (eax && mem_is_committed(eax)) {
+                    MR32(eax) = c->esi;
+                    MR32(0x00a9def0u) = c->esi;
+                    MR32(c->esi + 4) = eax;
+                    MR32(c->esi) = 0x00a9deecu;
+                }
             }
             { uint32_t _t; POP32(_t); c->edi = _t; }
             MR32(0x00bfbe6cu) = c->esi;
@@ -749,36 +1242,6 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
             c->esp += 0x14u;
             return;
         }
-        if (addr == 0x00558babu) {
-            c->esp += 8u;
-            if (c->eax == 0) {
-                MR16(c->esi + 0x4u) += 1;
-                c->ecx = MR32(MR32(0x19f2a24u));
-                PUSH32(0x558bd1u);
-                dispatch_indirect(c, 0x00904a30u);
-                return;
-            }
-        }
-        if (addr == 0x00558bd1u) {
-            { uint32_t _t; POP32(_t); c->esi = _t; }
-            c->eax = c->ebp;
-            { uint32_t _t; POP32(_t); c->ebp = _t; }
-            { uint32_t _t; POP32(_t); c->ebx = _t; }
-            { uint32_t _t; POP32(_t); c->edi = _t; }
-            POP32(c->eip);
-            c->esp += 4u;
-            return;
-        }
-        if (addr == 0x00558c63u) {
-            c->eax = c->esi + 6u;
-            { uint32_t _t; POP32(_t); c->esi = _t; }
-            { uint32_t _t; POP32(_t); c->ebp = _t; }
-            { uint32_t _t; POP32(_t); c->ebx = _t; }
-            { uint32_t _t; POP32(_t); c->edi = _t; }
-            POP32(c->eip);
-            c->esp += 4u;
-            return;
-        }
         guest_fn_t f = diabolus_lookup(addr);
         if (f) {
             g_stat_indirect_ok++;
@@ -800,9 +1263,59 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         }
         return;
     }
+    if (addr == 0x0055fae3u) {
+        c->eax = c->esi;
+        if (mem_is_committed(c->esp)) {
+            uint32_t t;
+            POP32(t); c->esi = t;
+            POP32(c->eip);
+            c->esp += 0x14u;
+        }
+        return;
+    }
     if (addr == 0x004adb5bu) {
         c->eax = (c->eax != 0) ? 1 : 0;
         if (mem_is_committed(c->esp)) POP32(c->eip);
+        return;
+    }
+    if (addr == 0x00558babu) {
+        c->esp += 8u;
+        if (c->eax == 0) {
+            MR16(c->esi + 0x4u) += 1;
+            c->ecx = MR32(MR32(0x19f2a24u));
+            PUSH32(0x558bd1u);
+            dispatch_indirect(c, 0x00904a30u);
+            return;
+        }
+    }
+    if (addr == 0x00558bd1u) {
+        { uint32_t _t; POP32(_t); c->esi = _t; }
+        c->eax = c->ebp;
+        { uint32_t _t; POP32(_t); c->ebp = _t; }
+        { uint32_t _t; POP32(_t); c->ebx = _t; }
+        { uint32_t _t; POP32(_t); c->edi = _t; }
+        POP32(c->eip);
+        c->esp += 4u;
+        return;
+    }
+    if (addr == 0x00558c63u) {
+        c->eax = c->esi + 6u;
+        { uint32_t _t; POP32(_t); c->esi = _t; }
+        { uint32_t _t; POP32(_t); c->ebp = _t; }
+        { uint32_t _t; POP32(_t); c->ebx = _t; }
+        { uint32_t _t; POP32(_t); c->edi = _t; }
+        POP32(c->eip);
+        c->esp += 4u;
+        return;
+    }
+    if (addr == 0x00558cd2u) {
+        { uint32_t _t; POP32(_t); c->esi = _t; }
+        { uint32_t _t; POP32(_t); c->ebp = _t; }
+        { uint32_t _t; POP32(_t); c->ebx = _t; }
+        c->eax = 0;
+        { uint32_t _t; POP32(_t); c->edi = _t; }
+        POP32(c->eip);
+        c->esp += 4u;
         return;
     }
     unresolved(c, addr);
