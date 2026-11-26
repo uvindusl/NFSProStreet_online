@@ -38,6 +38,25 @@ jobs:
           echo "OPENCODE_API_KEY=$token" >> "$GITHUB_ENV"
 
       - name: Review pull request
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          opencode run --standalone --model opencode/big-pickle \
-            "Review this repository for the current pull request changes. Focus on correctness, regressions, security, and missing tests. Summarize any issues and call out anything risky."
+          set -euo pipefail
+          out="opencode-review.md"
+          prompt="Review pull request #${PR_NUMBER} in this checked-out repository. Focus on correctness, regressions, security, and missing tests. Summarize any issues and call out anything risky. Use concise markdown."
+
+          opencode run --standalone --format default --model opencode/big-pickle "$prompt" | tee "$out"
+
+          if [ ! -s "$out" ]; then
+            echo "OpenCode produced no review output" > "$out"
+          fi
+
+          {
+            echo "## OpenCode PR Review"
+            echo
+            cat "$out"
+          } > opencode-review-comment.md
+
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file opencode-review-comment.md
