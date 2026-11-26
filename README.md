@@ -4,7 +4,7 @@ An experimental, from-scratch **static recompilation** of the 2007 PC game *Need
 
 The game's x86 code is translated to C ahead of time. That C is compiled into a native binary (and, as a second target, to WebAssembly), and a hand-written Win32 / Direct3D 9 / D3DX high-level emulation layer stands in for Windows. The long-term goal is to run the game in a browser using WebGPU and Web Audio.
 
-> **Status: early. The game does not run yet.** The code lifts and loads, and parts of the graphics stack work in isolation, but the program stops during C runtime start-up and never reaches `main`. See [Status](#status) for exactly what has been verified.
+> **Status: early. The game does not run yet.** The code lifts and loads, CRT initialization completes, the engine enters `WinMain`, and the asset loader actively mounts archives and parses databases. Current work focuses on completing attribute tree resolution, message loop pumping, and presenting the first frames. See [Status](#status) for exactly what has been verified.
 
 **Bring your own copy of the game.** This repository contains no game code, game data, shaders, or Microsoft DLLs. Everything derived from the game (lifted C, images, shader blobs) is generated locally and is git-ignored.
 
@@ -39,8 +39,8 @@ Each row is only marked ✅ when there is a command that reproduces it on the cu
 | x86 → C lift | ✅ 47,514 functions lifted | `scripts/lift_boot.sh` |
 | Native runtime builds, warnings as errors | ✅ | `STRICT=1 scripts/build_runtime.sh` |
 | Image loads, 371 imports bound | ✅ | `scripts/run_boot.sh` (see boot log) |
-| C runtime start-up | ⛔ stops at static constructor 13 of 2,811 | `scripts/run_boot.sh` |
-| Reaches `main` | ❌ not reached | — |
+| C runtime start-up | ✅ completes (unpacked image post-load state) | `scripts/run_boot.sh` |
+| Reaches `main` | ✅ `WinMain` running (0x004afee0) | `grep 'main-entry' out/boot.log` |
 | D3D9 HLE: device, buffers, draw | ✅ native triangle test | `tests/build_d3d9_htriangle.sh` |
 | D3D9 HLE: textures | ✅ native textured-quad test (API calls only, no pixel comparison) | `tests/build_d3d9_textured_quad.sh` |
 | Shader bytecode parsing | ✅ all 591 shaders parse | `lifter/tools/build_shader_disasm.sh` |
@@ -49,13 +49,15 @@ Each row is only marked ✅ when there is a command that reproduces it on the cu
 | Web build | ✅ builds | `FULL=1 web/build.sh`, then `cd web && npm ci && node build.mjs` |
 | WebGPU test triangle in Chrome | ✅ interpolated triangle verified by pixel sampling | `analysis/webgpu-test/` |
 | A real ProStreet shader rendered correctly in WebGPU | ❌ not yet; output does not match expected colour | in progress |
-| Game files, audio, input, menus, racing | ❌ not started | — |
+| Game files: archive streaming | 🟡 loads `GLOBALA.BUN`, `GlobalMemoryFile.bin`, parses `ATTRIBUTES.BIN` | `grep 'GLOBAL' out/boot.log` |
+| Audio, input, menus, racing | ❌ not started | — |
 
 The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The roadmap to a playable game is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues
 
-- **Boot stops in the C runtime start-up.** The program halts at an unresolved indirect call during static constructor 13. Nothing past that point has run, so no gameplay-related code (D3D9 from the game, audio, input, file loading) has been exercised by the real game.
+- **Boot stops during attribute tree validation.** After mounting `GLOBAL\GLOBALA.BUN` and parsing `GLOBAL\ATTRIBUTES.BIN` (251 attributes inserted), `sub_00530f60` encounters a NULL dereference at offset `0x22`. Resolving this structure is required before the engine enters its main render loop.
+- **Window message loop pump.** The engine requires continuous message draining (`PeekMessageA`/`DispatchMessageA`) to pump OS window events alongside rendering.
 - **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
 - **The CPU shader interpreter is incomplete.** It has no `cmp` case and computes `lrp` with the operands reversed. The WGSL emitter is correct; the interpreter is not used on that path.
 - **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.

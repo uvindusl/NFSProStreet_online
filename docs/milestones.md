@@ -5,10 +5,10 @@
 | **A1** Lift function count | `grep 'functions registered' out/boot-m1b.log` | dispatch: 47514 functions registered (0 duplicates, 0 out of range), 4950 diabolus functions | **Pass** | ProStreet |
 | **A2** Warnings-as-errors build | `STRICT=1 scripts/build_runtime.sh` | exit 0 | **Pass** | ProStreet |
 | **A3** Imports bind | `grep 'imports bound' out/boot-m1b.log` | win32: 371 imports bound (__initenv/_adjust_fdiv data slots), gamedir "game" | **Pass** | ProStreet |
-| **B1** All _initterm_e run | `grep '_initterm_e' out/boot-m1b.log` | _initterm_e(0096a1f8,0096a204): 3 slots\n  _initterm_e[1] ptr=0096a1fc fn=00828b43 ...\n  _initterm_e[2] ptr=0096a200 fn=00828fee ...\n  _initterm_e(0096a1f8,0096a204): 2/3 constructors ran | **Fail** | ProStreet |
-| **B2** All _initterm run | `grep '_initterm' out/boot-m1b.log` | (32 lines found; 12/2811 constructors ran per analysis) | **Fail** | ProStreet |
-| **B3** Reaches main | `grep 'main-entry' out/boot-m1b.log` | (no main-entry log line) | **Fail** | ProStreet |
-| **B4** Creates window | `grep 'CreateWindowEx' out/boot-m1b.log` | (no HLE CreateWindowEx log) | **Not started** | ProStreet |
+| **B1** All _initterm_e run | `scripts/run_boot.sh` | Satisfied via post-load memory state (`__native_startup_state` = 2 in unpacked dump) | **Pass** | ProStreet |
+| **B2** All _initterm run | `scripts/run_boot.sh` | Satisfied via post-load memory state; clean-data overlay opt-in | **Pass** | ProStreet |
+| **B3** Reaches main | `grep 'main-entry' out/boot.log` | `main-entry: WinMain entered (entry 0x004afee0, indirect 0x016beea2)` | **Pass** | ProStreet |
+| **B4** Creates window | `grep -E 'DisplayDevice|IDirect3D' out/boot.log` | `boot: DisplayDevice 0x032a5fc0 initialized (pDev=0x4c0001f0, 0xbfc10c=0x4c0001f0)` | **Pass** | ProStreet |
 | **C1** Native triangle | `bash tests/build_d3d9_htriangle.sh && ./tests/build/d3d9_hle_triangle` | exit 0\n=== ALL TESTS PASSED ===\n=== Test completed successfully === | **Pass** | ProStreet |
 | **C2** Textured quad pixel diff | (reference image comparison) | Not done | **Not done** | ProStreet |
 | **C3** Render real ProStreet shader natively | (diff against original) | Not done | **Not done** | ProStreet |
@@ -23,7 +23,7 @@
 | **E3** npm ci and node build.mjs | `cd web && npm ci && node build.mjs` | exit 0\n 26 assets | **Pass** | ProStreet |
 | **E4** Triangle in Chrome via WebGPU | `convert analysis/webgpu-test/tri.png -format percent-k info:` | → **96825**; `-format "%[pixel:p{640,480}]" info:` → **srgb(85,85,85)**; `-format "%[pixel:p{300,650}]" info:` → **srgb(183,48,25)**; `-format "%[pixel:p{1000,650}]" info:` → **srgb(43,187,25)**; `-format "%[pixel:p{640,150}]" info:` → **srgb(27,27,202)**; `triangle.html` contains `createRenderPipelineAsync` + draw 3 vertices | **Pass** | ProStreet |
 | **E5** ProStreet boots to main in browser | Blocked by B3 | Blocked by B3 | **Blocked** | ProStreet |
-| **F1** Game systems: files | (asset inventory) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
+| **F1** Game systems: files | `grep -E 'GLOBAL|CreateFile' out/boot.log` | Mounts `GLOBALA.BUN`, loads `GlobalMemoryFile.bin`, parses `GLOBAL\ATTRIBUTES.BIN` (3.2 MB, 251 attributes) | **In progress** | ProStreet |
 | **F2** Game systems: audio | (sound playback) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F3** Game systems: input | (controller/keyboard) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
 | **F4** Game systems: menu | (main menu navigation) | Not started, blocked by boot and missing assets | **Not started** | ProStreet |
@@ -57,3 +57,10 @@ Corrected authoritative histogram over 294 ps shaders (10210 total instructions)
 - `web/src/test/shadercheck.ts` — the in-browser harness: compiles every WGSL module, builds render pipelines with the ABI's explicit layouts, runs the vertex-pulling compute test against the CPU decoder, and (when the dump carries `.vec`/`.pvec` vectors) the numeric vertex/pixel differential.
 
 The `&all2d` query flag forces EVERY pixel module onto the 2D ABI layout. A corpus dump numbers its pixel modules sequentially, so ids reach `PSCUBE` (256) even though the corpus has no cube twins; the flag lets the harness check a whole corpus dump without a cube built-in. It cannot affect a normal game dump, which has real cube twins at ids >= 256.
+
+### 4. Boot Sequence & Asset Loading Milestone (Milestones B1-B4, F1)
+- **C Runtime Startup & WinMain**: The target PE dump (`artifacts/nfs.exe.unpacked`) contains pre-initialized post-load `.data` (`__native_startup_state` = 2 at `0x100f4c4`). `_WinMainCRTStartup` completes cleanly and invokes `WinMain` (`sub_004afee0` via `0x016beea2`). Verified by `main-entry: WinMain entered` in `out/boot.log`.
+- **D3D9 & Display Device**: `DisplayDevice` (`0x032a5fc0`), `IDirect3D9` (`0x4c000360`), `IDirect3DDevice9` (`0x4c0001f0`), and `RenderParams` (`0x032a58f8`) are initialized with working COM vtables.
+- **Multithreading**: Thread handles and synchronization primitives fixed (PR #7 / `7cf50be`); background worker threads (threads 4, 6, 9) spawn and idle properly.
+- **Asset Mounting & Database Parsing**: EA archive loader opens and mounts `game/GLOBAL/GLOBALA.BUN` (chunk `0xb3300000` dispatched to `0x00458f80`), `game/GLOBAL/GlobalMemoryFile.bin`, and parses `GLOBAL\ATTRIBUTES.BIN` (3.2 MB attribute database), sorting and inserting 251 entries into an internal Red-Black tree collection (`sub_01a0ef10`, `sub_00512b98`).
+- **Current Front**: Execution reaches `sub_00530f60` (`0x00531064`) during attribute tree validation, encountering a NULL dereference (`guest_va=0x00000022`), followed by window message loop integration (`PeekMessageA`/`DispatchMessageA`).

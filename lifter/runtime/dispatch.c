@@ -1300,6 +1300,11 @@ static void unresolved(CPU *c, uint32_t addr) {
 }
 
 void dispatch_indirect(CPU *c, uint32_t addr) {
+    static int s_main_entry_logged = 0;
+    if (!s_main_entry_logged && (addr == 0x016beea2u || addr == 0x004afee0u)) {
+        s_main_entry_logged = 1;
+        fprintf(stderr, "main-entry: WinMain entered (entry 0x004afee0, indirect 0x%08x)\n", addr);
+    }
     if (addr >= COM_MAGIC) {
         if (addr >= IMP_MAGIC) {
             uint32_t idx = IMP_INDEX(addr);
