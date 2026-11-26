@@ -40,7 +40,7 @@ export ROOT OBJ FULL
 
 echo "== compiling $(ls "$GEN"/shard_*.c | wc -l) shards with $J jobs =="
 time ls "$GEN"/shard_*.c | \
-    xargs -P "$J" -n1 sh -c 'compile_one "$1" "$OBJ/$(basename "$1" .c).o" -I "$ROOT/lifter/runtime" -I "$GEN"' sh
+    xargs -P "$J" -n1 bash -c 'compile_one "$1" "$OBJ/$(basename "$1" .c).o" -I "$ROOT/lifter/runtime" -I "$GEN"' sh
 
 echo "== fntab, runtime stubs, driver =="
 compile_one "$GEN/fntab.c" "$OBJ/fntab.o" -I "$ROOT/lifter/runtime" -I "$GEN"
