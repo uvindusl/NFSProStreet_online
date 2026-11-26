@@ -925,6 +925,50 @@ static int seh_dispatch(CPU *c, uint32_t code, uint32_t flags,
 
 static int str_eq(const char *a, const char *b) { return !strcmp(a, b); }
 
+/* --- Window message queue & pump state --- */
+static uint32_t g_hwnd = 0x00B00001u;
+static uint32_t g_wndproc = 0;
+#define WMQ_CAP 256
+static struct { uint32_t msg, wp, lp; } g_wmq[WMQ_CAP];
+static int g_wmq_head = 0, g_wmq_tail = 0;
+static int g_wm_activated = 0;
+static uint64_t g_wm_dispatched = 0;
+
+static void wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
+    int next = (g_wmq_tail + 1) % WMQ_CAP;
+    if (next == g_wmq_head) return; /* queue full */
+    g_wmq[g_wmq_tail].msg = m;
+    g_wmq[g_wmq_tail].wp = wp;
+    g_wmq[g_wmq_tail].lp = lp;
+    g_wmq_tail = next;
+}
+
+static int wm_pop(uint32_t *m, uint32_t *wp, uint32_t *lp) {
+    if (g_wmq_head == g_wmq_tail) return 0;
+    *m = g_wmq[g_wmq_head].msg;
+    *wp = g_wmq[g_wmq_head].wp;
+    *lp = g_wmq[g_wmq_head].lp;
+    g_wmq_head = (g_wmq_head + 1) % WMQ_CAP;
+    return 1;
+}
+
+static uint32_t call_guest(CPU *c, uint32_t fn, int nargs, const uint32_t *args) {
+    if (!fn) return 0;
+    CPU save = *c;
+    for (int i = nargs - 1; i >= 0; i--) PUSH32(args[i]);
+    PUSH32(SENTINEL);
+    extern void dispatch_indirect(CPU *c, uint32_t addr);
+    dispatch_indirect(c, fn);
+    while (c->eip != SENTINEL) {
+        uint32_t t = c->eip;
+        c->eip = 0;
+        dispatch_indirect(c, t);
+    }
+    uint32_t ret = c->eax;
+    *c = save;
+    return ret;
+}
+
 int win32_call(CPU *c, uint32_t idx) {
     if (idx >= g_imp_count) return 0;
     const ImpEnt *e = &g_imp[idx];
@@ -1934,11 +1978,72 @@ int win32_call(CPU *c, uint32_t idx) {
         fprintf(stderr, "\n[MessageBoxA] %s\n[MessageBoxA] %s\n", gs(A(1)), gs(A(2)));
         r = 1;
     } else if (str_eq(n, "PeekMessageA") || str_eq(n, "GetMessageA")) {
+        /* MSG: +0 hwnd +4 message +8 wParam +12 lParam +16 time +20 pt */
+        uint32_t pm = A(0);
+        int remove = str_eq(n, "GetMessageA") ? 1 : (A(4) & 1u);
+        uint32_t m = 0, wp = 0, lp = 0;
+        if (g_wmq_head != g_wmq_tail) {
+            if (remove) {
+                wm_pop(&m, &wp, &lp);
+            } else {
+                m = g_wmq[g_wmq_head].msg;
+                wp = g_wmq[g_wmq_head].wp;
+                lp = g_wmq[g_wmq_head].lp;
+            }
+            if (pm && mem_is_committed(pm)) {
+                mem_commit(pm, 28);
+                MR32(pm + 0) = g_hwnd;
+                MR32(pm + 4) = m;
+                MR32(pm + 8) = wp;
+                MR32(pm + 12) = lp;
+                MR32(pm + 16) = 0;
+                MR32(pm + 20) = 0;
+                MR32(pm + 24) = 0;
+            }
+            r = 1;
+        } else {
+            if (pm && mem_is_committed(pm)) {
+                mem_commit(pm, 28);
+                memset(g_mem + pm, 0, 28);
+                MR32(pm + 0) = g_hwnd;
+            }
+            r = 0;
+        }
+    } else if (str_eq(n, "DispatchMessageA")) {
+        uint32_t pm = A(0);
+        if (g_wndproc && pm && mem_is_committed(pm + 15)) {
+            uint32_t args[4] = { MR32(pm), MR32(pm + 4), MR32(pm + 8), MR32(pm + 12) };
+            if (args[1]) {
+                g_wm_dispatched++;
+                r = call_guest(c, g_wndproc, 4, args);
+            }
+        } else {
+            r = 0;
+        }
+    } else if (str_eq(n, "TranslateMessage")) {
         r = 0;
-    } else if (str_eq(n, "RegisterClassExA")) {
-        r = 1;
+    } else if (str_eq(n, "RegisterClassExA") || str_eq(n, "RegisterClassA")) {
+        uint32_t wc = A(0);
+        if (wc && mem_is_committed(wc + 11)) {
+            uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;
+            uint32_t wp = MR32(wc + off);
+            if (wp) {
+                g_wndproc = wp;
+                fprintf(stderr, "  [window] class registered, wndproc=0x%08x\n", wp);
+            }
+        }
+        r = 0xC001u;
     } else if (str_eq(n, "CreateWindowExA")) {
-        r = 0x00010001u;
+        r = g_hwnd;
+        if (!g_wm_activated) {
+            g_wm_activated = 1;
+            fprintf(stderr, "  [window] CreateWindowExA created hwnd=0x%08x, queuing initial messages\n", g_hwnd);
+            wm_push(0x0018u, 1u, 0u);   /* WM_SHOWWINDOW */
+            wm_push(0x001Cu, 1u, 0u);   /* WM_ACTIVATEAPP */
+            wm_push(0x0006u, 1u, 0u);   /* WM_ACTIVATE (WA_ACTIVE) */
+            wm_push(0x0007u, 0u, 0u);   /* WM_SETFOCUS */
+            wm_push(0x000Fu, 0u, 0u);   /* WM_PAINT */
+        }
     } else if (str_eq(n, "DefWindowProcA")) {
         r = 0;
     } else if (str_eq(n, "GetClientRect") || str_eq(n, "GetWindowRect")) {
