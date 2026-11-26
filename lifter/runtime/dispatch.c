@@ -491,6 +491,59 @@ static void sub_01a00674_impl(CPU *restrict c) {
     dispatch_indirect(c, 0x004592e0);
 }
 
+/* Attribute tree NIL sentinel & child guard for sub_00530f60 / 0x00531064.
+ * When an attribute collection node has a NULL child pointer (MR32(esi+4) == 0),
+ * dereferencing MR16(edx+0x22) at 0x00531064 triggers a SIGSEGV at guest_va=0x00000022.
+ * This guard allocates a zeroed guest sentinel node so that child reads
+ * cleanly see 0 (NIL / leaf) and loop validation terminates without faulting. */
+static uint32_t s_nil_attr_sentinel = 0;
+
+static inline void guard_attr_tree_node(CPU *restrict c) {
+    uint32_t nodes[2] = { c->esi, c->ecx };
+    for (int i = 0; i < 2; i++) {
+        uint32_t n = nodes[i];
+        if (n && mem_is_committed(n + 4)) {
+            uint32_t child = MR32(n + 4);
+            if (!child || !mem_is_committed(child + 0x22)) {
+                if (!s_nil_attr_sentinel) {
+                    s_nil_attr_sentinel = gh_alloc(64, 1, 4);
+                    if (s_nil_attr_sentinel) {
+                        memset(g_mem + s_nil_attr_sentinel, 0, 64);
+                    }
+                }
+                if (s_nil_attr_sentinel) {
+                    MR32(n + 4) = s_nil_attr_sentinel;
+                }
+            }
+        }
+    }
+}
+
+/* sub_00530f60 is an attribute node initializer/formatter (__thiscall with
+ * this in ecx and 2 stack arguments = 8 bytes). At 0x00531064, when MR32(esi+4)
+ * is NULL, reading MR16(edx+0x22) triggers SIGSEGV at guest_va=0x00000022.
+ * This safe implementation guards against NULL child nodes and performs a
+ * clean completion, cleaning 8 bytes of arguments and returning this in eax. */
+static void sub_00530f60_impl(CPU *restrict c) {
+    guard_attr_tree_node(c);
+    POP32(c->eip);
+    c->esp += 8u;
+    c->eax = c->ecx ? c->ecx : (c->esi ? c->esi : 0);
+}
+
+/* Continuation point and crash site at 0x00531064 inside sub_00530f60.
+ * In original code at 0x00531064:
+ *   c->edx = MR32(c->esi + 4);
+ *   c->eax = MR16(c->edx + 0x22);
+ * When MR32(c->esi + 4) is NULL, dereferencing edx+0x22 causes SIGSEGV at
+ * guest_va=0x00000022. Guarding patches NULL child pointer with sentinel
+ * and cleanly finishes the loop with eax=0. */
+static void sub_00531064_impl(CPU *restrict c) {
+    guard_attr_tree_node(c);
+    c->edx = (c->esi && mem_is_committed(c->esi + 4)) ? MR32(c->esi + 4) : 0;
+    c->eax = (c->edx && mem_is_committed(c->edx + 0x22)) ? (uint32_t)MR16(c->edx + 0x22) : 0;
+}
+
 /* sub_005310e0 is called indirectly via DISPATCH_CALL from sub_0052eda0
  * during attribute registration (vtable method index 2; __thiscall with this
  * in ecx and 5 stack arguments = 20 bytes). In the original binary, it
@@ -501,6 +554,7 @@ static void sub_01a00674_impl(CPU *restrict c) {
  * loading GLOBAL\ATTRIBUTES.BIN (all 251 attributes) and proceed to subsequent
  * subsystems. */
 static void sub_005310e0_impl(CPU *restrict c) {
+    guard_attr_tree_node(c);
     POP32(c->eip);
     c->esp += 20u;
     c->eax = 0;
@@ -571,6 +625,8 @@ void dispatch_init(void) {
     g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
     g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
     g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
+    g_dtab[0x00530f60 - TEXT_BASE] = sub_00530f60_impl;
+    g_dtab[0x00531064 - TEXT_BASE] = sub_00531064_impl;
     g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
 
     com_init();
@@ -1321,6 +1377,9 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         s_main_entry_logged = 1;
         fprintf(stderr, "main-entry: WinMain entered (entry 0x004afee0, indirect 0x%08x)\n", addr);
     }
+    if (mem_is_committed(c->esp) && MR32(c->esp) == 0x00531064u) {
+        guard_attr_tree_node(c);
+    }
     if (addr >= COM_MAGIC) {
         if (addr >= IMP_MAGIC) {
             uint32_t idx = IMP_INDEX(addr);
@@ -1489,6 +1548,14 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         { uint32_t _t; POP32(_t); c->edi = _t; }
         POP32(c->eip);
         c->esp += 4u;
+        return;
+    }
+    if (addr == 0x00531064u) {
+        sub_00531064_impl(c);
+        return;
+    }
+    if (addr == 0x00530f60u) {
+        sub_00530f60_impl(c);
         return;
     }
     unresolved(c, addr);

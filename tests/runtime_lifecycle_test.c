@@ -329,9 +329,9 @@ int main(void) {
     ASSERT_EQ(c->eax, 0u, "IDirect3DDevice9::Present returns D3D_OK");
 
     /* -------------------------------------------------------------- */
-    /* Test Suite 3: Attribute Tree sub_005310e0 Dispatch Override    */
+    /* Test Suite 3: Attribute Tree sub_00530f60 & sub_005310e0 Overrides */
     /* -------------------------------------------------------------- */
-    printf("\n--- Test Suite 3: Attribute Tree sub_005310e0 Override ---\n");
+    printf("\n--- Test Suite 3: Attribute Tree sub_00530f60 & sub_005310e0 Overrides ---\n");
 
     /* Verify sub_005310e0 is registered in g_dtab and cleans 5 args (20 bytes) */
     c->esp = stack_base;
@@ -343,6 +343,44 @@ int main(void) {
     ASSERT_EQ(c->eip, 0x12345678u, "sub_005310e0 popped return address to eip");
     ASSERT_EQ(c->esp, sp_before + 24u, "sub_005310e0 cleaned ret addr + 20 bytes of args");
     ASSERT_EQ(c->eax, 0u, "sub_005310e0 returned eax = 0 (clean completion)");
+
+    /* Verify sub_00530f60 is registered in g_dtab and cleans 2 args (8 bytes) */
+    c->esp = stack_base;
+    c->ecx = 0x00230000u; /* this pointer */
+    PUSH32(10u); PUSH32(20u); /* 2 args = 8 bytes */
+    PUSH32(0x87654321u); /* return address */
+    sp_before = c->esp;
+
+    dispatch_indirect(c, 0x00530f60u);
+    ASSERT_EQ(c->eip, 0x87654321u, "sub_00530f60 popped return address to eip");
+    ASSERT_EQ(c->esp, sp_before + 12u, "sub_00530f60 cleaned ret addr + 8 bytes of args");
+    ASSERT_EQ(c->eax, 0x00230000u, "sub_00530f60 returned eax = this");
+
+    /* Verify 0x00531064 crash site guard patches NULL child with safe NIL sentinel */
+    uint32_t node_addr = 0x00230000u;
+    mem_commit(node_addr, 0x1000u);
+    MR32(node_addr + 4) = 0u; /* NULL child pointer that triggers SIGSEGV at 0x22 */
+    c->esi = node_addr;
+
+    dispatch_indirect(c, 0x00531064u);
+    uint32_t patched_child = MR32(node_addr + 4);
+    ASSERT_TRUE(patched_child != 0u, "0x00531064 guard patched NULL child pointer");
+    ASSERT_TRUE(mem_is_committed(patched_child + 0x22u), "Patched sentinel is committed and safe to read offset 0x22");
+    ASSERT_EQ(MR16(patched_child + 0x22u), 0u, "Patched sentinel offset 0x22 is 0 (clean loop termination)");
+    ASSERT_EQ(c->edx, patched_child, "c->edx points to valid sentinel node");
+    ASSERT_EQ(c->eax, 0u, "c->eax = 0 (clean completion)");
+
+    /* Verify stack-return guard when caller has return address 0x00531064 */
+    uint32_t node_addr2 = 0x00240000u;
+    mem_commit(node_addr2, 0x1000u);
+    MR32(node_addr2 + 4) = 0u;
+    c->esi = node_addr2;
+    c->esp = stack_base;
+    PUSH32(0x00531064u); /* return address on stack */
+    dispatch_indirect(c, 0x005310e0u);
+    uint32_t patched_child2 = MR32(node_addr2 + 4);
+    ASSERT_TRUE(patched_child2 != 0u, "dispatch_indirect stack-return guard patched NULL child");
+    ASSERT_TRUE(mem_is_committed(patched_child2 + 0x22u), "Stack-return patched sentinel safe at offset 0x22");
 
     /* -------------------------------------------------------------- */
     /* Test Suite 4: Window Message Filtering & Routing               */
