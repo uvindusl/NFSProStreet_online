@@ -118,6 +118,30 @@ def main():
                     cont += 1
             i += 1
 
+    # 2b. SecuROM computed call: push eax; mov eax,[X]; not eax; xor eax,[Y];
+    #     xchg [esp],eax; add dword [esp+4],K; ret  -> continues at entry+K
+    pat = bytes([0x50, 0xA1])
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        i = lo - base
+        end = hi - base
+        while True:
+            i = img.find(pat, i, end)
+            if i < 0:
+                break
+            k = None
+            if (img[i + 6:i + 8] == b'\xf7\xd0' and img[i + 8:i + 10] == b'\x33\x05'
+                    and img[i + 14:i + 17] == b'\x87\x04\x24'):
+                if img[i + 17:i + 21] == b'\x83\x44\x24\x04' and img[i + 22] == 0xC3:
+                    k = img[i + 21]
+                elif img[i + 17:i + 21] == b'\x81\x44\x24\x04' and img[i + 25] == 0xC3:
+                    k = struct.unpack_from('<I', img, i + 21)[0]
+            if k is not None:
+                r = base + i + k
+                if exec_addr(r):
+                    seeds.add(r)
+                    cont += 1
+            i += 1
+
     # 3. function pointers held in data tables
     rdata = ptrs_in(img, RDATA_LO, RDATA_HI)
     diab = ptrs_in(img, DIA_LO, DIA_HI)

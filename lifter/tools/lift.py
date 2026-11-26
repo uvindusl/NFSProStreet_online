@@ -801,6 +801,19 @@ class Lifter:
                                 f"dispatch_indirect(c, 0x{b_:x}u);",
                                 f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
                                 "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM computed call: `... xchg [esp],eax; add dword [esp+4], K; ret`
+                # pops a computed target T and leaves R (= entry + K) on the stack top,
+                # i.e. `call T` returning to R.  Run T, then R (seeded by boot_seeds.py).
+                pb8 = self.fetch(i.address - 8, 9)
+                pb5 = self.fetch(i.address - 5, 6)
+                if ((len(pb8) == 9 and pb8[:4] == bytes([0x81, 0x44, 0x24, 0x04]))
+                        or (len(pb5) == 6 and pb5[:4] == bytes([0x83, 0x44, 0x24, 0x04]))):
+                    return ["POP32(c->eip);",
+                            "{ uint32_t _t = c->eip, _r = MR32(c->esp);",
+                            "  dispatch_indirect(c, _t);",
+                            "  if (c->eip == _r) dispatch_indirect(c, _r); }",
+                            "return;"]
             if _os.environ.get('RETEIP','1') == '0' and self.entry not in self.retpast:
                 return [f"c->esp += {4 + n}u; return;"]
             return [f"POP32(c->eip);" + (f" c->esp += {n}u;" if n else "") + " return;"]

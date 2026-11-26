@@ -1625,7 +1625,7 @@ void callchk_slow(CPU *c, uint32_t expect) {
     if (mode == 2) {
         int guard = 0;
         while (c->eip != expect && !g_guest_exited && guard++ < 1000 &&
-               c->eip >= 0x401000u && c->eip < 0x1aa8000u)
+               c->eip >= 0x401000u && c->eip < 0x10ea000u)
             dispatch_indirect(c, c->eip);
     }
 }
