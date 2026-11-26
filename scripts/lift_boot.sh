@@ -23,5 +23,5 @@ NSHARD="${2:-64}"
 
 cd "$ROOT"
 python3 scripts/boot_seeds.py "$PE" lifter/seeds-boot.txt
-GENOUT="$GEN" SEEDS=lifter/seeds-boot.txt RELOCS=lifter/relocs-empty.txt JTSWITCH=1 PUSHRET=1 \
+GENOUT="$GEN" SEEDS=lifter/seeds-boot.txt RELOCS=lifter/relocs-empty.txt JTSWITCH=1 PUSHRET=1 CALLCHK=${CALLCHK:-0} \
     python3 lifter/tools/genall.py "$PE" "$NSHARD"

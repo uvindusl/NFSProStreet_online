@@ -109,6 +109,13 @@ def main():
                 if exec_addr(ret) and exec_addr(target):
                     seeds.add(ret)
                     cont += 1
+            # push ret; jmp target  (a call written as a jump: the callee's
+            # ret comes back to `ret`, which the lifted caller must be able to run)
+            elif img[i] == 0x68 and img[i + 5] in (0xE9, 0xEB):
+                ret = struct.unpack_from('<I', img, i + 1)[0]
+                if exec_addr(ret):
+                    seeds.add(ret)
+                    cont += 1
             i += 1
 
     # 3. function pointers held in data tables

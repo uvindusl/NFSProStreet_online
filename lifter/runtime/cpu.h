@@ -129,6 +129,11 @@ static inline guest_fn_t dispatch_fast(uint32_t a){
     uint32_t o = a - DISPATCH_TEXT_BASE;
     return o < DISPATCH_TEXT_SIZE ? g_dtab[o] : (guest_fn_t)0;
 }
+/* CALLCHK=1 lifts: a callee that came back to an address other than the one
+ * the call pushed jumped through a computed `ret` (SecuROM).  Handled in
+ * dispatch.c: callchk_slow(). */
+void callchk_slow(struct CPU *c, uint32_t expect);
+#define CALLCHK(c_, r_) do { if (__builtin_expect((c_)->eip != (r_), 0)) callchk_slow((c_), (r_)); } while (0)
 #define DISPATCH_CALL(c_, t_) do { uint32_t _dc = (uint32_t)(t_); guest_fn_t _df = dispatch_fast(_dc); \
     if (_df) _df(c_); else dispatch_indirect((c_), _dc); } while (0)
 #ifdef __wasm__

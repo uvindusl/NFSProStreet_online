@@ -638,6 +638,12 @@ class Lifter:
         (RawLifter / tests), conservatively all of them."""
         return "0x%02xu" % getattr(self, 'cur_fmask', F_ALL)
 
+    def _cc(self, i):
+        """CALLCHK=1: after a call, notice a callee that returned somewhere else"""
+        import os as _os
+        if _os.environ.get('CALLCHK', '0') != '1': return []
+        return [f"CALLCHK(c, 0x{i.address+i.size:x}u);"]
+
     def insn(self, i, targets):
         self.cur_ip = i.address
         m=i.mnemonic; ops=i.operands; o=ops
@@ -771,9 +777,9 @@ class Lifter:
                     # function's own return address is gone too; return as well
                     return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);",
                             f"if (c->eip != 0x{i.address+i.size:x}u) return;"]
-                return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);"]
+                return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);"] + self._cc(i)
             # x86: the call target is read BEFORE the return address is pushed (call [esp+N]!)
-            return [f"{{ uint32_t _ct = {E(0)}; PUSH32(0x{i.address+i.size:x}u); DISPATCH_CALL(c, _ct); }}"]
+            return [f"{{ uint32_t _ct = {E(0)}; PUSH32(0x{i.address+i.size:x}u); DISPATCH_CALL(c, _ct); }}"] + self._cc(i)
         if m.split()[-1] in ('ret','retf'):
             n = o[0].imm if o else 0
             # RETEIP=0: the return address is not written to c->eip (only popped off the stack).

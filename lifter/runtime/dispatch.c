@@ -1605,3 +1605,27 @@ void rtlog_dump(int n) {
         }
     }
 }
+
+
+/* A lifted call site whose callee returned to somewhere other than the
+ * address pushed.  PROSTREET_CALLCHK=log reports the first few; =run also
+ * keeps running the guest from c->eip until it reaches the expected return
+ * address (the callee did a computed jump through its own `ret`). */
+void callchk_slow(CPU *c, uint32_t expect) {
+    static int mode = -1, shown = 0;
+    if (mode < 0) {
+        const char *e = getenv("PROSTREET_CALLCHK");
+        mode = !e ? 0 : (strcmp(e, "run") == 0 ? 2 : 1);
+    }
+    if (!mode) return;
+    if (shown < 40) {
+        shown++;
+        fprintf(stderr, "callchk: expected %08x, callee returned to %08x (esp=%08x)\n", expect, c->eip, c->esp);
+    }
+    if (mode == 2) {
+        int guard = 0;
+        while (c->eip != expect && !g_guest_exited && guard++ < 1000 &&
+               c->eip >= 0x401000u && c->eip < 0x1aa8000u)
+            dispatch_indirect(c, c->eip);
+    }
+}
