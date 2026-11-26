@@ -933,23 +933,45 @@ static struct { uint32_t msg, wp, lp; } g_wmq[WMQ_CAP];
 static int g_wmq_head = 0, g_wmq_tail = 0;
 static int g_wm_activated = 0;
 static uint64_t g_wm_dispatched = 0;
+static pthread_mutex_t g_wmq_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static void wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
+    pthread_mutex_lock(&g_wmq_mtx);
     int next = (g_wmq_tail + 1) % WMQ_CAP;
-    if (next == g_wmq_head) return; /* queue full */
-    g_wmq[g_wmq_tail].msg = m;
-    g_wmq[g_wmq_tail].wp = wp;
-    g_wmq[g_wmq_tail].lp = lp;
-    g_wmq_tail = next;
+    if (next != g_wmq_head) {
+        g_wmq[g_wmq_tail].msg = m;
+        g_wmq[g_wmq_tail].wp = wp;
+        g_wmq[g_wmq_tail].lp = lp;
+        g_wmq_tail = next;
+    }
+    pthread_mutex_unlock(&g_wmq_mtx);
 }
 
 static int wm_pop(uint32_t *m, uint32_t *wp, uint32_t *lp) {
-    if (g_wmq_head == g_wmq_tail) return 0;
-    *m = g_wmq[g_wmq_head].msg;
-    *wp = g_wmq[g_wmq_head].wp;
-    *lp = g_wmq[g_wmq_head].lp;
-    g_wmq_head = (g_wmq_head + 1) % WMQ_CAP;
-    return 1;
+    int ok = 0;
+    pthread_mutex_lock(&g_wmq_mtx);
+    if (g_wmq_head != g_wmq_tail) {
+        *m = g_wmq[g_wmq_head].msg;
+        *wp = g_wmq[g_wmq_head].wp;
+        *lp = g_wmq[g_wmq_head].lp;
+        g_wmq_head = (g_wmq_head + 1) % WMQ_CAP;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_wmq_mtx);
+    return ok;
+}
+
+static int wm_peek(uint32_t *m, uint32_t *wp, uint32_t *lp) {
+    int ok = 0;
+    pthread_mutex_lock(&g_wmq_mtx);
+    if (g_wmq_head != g_wmq_tail) {
+        *m = g_wmq[g_wmq_head].msg;
+        *wp = g_wmq[g_wmq_head].wp;
+        *lp = g_wmq[g_wmq_head].lp;
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_wmq_mtx);
+    return ok;
 }
 
 static uint32_t call_guest(CPU *c, uint32_t fn, int nargs, const uint32_t *args) {
@@ -959,9 +981,14 @@ static uint32_t call_guest(CPU *c, uint32_t fn, int nargs, const uint32_t *args)
     PUSH32(SENTINEL);
     extern void dispatch_indirect(CPU *c, uint32_t addr);
     dispatch_indirect(c, fn);
+    uint32_t guard = 0;
     while (c->eip != SENTINEL) {
         uint32_t t = c->eip;
         c->eip = 0;
+        if (++guard > 1000000u) {
+            fprintf(stderr, "\n*** call_guest: tail-jump loop at 0x%08x\n", t);
+            break;
+        }
         dispatch_indirect(c, t);
     }
     uint32_t ret = c->eax;
@@ -1980,16 +2007,11 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "PeekMessageA") || str_eq(n, "GetMessageA")) {
         /* MSG: +0 hwnd +4 message +8 wParam +12 lParam +16 time +20 pt */
         uint32_t pm = A(0);
-        int remove = str_eq(n, "GetMessageA") ? 1 : (A(4) & 1u);
+        int is_get = str_eq(n, "GetMessageA");
+        int remove = is_get ? 1 : (A(4) & 1u);
         uint32_t m = 0, wp = 0, lp = 0;
-        if (g_wmq_head != g_wmq_tail) {
-            if (remove) {
-                wm_pop(&m, &wp, &lp);
-            } else {
-                m = g_wmq[g_wmq_head].msg;
-                wp = g_wmq[g_wmq_head].wp;
-                lp = g_wmq[g_wmq_head].lp;
-            }
+        int has_msg = remove ? wm_pop(&m, &wp, &lp) : wm_peek(&m, &wp, &lp);
+        if (has_msg) {
             if (pm && mem_is_committed(pm)) {
                 mem_commit(pm, 28);
                 MR32(pm + 0) = g_hwnd;
@@ -2000,14 +2022,20 @@ int win32_call(CPU *c, uint32_t idx) {
                 MR32(pm + 20) = 0;
                 MR32(pm + 24) = 0;
             }
-            r = 1;
+            /* GetMessageA returns 0 if msg == WM_QUIT (0x0012), nonzero otherwise.
+             * PeekMessageA returns nonzero if a message is available. */
+            r = (is_get && m == 0x0012u) ? 0u : 1u;
         } else {
             if (pm && mem_is_committed(pm)) {
                 mem_commit(pm, 28);
                 memset(g_mem + pm, 0, 28);
                 MR32(pm + 0) = g_hwnd;
             }
-            r = 0;
+            /* GetMessageA blocks until a message is available; when returning without
+             * blocking (non-WM_QUIT), return 1 so the game message loop keeps waiting
+             * instead of immediately treating empty queue as WM_QUIT and terminating.
+             * PeekMessageA returns 0 when no message was retrieved. */
+            r = is_get ? 1u : 0u;
         }
     } else if (str_eq(n, "DispatchMessageA")) {
         uint32_t pm = A(0);
@@ -2024,8 +2052,8 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     } else if (str_eq(n, "RegisterClassExA") || str_eq(n, "RegisterClassA")) {
         uint32_t wc = A(0);
-        if (wc && mem_is_committed(wc + 11)) {
-            uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;
+        uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;
+        if (wc && mem_is_committed(wc + off + 3u)) {
             uint32_t wp = MR32(wc + off);
             if (wp) {
                 g_wndproc = wp;
