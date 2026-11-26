@@ -8,7 +8,6 @@ on:
 permissions:
   id-token: write
   contents: read
-  pull-requests: write
 
 jobs:
   review:
@@ -38,25 +37,35 @@ jobs:
           echo "OPENCODE_API_KEY=$token" >> "$GITHUB_ENV"
 
       - name: Review pull request
-        id: review
         env:
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           out="opencode-review.md"
           prompt="Review pull request #${PR_NUMBER} in this checked-out repository. Focus on correctness, regressions, security, and missing tests. Summarize any issues and call out anything risky. Use concise markdown."
 
-          opencode run --standalone --format default --model opencode/big-pickle "$prompt" | tee "$out"
-
-          if [ ! -s "$out" ]; then
-            echo "OpenCode produced no review output" > "$out"
+          if opencode run --standalone --format default --model opencode/big-pickle "$prompt" | tee "$out"; then
+            :
+          else
+            status=$?
+            if [ ! -s "$out" ]; then
+              echo "OpenCode review command failed with exit code $status." > "$out"
+            fi
           fi
 
-          {
-            echo "## OpenCode PR Review"
-            echo
-            cat "$out"
-          } > opencode-review-comment.md
+          if [ ! -s "$out" ]; then
+            echo "OpenCode produced no review output." > "$out"
+          fi
 
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file opencode-review-comment.md
+          mkdir -p review-artifact
+          printf '%s\n' "$PR_NUMBER" > review-artifact/pr-number.txt
+          cp "$out" review-artifact/review.md
+
+      - name: Upload review artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: opencode-pr-review
+          path: review-artifact/
+          if-no-files-found: error
+          retention-days: 1
