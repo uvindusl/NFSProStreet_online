@@ -12,6 +12,10 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <ucontext.h>
+#include <execinfo.h>
+#if defined(__aarch64__)
+#include <asm/sigcontext.h>
+#endif
 #include <unistd.h>
 
 #ifndef MAP_NORESERVE
@@ -225,6 +229,19 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
     if (uc) {
 #if defined(__x86_64__) && defined(REG_ERR)
         is_write = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+#elif defined(__aarch64__)
+        /* ESR_EL1 data-abort syndrome: WnR (bit 6) is set for a write */
+        {
+            struct _aarch64_ctx *h = (struct _aarch64_ctx *)uc->uc_mcontext.__reserved;
+            while (h->magic && h->size &&
+                   (char *)h < (char *)uc->uc_mcontext.__reserved + sizeof(uc->uc_mcontext.__reserved)) {
+                if (h->magic == ESR_MAGIC) {
+                    is_write = (((struct esr_context *)h)->esr >> 6) & 1;
+                    break;
+                }
+                h = (struct _aarch64_ctx *)((char *)h + h->size);
+            }
+        }
 #endif
     }
     if (g_wwatch_armed && in_guest && is_write &&
@@ -242,6 +259,12 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
             fprintf(stderr, "    esp=%08lx ebp=%08lx esi=%08lx di=%08lx\n",
                     (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                     (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
+        }
+#elif defined(__aarch64__)
+        if (uc) {
+            fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
+                    (void *)uc->uc_mcontext.pc,
+                    guest_fn_from_host((void *)uc->uc_mcontext.pc));
         }
 #endif
         if (g_cur_cpu) {
@@ -281,6 +304,18 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
         fprintf(stderr, "    esp=%08lx ebp=%08lx esi=%08lx di=%08lx\n",
                 (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                 (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
+    }
+#elif defined(__aarch64__)
+    if (uc) {
+        fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
+                (void *)uc->uc_mcontext.pc,
+                guest_fn_from_host((void *)uc->uc_mcontext.pc));
+        /* host call chain, innermost first; resolve with `nm -n out/prostreet` */
+        void *bt[32];
+        int n = backtrace(bt, 32);
+        fprintf(stderr, "    host backtrace:");
+        for (int i = 0; i < n; i++) fprintf(stderr, " %p", bt[i]);
+        fprintf(stderr, "\n");
     }
 #endif
     if (g_cur_cpu) {
