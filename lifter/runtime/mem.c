@@ -339,23 +339,7 @@ void watch_report_change(uint32_t culprit_ip, uint32_t oldv, uint32_t newv) {
 #define HOOK_SITE(va) (va##u)
 #endif
 
-static uint32_t s_nil_sentinel = 0;
-
 void guest_hook(CPU *c, uint32_t ip) {
-    if (ip == HOOK_SITE(0x00531064)) {
-        if (c->esi && mem_is_committed(c->esi + 4)) {
-            uint32_t child = MR32(c->esi + 4);
-            if (!child || !mem_is_committed(child + 0x22)) {
-                if (!s_nil_sentinel) {
-                    s_nil_sentinel = gh_alloc(64, 1, 4);
-                    if (s_nil_sentinel) {
-                        memset(g_mem + s_nil_sentinel, 0, 64);
-                    }
-                }
-                if (s_nil_sentinel) {
-                    MR32(c->esi + 4) = s_nil_sentinel;
-                }
-            }
-        }
-    }
+    (void)c;
+    (void)ip;
 }

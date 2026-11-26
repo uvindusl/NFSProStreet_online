@@ -42,23 +42,27 @@ const guest_fn_t g_seh_fn_ptr[1] = {0};
 
 enum {
     IMP_REG_CLASS_EX_A,
+    IMP_REG_CLASS_A,
     IMP_CREATE_WINDOW_EX_A,
     IMP_PEEK_MESSAGE_A,
     IMP_GET_MESSAGE_A,
     IMP_DISPATCH_MESSAGE_A,
     IMP_POST_QUIT_MESSAGE,
     IMP_GET_FOREGROUND_WINDOW,
+    IMP_GET_DESKTOP_WINDOW,
     IMP_TEST_COUNT
 };
 
 const ImpEnt g_imp[] = {
     [IMP_REG_CLASS_EX_A]        = {TEST_IAT_BASE + 0 * 4, "USER32.dll", "RegisterClassExA", 1},
-    [IMP_CREATE_WINDOW_EX_A]    = {TEST_IAT_BASE + 1 * 4, "USER32.dll", "CreateWindowExA", 12},
-    [IMP_PEEK_MESSAGE_A]        = {TEST_IAT_BASE + 2 * 4, "USER32.dll", "PeekMessageA", 5},
-    [IMP_GET_MESSAGE_A]         = {TEST_IAT_BASE + 3 * 4, "USER32.dll", "GetMessageA", 4},
-    [IMP_DISPATCH_MESSAGE_A]    = {TEST_IAT_BASE + 4 * 4, "USER32.dll", "DispatchMessageA", 1},
-    [IMP_POST_QUIT_MESSAGE]     = {TEST_IAT_BASE + 5 * 4, "USER32.dll", "PostQuitMessage", 1},
-    [IMP_GET_FOREGROUND_WINDOW] = {TEST_IAT_BASE + 6 * 4, "USER32.dll", "GetForegroundWindow", 0},
+    [IMP_REG_CLASS_A]           = {TEST_IAT_BASE + 1 * 4, "USER32.dll", "RegisterClassA", 1},
+    [IMP_CREATE_WINDOW_EX_A]    = {TEST_IAT_BASE + 2 * 4, "USER32.dll", "CreateWindowExA", 12},
+    [IMP_PEEK_MESSAGE_A]        = {TEST_IAT_BASE + 3 * 4, "USER32.dll", "PeekMessageA", 5},
+    [IMP_GET_MESSAGE_A]         = {TEST_IAT_BASE + 4 * 4, "USER32.dll", "GetMessageA", 4},
+    [IMP_DISPATCH_MESSAGE_A]    = {TEST_IAT_BASE + 5 * 4, "USER32.dll", "DispatchMessageA", 1},
+    [IMP_POST_QUIT_MESSAGE]     = {TEST_IAT_BASE + 6 * 4, "USER32.dll", "PostQuitMessage", 1},
+    [IMP_GET_FOREGROUND_WINDOW] = {TEST_IAT_BASE + 7 * 4, "USER32.dll", "GetForegroundWindow", 0},
+    [IMP_GET_DESKTOP_WINDOW]    = {TEST_IAT_BASE + 8 * 4, "USER32.dll", "GetDesktopWindow", 0},
 };
 const uint32_t g_imp_count = IMP_TEST_COUNT;
 
@@ -146,6 +150,17 @@ int main(void) {
     ASSERT_EQ(c->eax, 0xC001u, "RegisterClassExA returns valid atom");
     ASSERT_EQ(g_wndproc, mock_wndproc_addr, "g_wndproc captured correctly");
 
+    /* Test RegisterClassA (WNDCLASSA: 40 bytes, +4 lpfnWndProc) */
+    uint32_t wndclass_a_addr = 0x00201000u;
+    mem_commit(wndclass_a_addr, 0x1000u);
+    MR32(wndclass_a_addr + 0) = 0;
+    MR32(wndclass_a_addr + 4) = mock_wndproc_addr;
+    c->esp = stack_base;
+    PUSH32(wndclass_a_addr);
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_REG_CLASS_A);
+    ASSERT_EQ(c->eax, 0xC001u, "RegisterClassA returns valid atom");
+
     /* Test RegisterClassExA with NULL returns 0 */
     c->esp = stack_base;
     PUSH32(0u);             /* arg 0: NULL */
@@ -165,7 +180,13 @@ int main(void) {
     c->esp = stack_base;
     PUSH32(0x12345678u);
     win32_call(c, IMP_GET_FOREGROUND_WINDOW);
-    ASSERT_EQ(c->eax, 0x00B00001u, "GetForegroundWindow returns matching g_hwnd");
+    ASSERT_EQ(c->eax, 0x00B00001u, "GetForegroundWindow returns matching g_hwnd (0x00B00001)");
+
+    /* Test GetDesktopWindow returns distinct desktop handle 0x00B00000 */
+    c->esp = stack_base;
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_GET_DESKTOP_WINDOW);
+    ASSERT_EQ(c->eax, 0x00B00000u, "GetDesktopWindow returns distinct 0x00B00000");
 
     /* Verify initial messages were enqueued by CreateWindowExA */
     uint32_t msg_struct = 0x00210000u;
@@ -323,18 +344,44 @@ int main(void) {
     ASSERT_EQ(c->esp, sp_before + 24u, "sub_005310e0 cleaned ret addr + 20 bytes of args");
     ASSERT_EQ(c->eax, 0u, "sub_005310e0 returned eax = 0 (clean completion)");
 
-    /* Verify guest_hook at 0x00531064 patches NULL child with sentinel */
-    printf("\n--- Test Suite 4: guest_hook at 0x00531064 ---\n");
-    uint32_t node_addr = 0x00230000u;
-    mem_commit(node_addr, 0x1000u);
-    MR32(node_addr + 4) = 0u; /* NULL child pointer that triggers SIGSEGV at 0x22 */
-    c->esi = node_addr;
+    /* -------------------------------------------------------------- */
+    /* Test Suite 4: Window Message Filtering & Routing               */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 4: Window Message Filtering & Routing ---\n");
 
-    guest_hook(c, 0x00531064u);
-    uint32_t patched_child = MR32(node_addr + 4);
-    ASSERT_TRUE(patched_child != 0u, "guest_hook patched NULL child pointer");
-    ASSERT_TRUE(mem_is_committed(patched_child + 0x22u), "Patched sentinel is committed and safe to read offset 0x22");
-    ASSERT_EQ(MR16(patched_child + 0x22u), 0u, "Patched sentinel offset 0x22 is 0 (clean loop termination)");
+    /* Push messages 0x0100 (WM_KEYDOWN) and 0x0200 (WM_MOUSEMOVE) */
+    wm_push(0x0100u, 0x41u, 0u);
+    wm_push(0x0200u, 0u, 0u);
+
+    /* Test PeekMessageA with hWnd mismatch -> returns 0 */
+    c->esp = stack_base;
+    PUSH32(0u);             /* wRemoveMsg = PM_NOREMOVE */
+    PUSH32(0u);             /* wMsgFilterMax */
+    PUSH32(0u);             /* wMsgFilterMin */
+    PUSH32(0x00B09999u);    /* invalid hWnd */
+    PUSH32(msg_struct);     /* lpMsg */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 0u, "PeekMessageA with mismatched hWnd returns 0");
+
+    /* Test PeekMessageA with range filter [0x0200, 0x0209] targeting mouse msg */
+    c->esp = stack_base;
+    PUSH32(1u);             /* wRemoveMsg = PM_REMOVE */
+    PUSH32(0x0209u);        /* wMsgFilterMax */
+    PUSH32(0x0200u);        /* wMsgFilterMin */
+    PUSH32(0u);             /* hWnd */
+    PUSH32(msg_struct);     /* lpMsg */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PeekMessageA with range filter matched message");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0200u, "Filter extracted WM_MOUSEMOVE (0x0200)");
+
+    /* Pop remaining message 0x0100 */
+    c->esp = stack_base;
+    PUSH32(1u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "Popped remaining message");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0100u, "Extracted WM_KEYDOWN (0x0100)");
 
     printf("\nAll runtime lifecycle tests passed successfully (100%% production code exercised)!\n");
     return 0;

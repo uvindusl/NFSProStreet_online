@@ -947,28 +947,50 @@ static void wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
     pthread_mutex_unlock(&g_wmq_mtx);
 }
 
-static int wm_pop(uint32_t *m, uint32_t *wp, uint32_t *lp) {
+static int wm_match_filter(uint32_t msg, uint32_t min_msg, uint32_t max_msg) {
+    if (min_msg == 0 && max_msg == 0) return 1;
+    if (max_msg == 0) return msg >= min_msg;
+    return msg >= min_msg && msg <= max_msg;
+}
+
+static int wm_pop_filtered(uint32_t *m, uint32_t *wp, uint32_t *lp, uint32_t min_msg, uint32_t max_msg) {
     int ok = 0;
     pthread_mutex_lock(&g_wmq_mtx);
-    if (g_wmq_head != g_wmq_tail) {
-        *m = g_wmq[g_wmq_head].msg;
-        *wp = g_wmq[g_wmq_head].wp;
-        *lp = g_wmq[g_wmq_head].lp;
-        g_wmq_head = (g_wmq_head + 1) % WMQ_CAP;
-        ok = 1;
+    for (int idx = g_wmq_head; idx != g_wmq_tail; idx = (idx + 1) % WMQ_CAP) {
+        if (wm_match_filter(g_wmq[idx].msg, min_msg, max_msg)) {
+            *m = g_wmq[idx].msg;
+            *wp = g_wmq[idx].wp;
+            *lp = g_wmq[idx].lp;
+            if (idx == g_wmq_head) {
+                g_wmq_head = (g_wmq_head + 1) % WMQ_CAP;
+            } else {
+                for (int j = idx; j != g_wmq_tail; j = (j + 1) % WMQ_CAP) {
+                    int next = (j + 1) % WMQ_CAP;
+                    if (next != g_wmq_tail) {
+                        g_wmq[j] = g_wmq[next];
+                    }
+                }
+                g_wmq_tail = (g_wmq_tail - 1 + WMQ_CAP) % WMQ_CAP;
+            }
+            ok = 1;
+            break;
+        }
     }
     pthread_mutex_unlock(&g_wmq_mtx);
     return ok;
 }
 
-static int wm_peek(uint32_t *m, uint32_t *wp, uint32_t *lp) {
+static int wm_peek_filtered(uint32_t *m, uint32_t *wp, uint32_t *lp, uint32_t min_msg, uint32_t max_msg) {
     int ok = 0;
     pthread_mutex_lock(&g_wmq_mtx);
-    if (g_wmq_head != g_wmq_tail) {
-        *m = g_wmq[g_wmq_head].msg;
-        *wp = g_wmq[g_wmq_head].wp;
-        *lp = g_wmq[g_wmq_head].lp;
-        ok = 1;
+    for (int idx = g_wmq_head; idx != g_wmq_tail; idx = (idx + 1) % WMQ_CAP) {
+        if (wm_match_filter(g_wmq[idx].msg, min_msg, max_msg)) {
+            *m = g_wmq[idx].msg;
+            *wp = g_wmq[idx].wp;
+            *lp = g_wmq[idx].lp;
+            ok = 1;
+            break;
+        }
     }
     pthread_mutex_unlock(&g_wmq_mtx);
     return ok;
@@ -2004,46 +2026,89 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "MessageBoxA")) {
         fprintf(stderr, "\n[MessageBoxA] %s\n[MessageBoxA] %s\n", gs(A(1)), gs(A(2)));
         r = 1;
-    } else if (str_eq(n, "PeekMessageA") || str_eq(n, "GetMessageA")) {
-        /* MSG: +0 hwnd +4 message +8 wParam +12 lParam +16 time +20 pt */
+    } else if (str_eq(n, "PeekMessageA")) {
+        /* BOOL PeekMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax, UINT wRemoveMsg) */
         uint32_t pm = A(0);
-        int is_get = str_eq(n, "GetMessageA");
-        int remove = is_get ? 1 : (A(4) & 1u);
-        uint32_t m = 0, wp = 0, lp = 0;
-        int has_msg = remove ? wm_pop(&m, &wp, &lp) : wm_peek(&m, &wp, &lp);
-        if (has_msg) {
-            if (pm && mem_is_committed(pm)) {
-                mem_commit(pm, 28);
-                MR32(pm + 0) = g_hwnd;
-                MR32(pm + 4) = m;
-                MR32(pm + 8) = wp;
-                MR32(pm + 12) = lp;
-                MR32(pm + 16) = 0;
-                MR32(pm + 20) = 0;
-                MR32(pm + 24) = 0;
-            }
-            /* GetMessageA returns 0 if msg == WM_QUIT (0x0012), nonzero otherwise.
-             * PeekMessageA returns nonzero if a message is available. */
-            r = (is_get && m == 0x0012u) ? 0u : 1u;
+        uint32_t hwnd = A(1);
+        uint32_t min_msg = A(2);
+        uint32_t max_msg = A(3);
+        uint32_t flags = A(4);
+        int remove = (flags & 1u);
+        if (hwnd && hwnd != g_hwnd) {
+            r = 0u;
         } else {
-            if (pm && mem_is_committed(pm)) {
-                mem_commit(pm, 28);
-                memset(g_mem + pm, 0, 28);
-                MR32(pm + 0) = g_hwnd;
+            uint32_t m = 0, wp = 0, lp = 0;
+            int has_msg = remove ? wm_pop_filtered(&m, &wp, &lp, min_msg, max_msg)
+                                 : wm_peek_filtered(&m, &wp, &lp, min_msg, max_msg);
+            if (has_msg) {
+                if (pm && mem_is_committed(pm)) {
+                    mem_commit(pm, 28);
+                    MR32(pm + 0) = g_hwnd;
+                    MR32(pm + 4) = m;
+                    MR32(pm + 8) = wp;
+                    MR32(pm + 12) = lp;
+                    MR32(pm + 16) = 0;
+                    MR32(pm + 20) = 0;
+                    MR32(pm + 24) = 0;
+                }
+                r = 1u;
+            } else {
+                if (pm && mem_is_committed(pm)) {
+                    mem_commit(pm, 28);
+                    memset(g_mem + pm, 0, 28);
+                    MR32(pm + 0) = g_hwnd;
+                }
+                r = 0u;
             }
-            /* GetMessageA blocks until a message is available; when returning without
-             * blocking (non-WM_QUIT), return 1 so the game message loop keeps waiting
-             * instead of immediately treating empty queue as WM_QUIT and terminating.
-             * PeekMessageA returns 0 when no message was retrieved. */
-            r = is_get ? 1u : 0u;
+        }
+    } else if (str_eq(n, "GetMessageA")) {
+        /* BOOL GetMessageA(LPMSG lpMsg, HWND hWnd, UINT wMsgFilterMin, UINT wMsgFilterMax) */
+        uint32_t pm = A(0);
+        uint32_t hwnd = A(1);
+        uint32_t min_msg = A(2);
+        uint32_t max_msg = A(3);
+        if (hwnd && hwnd != g_hwnd) {
+            r = 0u;
+        } else {
+            uint32_t m = 0, wp = 0, lp = 0;
+            int has_msg = wm_pop_filtered(&m, &wp, &lp, min_msg, max_msg);
+            if (has_msg) {
+                if (pm && mem_is_committed(pm)) {
+                    mem_commit(pm, 28);
+                    MR32(pm + 0) = g_hwnd;
+                    MR32(pm + 4) = m;
+                    MR32(pm + 8) = wp;
+                    MR32(pm + 12) = lp;
+                    MR32(pm + 16) = 0;
+                    MR32(pm + 20) = 0;
+                    MR32(pm + 24) = 0;
+                }
+                r = (m == 0x0012u) ? 0u : 1u; /* WM_QUIT returns 0 */
+            } else {
+                if (pm && mem_is_committed(pm)) {
+                    mem_commit(pm, 28);
+                    memset(g_mem + pm, 0, 28);
+                    MR32(pm + 0) = g_hwnd;
+                }
+                /* Yield / sleep briefly to prevent busy-spinning on empty queue */
+                struct timespec ts = { 0, 1000000L }; /* 1ms */
+                nanosleep(&ts, NULL);
+                r = 1u;
+            }
         }
     } else if (str_eq(n, "DispatchMessageA")) {
         uint32_t pm = A(0);
-        if (g_wndproc && pm && mem_is_committed(pm + 15)) {
+        uint32_t wndproc = 0;
+        pthread_mutex_lock(&g_wmq_mtx);
+        wndproc = g_wndproc;
+        pthread_mutex_unlock(&g_wmq_mtx);
+        if (wndproc && pm && mem_is_committed(pm) && mem_is_committed(pm + 27u)) {
             uint32_t args[4] = { MR32(pm), MR32(pm + 4), MR32(pm + 8), MR32(pm + 12) };
             if (args[1]) {
+                pthread_mutex_lock(&g_wmq_mtx);
                 g_wm_dispatched++;
-                r = call_guest(c, g_wndproc, 4, args);
+                pthread_mutex_unlock(&g_wmq_mtx);
+                r = call_guest(c, wndproc, 4, args);
             }
         } else {
             r = 0;
@@ -2053,11 +2118,14 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "RegisterClassExA") || str_eq(n, "RegisterClassA")) {
         uint32_t wc = A(0);
         uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;
+        uint32_t sz = str_eq(n, "RegisterClassExA") ? 48u : 40u;
         r = 0;
-        if (wc && mem_is_committed(wc + off + 3u)) {
+        if (wc && mem_is_committed(wc) && mem_is_committed(wc + sz - 1u)) {
             uint32_t wp = MR32(wc + off);
             if (wp) {
+                pthread_mutex_lock(&g_wmq_mtx);
                 g_wndproc = wp;
+                pthread_mutex_unlock(&g_wmq_mtx);
                 fprintf(stderr, "  [window] class registered, wndproc=0x%08x\n", wp);
                 r = 0xC001u;
             }
@@ -2083,7 +2151,9 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     } else if (str_eq(n, "ShowCursor")) {
         r = 0;
-    } else if (str_eq(n, "GetForegroundWindow") || str_eq(n, "GetDesktopWindow")) {
+    } else if (str_eq(n, "GetDesktopWindow")) {
+        r = 0x00B00000u;
+    } else if (str_eq(n, "GetActiveWindow") || str_eq(n, "GetForegroundWindow")) {
         r = g_hwnd ? g_hwnd : 0x00B00001u;
     } else if (str_eq(n, "Direct3DCreate9")) {
         r = com_direct3dcreate9();
