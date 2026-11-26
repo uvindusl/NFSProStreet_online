@@ -12,9 +12,9 @@
 <div id="status">Checking WebGPU...</div>
 <canvas id="canvas" width="512" height="512"></canvas>
 <pre id="log"></pre>
-<button onclick="runTests()">Run Validation</button>
-<button onclick="testTriangle()">Test Triangle</button>
-<button onclick="testTexturedQuad()">Test Textured Quad</button>
+<button id=run-tests>Run Validation</button>
+<button id=test-triangle>Test Triangle</button>
+<button id=test-textured-quad>Test Textured Quad</button>
 
 <script type=module>
 const logEl = document.getElementById('log');
@@ -57,12 +57,13 @@ async function runTests() {
   // Test 1: Minimal fragment shader (triangle test equivalent)
   log('=== Test 1: Minimal Fragment Shader ===');
   const minFS = `
-    @group(0) @binding(0) var<uniform> P: struct { aref: f32, usec: f32 };
+    struct Params { aref: f32, usec: f32 };
+    @group(0) @binding(0) var<uniform> P: Params;
     override ALPHA_FUNC: u32 = 7u;
     fn alpha_pass(a: f32, r: f32) -> bool {
       switch ALPHA_FUNC {
-        case 7u: return !(a < r);
-        default: return true;
+        case 7u: { return !(a < r); }
+        default: { return true; }
       }
     }
     @fragment fn main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
@@ -353,6 +354,10 @@ async function testTexturedQuad() {
     log('❌ Textured quad render failed: ' + e.message, 'fail');
   }
 }
+
+document.getElementById('run-tests').addEventListener('click', runTests);
+document.getElementById('test-triangle').addEventListener('click', testTriangle);
+document.getElementById('test-textured-quad').addEventListener('click', testTexturedQuad);
 
 // Auto-run on load
 checkWebGPU().then(ok => { if (ok) log('Ready. Click buttons to run tests.', 'pass'); });
