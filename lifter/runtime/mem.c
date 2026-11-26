@@ -335,4 +335,11 @@ void itrace_dump(int n) { (void)n; }
 void watch_report_change(uint32_t culprit_ip, uint32_t oldv, uint32_t newv) {
     (void)culprit_ip; (void)oldv; (void)newv;
 }
-void guest_hook(CPU *c, uint32_t ip) { (void)c; (void)ip; }
+#ifndef HOOK_SITE
+#define HOOK_SITE(va) (va##u)
+#endif
+
+void guest_hook(CPU *c, uint32_t ip) {
+    (void)c;
+    (void)ip;
+}

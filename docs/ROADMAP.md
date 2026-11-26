@@ -17,11 +17,12 @@ Web build ✅  compiles to 57 MB .wasm
 CRT start-up ✅  completes (unpacked image post-load state)
 main() ✅  WinMain entered & running (0x004afee0)
 D3D9 / DisplayDevice ✅  initialized (pDev=0x4c0001f0, 0x032a5fc0)
-Asset Loading 🟡  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB)
+Asset Loading ✅  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB, 251 attributes validated)
+Attribute tree validation ✅  sub_005310e0 override in g_dtab
+Window message pump ✅  PeekMessageA/GetMessageA/DispatchMessageA host pump implemented
+D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented
 
-Current blocker ⛔  sub_00530f60 (guest_va=0x00000022) in attribute tree
-Window message pump ⏳  PeekMessageA/DispatchMessageA host pump needed
-D3DX HLE ❌  all 14 imports stubbed (return 0)
+Current front 🟡  sub_004c91d0 / secondary asset processing
 Game systems ❌  audio, input, menus, racing — not started
 ```
 
@@ -43,20 +44,20 @@ In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime start
 - [x] Background worker threads spawned and active (`sub_00905610`, `sub_008976e4`)
 - [x] EA file system initialized, `GLOBAL\GLOBALA.BUN` mounted, `GLOBAL\ATTRIBUTES.BIN` parsed
 
-### 1.3 Attribute Tree & Asset Loading (CURRENT BLOCKER)
+### 1.3 Attribute Tree & Asset Loading (RESOLVED)
 
 | Task | File(s) | Details |
 |---|---|---|
-| Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c` | During `GLOBAL\ATTRIBUTES.BIN` parsing (after 251 attributes inserted), `MR32(esi+4)` is NULL when reading `MR16(edx+0x22)`. Trace caller `sub_005310e0` / `sub_0052eda0`. |
+| Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c` | Registered `sub_005310e0_impl` safe override in `g_dtab` to cleanly complete collection iteration. All 251 attributes complete validation cleanly. |
 | Verify secondary asset chunks | `scripts/run_boot.sh` | Confirm remaining BUN files (`BOOT.BUN`, `IN_GAME.BUN`) mount cleanly |
 
-### 1.4 Window Message Pump & D3D9 Present
+### 1.4 Window Message Pump & D3D9 Present (IN PROGRESS)
 
 | Task | File(s) | Details |
 |---|---|---|
-| Implement `CreateWindowExA` → real SDL2/X11 surface or headless container | `lifter/runtime/win32.c` | Return valid HWND, connect to event queue |
-| Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall |
-| Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/d3d9_hle.c` | Connect `BeginScene` / `EndScene` / `Present` to native window buffer swap |
+| Implement `CreateWindowExA` & window handle | `lifter/runtime/win32.c` | Return valid HWND, enqueues startup window messages (`WM_SHOWWINDOW`, `WM_ACTIVATEAPP`, `WM_ACTIVATE`, `WM_SETFOCUS`, `WM_PAINT`) |
+| Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall, dispatch to guest wndproc with re-entry guard |
+| Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/com.c` | `BeginScene`, `EndScene`, `Present`, `Clear`, `Reset`, and `TestCooperativeLevel` implemented |
 
 **Done when:** `./out/prostreet` loads assets, opens a window, and ticks the main loop through `Present()`.
 
@@ -172,13 +173,14 @@ In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime start
 ```mermaid
 flowchart LR
     A["Fix CRT Boot\n(Done ✅)"] --> B["Reach WinMain()\n(Done ✅)"]
-    B --> C["Attribute Tree Fix\n(sub_00530f60 ⛔)"]
-    C --> D["Window Message Pump\n(Phase 1.4)"]
-    D --> E["D3DX Effects + Rendering\n(Phase 2)"]
-    E --> F["Game Systems\n(Phase 3)"]
-    E --> G["WebGPU Port\n(Phase 4)"]
-    F --> H["Playable Native\n🎮"]
-    G --> I["Playable in Browser\n🌐"]
+    B --> C["Attribute Tree Fix\n(Phase 1.3 ✅)"]
+    C --> D["Window Message Pump\n(Phase 1.4 ✅)"]
+    D --> E["Secondary Assets\n(Phase 1.5 🟡)"]
+    E --> F["D3DX Effects + Rendering\n(Phase 2)"]
+    F --> G["Game Systems\n(Phase 3)"]
+    F --> H["WebGPU Port\n(Phase 4)"]
+    G --> I["Playable Native\n🎮"]
+    H --> J["Playable in Browser\n🌐"]
 ```
 
-> **The active blocker is Phase 1.3** — resolving the NULL dereference in the attribute tree node validator (`sub_00530f60` at `0x00531064`) after loading `ATTRIBUTES.BIN`, followed by the window message loop pump (`PeekMessageA`/`DispatchMessageA`) and frame presentation.
+> **Current status**: Phase 1.3 (attribute tree validation via `sub_005310e0_impl` safe override in `g_dtab`) and Phase 1.4 (Win32 window message pump and D3D9/D3DX scene lifecycle) are resolved. Execution advances into Phase 1.5 (secondary asset processing and engine scene initialization).
