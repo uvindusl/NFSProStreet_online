@@ -23,7 +23,10 @@ int wgsl_pull_test_module(char *out, size_t cap);
 /* Native test tools only: reference pixel shader interpreter with the Mac's
  * semantics (runtime/web/vsemu_psref.inc), the oracle of the differential
  * test in web/tools/wgsl-xl.c. */
-typedef struct { float col[2][4], uv[8][4], fog; } PSRefIn;
+/* ddx/ddy: screen-space derivatives of col[0..1] (the ps_3_0 v0/v1 registers),
+ * the only sources dsx/dsy read in the corpus.  has_deriv = 0 means none were
+ * supplied, and ps_ref_run then refuses a shader that uses dsx or dsy. */
+typedef struct { float col[2][4], uv[8][4], fog; int has_deriv; float ddx[2][4], ddy[2][4]; } PSRefIn;
 typedef struct { float aref, proj[4], c[32][4], fog[4]; } PSRefPar;
 typedef void (*PSRefTex)(int stage, const float *coord, int ncoord, float out[4]);
 int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex tex,

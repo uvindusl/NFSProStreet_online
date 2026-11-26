@@ -275,6 +275,11 @@ void vs_free(VSProg *p){ if (p){ free(p->ins); free(p); } }
 unsigned vs_version(const VSProg *p){ return p ? p->version : 0; }
 unsigned vs_ninstr(const VSProg *p){ return p ? p->n : 0; }
 unsigned vs_unknown(const VSProg *p){ return p ? p->unknown : 0; }
+unsigned vs_nderiv(const VSProg *p){
+    unsigned k = 0;
+    if (p) for (unsigned q = 0; q < p->n; q++) if (p->ins[q].op == O_DSX || p->ins[q].op == O_DSY) k++;
+    return k;
+}
 
 int vs_input_reg(const VSProg *p, int usage, int usage_index){
     if (!p) return -1;

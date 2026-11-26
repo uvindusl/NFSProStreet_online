@@ -157,9 +157,10 @@ All 21 are a strict subset of the 77 pre-widening VS failures.
 ### 2a. Derivative class (7 modules)
 `ps_249, ps_250, ps_251, ps_252, ps_289, ps_290, ps_291` use `dsx`/`dsy`.
 These cannot run in the compute stage (the harness runs PS modules as compute
-twin functions) and the CPU oracle `ps_ref_run` has **no `O_DSX`/`O_DSY`
-case**, so there is no reference semantics to compare against — they are
-unmeasurable here, not "wrong".
+twin functions).  The CPU oracle now has `O_DSX`/`O_DSY` (register sources
+only) and the harness checks them with a render pass; the result and its limits
+are in `shader-differential.md`, "Derivative pixel shaders".  Measured on Metal:
+the emitted `dpdx`/`dpdy` agree with the analytic gradient (0 of 1792 pixels over tolerance; 1 pixel accepted on a discontinuity, see there).
 
 ### 2b. Newly-failing precision class (4 modules)
 `ps_37` (ps_2_0_037, `nrm`), `ps_255` (ps_3_0_032, `rcp`),

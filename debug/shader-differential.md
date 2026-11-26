@@ -161,7 +161,9 @@ upstream: the two produce different finite values, which then straddle an
   `.col`.
 * **7 PS modules** (`ps_249,250,251,252,289,290,291`) are exactly the 7 that
   use `dpdx`/`dpdy`; derivatives cannot run in the compute pipeline stage the
-  differential uses.  The fragment pipelines build fine.
+  differential uses.  The fragment pipelines build fine.  These are now
+  checked by a render pass, see "Derivative pixel shaders" below; `psDiff`
+  skips them.
 
 Together these 65 modules are the reason `psdiff` covers 229 of 294.
 
@@ -181,3 +183,45 @@ feeds the next texture fetch, which feeds a `pow`/`exp` chain).
 2. `shadercheck.ts` `psDiff`: accept the `PSOut` entry form (58 modules).
 3. Decide Class B (vertex `O_POW` base 0).
 4. Explain Class D.
+
+## Derivative pixel shaders (`dsx` / `dsy`)
+
+`wgsl-xl` writes `ps_<id>.dvec` for a pixel shader that uses `dsx`/`dsy`, and
+`shadercheck.ts` (`dsDiff`) renders it on a 16x16 target covered by one
+triangle.  The varyings (`col0`, `col1`, `uv0..7`, `fog`) are linear in the
+pixel centre, so every derivative equals a known gradient whether the GPU takes
+fine or coarse differences.  Every `dsx`/`dsy` in the corpus reads `v0` or `v1`
+(the colour registers), sometimes swizzled (`dpdx(v1.xxyw)`), so the oracle
+(`ps_ref_run`, `O_DSX`/`O_DSY`) takes the gradient of that register directly
+and refuses any other source or a modifier other than negate.
+
+The module is run on the GPU five times: as emitted, and with every
+`dpdx(vN.swz)` / `dpdy(vN.swz)` replaced by the gradient of that register
+(exact; nudged by 2e-6; negated; axes swapped).  The first two must agree;
+that comparison gates, because the runs share all other arithmetic, so only the
+derivative can make them differ.  A shader with a discontinuity (a compare, a
+`floor`) can land on the other side of it when the derivative differs from the
+gradient by float rounding; a pixel that misses the exact run but equals the
+nudged run is accepted and counted, since a wrong register, axis or sign cannot
+match a 2e-6 nudge.  The negated and swapped runs are controls: where the
+output does not change under a control, a match cannot confirm that property.
+The CPU oracle is compared as well but only logged: these shaders also use
+`nrm`/`rcp`/`rsq`/`pow`, where GPU and libm already disagree in modules that
+have no derivative.
+
+Result on Apple M2 Pro (Metal 3), Chrome, in the full 591-shader corpus run:
+
+| | |
+|---|---|
+| GPU `dpdx`/`dpdy` vs GPU with analytic gradients | 7 modules, 1792 pixels, 0 mismatches, max relative difference 4.6e-4 |
+| pixels accepted on a discontinuity within rounding noise | 1 (`ps_290`, pixel 191, which differed by 3e-2 before the nudged run was added) |
+| output changes when the derivatives are negated | 0 of 7 modules |
+| output changes when the axes are swapped | 4 of 7 (`ps_249`..`252`); not `ps_289`..`291` |
+| CPU oracle, informational | about 2200 mismatches over 1e-3 relative (the nrm/rcp/rsq/pow precision class, not the derivative) |
+
+What this establishes: the emitted `dpdx`/`dpdy` differentiate the register the
+bytecode names, with its swizzle.  What it does not: the **sign** (no module
+reacts to it), the **axis** for `ps_289`..`291`, and fine against coarse
+derivatives (a linear field cannot tell them apart).  It also says nothing
+about the real D3D9 hardware rule for `dsx`.  Why the output of these modules
+is insensitive to the sign is not explained here.

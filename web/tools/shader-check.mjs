@@ -81,7 +81,7 @@ async function upload(dir) {
   const files = {};
   const fs = await import('node:fs');
   for (const n of fs.readdirSync(dir)) {
-    if (n.endsWith('.wgsl') || n.endsWith('.vec') || n.endsWith('.pvec')) {
+    if (n.endsWith('.wgsl') || n.endsWith('.vec') || n.endsWith('.pvec') || n.endsWith('.dvec')) {
       files[n] = readFileSync(join(dir, n)).toString('base64');
     }
   }
