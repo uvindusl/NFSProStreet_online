@@ -4,7 +4,7 @@ An experimental, from-scratch **static recompilation** of the 2007 PC game *Need
 
 The game's x86 code is translated to C ahead of time. That C is compiled into a native binary (and, as a second target, to WebAssembly), and a hand-written Win32 / Direct3D 9 / D3DX high-level emulation layer stands in for Windows. The long-term goal is to run the game in a browser using WebGPU and Web Audio.
 
-> **Status: early. The game does not run yet.** The code lifts and loads, CRT initialization completes, the engine enters `WinMain`, and the asset loader actively mounts archives and parses databases. Current work focuses on completing attribute tree resolution, message loop pumping, and presenting the first frames. See [Status](#status) for exactly what has been verified.
+> **Status: early. The game does not run yet.** The code lifts and loads, CRT initialization completes, the engine enters `WinMain`, and the asset loader actively mounts archives and parses databases. Current work focuses on secondary asset loading and engine scene initialization, then presenting the first frames. See [Status](#status) for exactly what has been verified.
 
 **Bring your own copy of the game.** This repository contains no game code, game data, shaders, or Microsoft DLLs. Everything derived from the game (lifted C, images, shader blobs) is generated locally and is git-ignored.
 
