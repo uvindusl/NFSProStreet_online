@@ -1045,9 +1045,161 @@ static void sub_016be8d7_impl(CPU *restrict c) {
     c->eip = ret_addr;
 }
 
+/* Forward declarations for functions needed by SecuROM diabolus stubs */
+extern void sub_0052c6f0(CPU*);
+extern void sub_004e1480(CPU*);
+extern void sub_0052d5c0(CPU*);
+
+/* Reconstructs SecuROM-obfuscated sub_019f4580 (hashtable_insert).
+ * SecuROM calls sub_0052c6f0, sub_004e1480 (sub_0052a720), and sub_0052d5c0 via
+ * push <ret_addr>; jmp <target> / push <ret_addr>; push <target>; ret, which the
+ * lifter inlined with early returns, causing growth & insertion to be truncated. */
+static void sub_019f4580_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg0 = MR32(c->esp + 0x00u);
+    uint32_t arg1 = MR32(c->esp + 0x04u);
+    uint32_t arg2 = MR32(c->esp + 0x08u);
+    uint32_t arg3 = MR32(c->esp + 0x0cu);
+    uint32_t arg4 = MR32(c->esp + 0x10u);
+    uint32_t arg5 = MR32(c->esp + 0x14u);
+    uint32_t arg6 = MR32(c->esp + 0x18u);
+    c->esp += 0x1cu; /* ret 0x1c */
+
+    uint32_t tbl = c->ecx;
+    uint16_t cap = MR16(tbl + 4u);
+    uint16_t count = MR16(tbl + 6u);
+
+    if (count == cap) {
+        uint32_t new_cap = 0;
+        if (cap == 0) {
+            new_cap = MR32(0x019f2b38u);
+        } else {
+            uint32_t eax = (uint32_t)cap;
+            eax = (eax * 20u);
+            int32_t edx = ((int32_t)eax >> 31) & 0xf;
+            eax = (uint32_t)(((int32_t)(eax + (uint32_t)edx) >> 4) + 3) & 0xfffffffc;
+            new_cap = eax;
+        }
+        /* Call sub_0052c6f0(new_cap) on tbl */
+        c->ecx = tbl;
+        PUSH32(new_cap);
+        PUSH32(0x019f45f2u);
+        sub_0052c6f0(c);
+        cap = MR16(tbl + 4u);
+    }
+
+    uint8_t shift = MR8(tbl + 0x0bu);
+    uint32_t key = arg0;
+    uint32_t rot = shift ? ((key << shift) | (key >> (32u - shift))) : key;
+    uint32_t remainder = cap ? (rot % cap) : 0;
+
+    /* Call lookup: sub_004e1480 (sub_0052a720) on tbl */
+    uint32_t out_probe = 0;
+    /* sub_004e1480 expects: [esp+4]=key, [esp+8]=remainder, [esp+12]=&out_probe */
+    /* Allocate space on guest stack for out_probe */
+    c->esp -= 4u;
+    uint32_t guest_out_probe_va = c->esp;
+    MR32(guest_out_probe_va) = 0;
+
+    c->ecx = tbl;
+    PUSH32(guest_out_probe_va);
+    PUSH32(remainder);
+    PUSH32(key);
+    PUSH32(0x019f4634u);
+    sub_004e1480(c);
+
+    uint32_t found_idx = c->eax;
+    out_probe = MR32(guest_out_probe_va);
+    c->esp += 4u; /* free guest_out_probe_va */
+
+    if (found_idx >= (uint32_t)cap) {
+        c->eax = 0;
+        c->eip = ret_addr;
+        return;
+    }
+
+    uint32_t buckets = MR32(tbl);
+    uint32_t entry = buckets + found_idx * 12u;
+    if (entry != 0) {
+        /* Call sub_0052d5c0 on entry */
+        c->ecx = entry;
+        PUSH32(arg6);
+        PUSH32(arg4);
+        PUSH32(arg3);
+        PUSH32(arg2);
+        PUSH32(arg1);
+        PUSH32(key);
+        PUSH32(0x019f4681u);
+        sub_0052d5c0(c);
+    }
+
+    buckets = MR32(tbl);
+    uint32_t base_entry = buckets + remainder * 12u;
+    uint8_t cur_probe = MR8(base_entry + 0x0au);
+    if ((uint8_t)out_probe > cur_probe) {
+        MR8(base_entry + 0x0au) = (uint8_t)out_probe;
+    }
+    if ((uint8_t)out_probe > MR8(tbl + 0x0au)) {
+        MR8(tbl + 0x0au) = (uint8_t)out_probe;
+    }
+    MR16(tbl + 6u) = MR16(tbl + 6u) + 1u;
+
+    c->eax = 1;
+    c->eip = ret_addr;
+}
+
+/* Reconstructs SecuROM-obfuscated sub_019fee40 (push 0x19fee90; jmp 0x52d1c0
+ * caused the lifted version to return early without running 0x19fee90..0x19feeca). */
+static void sub_019fee40_impl(CPU *restrict c) {
+    uint32_t ret_addr = 0;
+    POP32(ret_addr);
+    uint32_t arg0 = MR32(c->esp + 0x00u);
+    uint32_t arg1 = MR32(c->esp + 0x04u);
+    uint32_t arg2 = MR32(c->esp + 0x08u);
+    uint32_t arg3 = MR32(c->esp + 0x0cu);
+    c->esp += 0x10u; /* ret 0x10 */
+
+    uint32_t this_ptr = c->ecx;
+    uint32_t idx = MR32(this_ptr + 0x40u);
+    uint32_t arr1 = MR32(this_ptr + 0x3cu);
+    MR32(this_ptr + 0x40u) = idx + 1u;
+    MR32(arr1 + idx * 4u) = MR32(arg1);
+
+    uint32_t tbl = MR32(this_ptr + 0x10u);
+    uint32_t begin = MR32(tbl);
+    uint32_t count = MR32(tbl + 8u);
+    uint32_t end = begin + count * 8u;
+    uint32_t key = MR32(arg0);
+
+    uint32_t lo = begin;
+    int32_t len = (int32_t)(end - begin) >> 3;
+    while (len > 0) {
+        int32_t half = len >> 1;
+        uint32_t mid = lo + (uint32_t)half * 8u;
+        if (MR32(mid) < key) {
+            lo = mid + 8u;
+            len = len - half - 1;
+        } else {
+            len = half;
+        }
+    }
+
+    uint32_t eax_val = (lo >= end) ? (lo | 0xffffffffu) : (uint32_t)((int32_t)(lo - begin) >> 3);
+    uint32_t arr2 = MR32(this_ptr + 0x38u);
+    uint32_t entry = arr2 + idx * 8u;
+    MR32(entry) = arg2;
+    MR32(entry + 4u) = (arg3 << 8) | (eax_val & 0xffu);
+
+    c->eax = eax_val;
+    c->eip = ret_addr;
+}
+
 /* Lifted function at a diabolus-section address, or NULL.  The table is sorted
  * by dispatch_init(). */
 static guest_fn_t diabolus_lookup(uint32_t a) {
+    if (a == 0x019f4580) return sub_019f4580_impl;
+    if (a == 0x019fee40) return sub_019fee40_impl;
     if (a == 0x016be884) return sub_016be884_impl;
     if (a == 0x016be8d7) return sub_016be8d7_impl;
     if (a == 0x016ba000) return sub_016ba000_impl;
