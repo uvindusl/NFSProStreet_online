@@ -2053,14 +2053,15 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "RegisterClassExA") || str_eq(n, "RegisterClassA")) {
         uint32_t wc = A(0);
         uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;
+        r = 0;
         if (wc && mem_is_committed(wc + off + 3u)) {
             uint32_t wp = MR32(wc + off);
             if (wp) {
                 g_wndproc = wp;
                 fprintf(stderr, "  [window] class registered, wndproc=0x%08x\n", wp);
+                r = 0xC001u;
             }
         }
-        r = 0xC001u;
     } else if (str_eq(n, "CreateWindowExA")) {
         r = g_hwnd;
         if (!g_wm_activated) {
@@ -2078,11 +2079,12 @@ int win32_call(CPU *c, uint32_t idx) {
         if (A(1)) { MR32(A(1)) = 0; MR32(A(1) + 4) = 0; MR32(A(1) + 8) = 640; MR32(A(1) + 12) = 480; }
         r = 1;
     } else if (str_eq(n, "PostQuitMessage")) {
+        wm_push(0x0012u, A(0), 0u);     /* WM_QUIT */
         r = 0;
     } else if (str_eq(n, "ShowCursor")) {
         r = 0;
     } else if (str_eq(n, "GetForegroundWindow") || str_eq(n, "GetDesktopWindow")) {
-        r = 0x00010001u;
+        r = g_hwnd ? g_hwnd : 0x00B00001u;
     } else if (str_eq(n, "Direct3DCreate9")) {
         r = com_direct3dcreate9();
     } else if (str_eq(n, "DirectInput8Create")) {

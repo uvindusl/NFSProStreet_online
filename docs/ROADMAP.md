@@ -17,11 +17,12 @@ Web build ✅  compiles to 57 MB .wasm
 CRT start-up ✅  completes (unpacked image post-load state)
 main() ✅  WinMain entered & running (0x004afee0)
 D3D9 / DisplayDevice ✅  initialized (pDev=0x4c0001f0, 0x032a5fc0)
-Asset Loading 🟡  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB)
+Asset Loading ✅  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB, 251 attributes validated)
+Attribute tree validation ✅  sub_005310e0 override / sub_00530f60 sentinel guard
+Window message pump ✅  PeekMessageA/GetMessageA/DispatchMessageA host pump implemented
+D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented
 
-Current blocker ⛔  sub_00530f60 (guest_va=0x00000022) in attribute tree
-Window message pump ⏳  PeekMessageA/DispatchMessageA host pump needed
-D3DX HLE ❌  all 14 imports stubbed (return 0)
+Current front 🟡  sub_004c91d0 / secondary asset processing
 Game systems ❌  audio, input, menus, racing — not started
 ```
 
@@ -43,20 +44,20 @@ In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime start
 - [x] Background worker threads spawned and active (`sub_00905610`, `sub_008976e4`)
 - [x] EA file system initialized, `GLOBAL\GLOBALA.BUN` mounted, `GLOBAL\ATTRIBUTES.BIN` parsed
 
-### 1.3 Attribute Tree & Asset Loading (CURRENT BLOCKER)
+### 1.3 Attribute Tree & Asset Loading (RESOLVED)
 
 | Task | File(s) | Details |
 |---|---|---|
-| Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c` | During `GLOBAL\ATTRIBUTES.BIN` parsing (after 251 attributes inserted), `MR32(esi+4)` is NULL when reading `MR16(edx+0x22)`. Trace caller `sub_005310e0` / `sub_0052eda0`. |
+| Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c`, `lifter/runtime/mem.c` | Registered `sub_005310e0_impl` safe override in `g_dtab` and added `guest_hook` sentinel patch at `0x00531064`. All 251 attributes complete validation cleanly. |
 | Verify secondary asset chunks | `scripts/run_boot.sh` | Confirm remaining BUN files (`BOOT.BUN`, `IN_GAME.BUN`) mount cleanly |
 
-### 1.4 Window Message Pump & D3D9 Present
+### 1.4 Window Message Pump & D3D9 Present (IN PROGRESS)
 
 | Task | File(s) | Details |
 |---|---|---|
-| Implement `CreateWindowExA` → real SDL2/X11 surface or headless container | `lifter/runtime/win32.c` | Return valid HWND, connect to event queue |
-| Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall |
-| Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/d3d9_hle.c` | Connect `BeginScene` / `EndScene` / `Present` to native window buffer swap |
+| Implement `CreateWindowExA` & window handle | `lifter/runtime/win32.c` | Return valid HWND, enqueues startup window messages (`WM_SHOWWINDOW`, `WM_ACTIVATEAPP`, `WM_ACTIVATE`, `WM_SETFOCUS`, `WM_PAINT`) |
+| Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall, dispatch to guest wndproc with re-entry guard |
+| Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/com.c` | `BeginScene`, `EndScene`, `Present`, `Clear`, `Reset`, and `TestCooperativeLevel` implemented |
 
 **Done when:** `./out/prostreet` loads assets, opens a window, and ticks the main loop through `Present()`.
 

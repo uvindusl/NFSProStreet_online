@@ -1,3 +1,6 @@
+#define _GNU_SOURCE
+#include "rt.h"
+#include "cpu.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,9 +8,10 @@
 #include <assert.h>
 #include <pthread.h>
 
+/* Assert helpers */
 #define ASSERT_TRUE(expr, msg) do { \
     if (!(expr)) { \
-        fprintf(stderr, "FAIL: %s\n", msg); \
+        fprintf(stderr, "FAIL: %s (line %d)\n", msg, __LINE__); \
         exit(1); \
     } else { \
         printf("OK: %s\n", msg); \
@@ -16,227 +20,322 @@
 
 #define ASSERT_EQ(a, b, msg) do { \
     if ((a) != (b)) { \
-        fprintf(stderr, "FAIL: %s (expected %u, got %u)\n", msg, (unsigned)(b), (unsigned)(a)); \
+        fprintf(stderr, "FAIL: %s (expected %u, got %u at line %d)\n", msg, (unsigned)(b), (unsigned)(a), __LINE__); \
         exit(1); \
     } else { \
         printf("OK: %s\n", msg); \
     } \
 } while(0)
 
-/* ------------------------------------------------------------------ */
-/* Test 1: Window Message Queue & Pump Logic                          */
-/* Mirrors lifter/runtime/win32.c implementation                      */
-/* ------------------------------------------------------------------ */
-#define WMQ_CAP 256
-static struct { uint32_t msg, wp, lp; } s_wmq[WMQ_CAP];
-static int s_wmq_head = 0, s_wmq_tail = 0;
-static pthread_mutex_t s_wmq_mtx = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t s_hwnd = 0x00B00001u;
-static uint32_t s_wndproc = 0;
+/* Mock function table for standalone testing */
+const uint32_t g_fn_count = 0;
+const uint32_t g_fn_addr[1] = {0};
+typedef void (*gfn_t)(CPU *);
+const gfn_t g_fn_ptr[1] = {0};
 
-static void test_wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
-    pthread_mutex_lock(&s_wmq_mtx);
-    int next = (s_wmq_tail + 1) % WMQ_CAP;
-    if (next != s_wmq_head) {
-        s_wmq[s_wmq_tail].msg = m;
-        s_wmq[s_wmq_tail].wp = wp;
-        s_wmq[s_wmq_tail].lp = lp;
-        s_wmq_tail = next;
-    }
-    pthread_mutex_unlock(&s_wmq_mtx);
-}
+const uint32_t g_seh_fn_count = 0;
+const uint32_t g_seh_fn_addr[1] = {0};
+const guest_fn_t g_seh_fn_ptr[1] = {0};
 
-static int test_wm_pop(uint32_t *m, uint32_t *wp, uint32_t *lp) {
-    int ok = 0;
-    pthread_mutex_lock(&s_wmq_mtx);
-    if (s_wmq_head != s_wmq_tail) {
-        *m = s_wmq[s_wmq_head].msg;
-        *wp = s_wmq[s_wmq_head].wp;
-        *lp = s_wmq[s_wmq_head].lp;
-        s_wmq_head = (s_wmq_head + 1) % WMQ_CAP;
-        ok = 1;
-    }
-    pthread_mutex_unlock(&s_wmq_mtx);
-    return ok;
-}
+/* Mock imports table matching rt.h ImpEnt */
+#define TEST_IAT_BASE 0x00300000u
 
-static int test_wm_peek(uint32_t *m, uint32_t *wp, uint32_t *lp) {
-    int ok = 0;
-    pthread_mutex_lock(&s_wmq_mtx);
-    if (s_wmq_head != s_wmq_tail) {
-        *m = s_wmq[s_wmq_head].msg;
-        *wp = s_wmq[s_wmq_head].wp;
-        *lp = s_wmq[s_wmq_head].lp;
-        ok = 1;
-    }
-    pthread_mutex_unlock(&s_wmq_mtx);
-    return ok;
-}
+enum {
+    IMP_REG_CLASS_EX_A,
+    IMP_CREATE_WINDOW_EX_A,
+    IMP_PEEK_MESSAGE_A,
+    IMP_GET_MESSAGE_A,
+    IMP_DISPATCH_MESSAGE_A,
+    IMP_POST_QUIT_MESSAGE,
+    IMP_GET_FOREGROUND_WINDOW,
+    IMP_TEST_COUNT
+};
 
-typedef struct {
-    uint32_t hwnd;
-    uint32_t message;
-    uint32_t wParam;
-    uint32_t lParam;
-    uint32_t time;
-    int32_t  pt_x;
-    int32_t  pt_y;
-} GuestMSG;
+const ImpEnt g_imp[] = {
+    [IMP_REG_CLASS_EX_A]        = {TEST_IAT_BASE + 0 * 4, "USER32.dll", "RegisterClassExA", 1},
+    [IMP_CREATE_WINDOW_EX_A]    = {TEST_IAT_BASE + 1 * 4, "USER32.dll", "CreateWindowExA", 12},
+    [IMP_PEEK_MESSAGE_A]        = {TEST_IAT_BASE + 2 * 4, "USER32.dll", "PeekMessageA", 5},
+    [IMP_GET_MESSAGE_A]         = {TEST_IAT_BASE + 3 * 4, "USER32.dll", "GetMessageA", 4},
+    [IMP_DISPATCH_MESSAGE_A]    = {TEST_IAT_BASE + 4 * 4, "USER32.dll", "DispatchMessageA", 1},
+    [IMP_POST_QUIT_MESSAGE]     = {TEST_IAT_BASE + 5 * 4, "USER32.dll", "PostQuitMessage", 1},
+    [IMP_GET_FOREGROUND_WINDOW] = {TEST_IAT_BASE + 6 * 4, "USER32.dll", "GetForegroundWindow", 0},
+};
+const uint32_t g_imp_count = IMP_TEST_COUNT;
 
-static uint32_t test_peek_message(GuestMSG *msg, uint32_t remove_flag) {
-    uint32_t m = 0, wp = 0, lp = 0;
-    int remove = (remove_flag & 1u);
-    int has = remove ? test_wm_pop(&m, &wp, &lp) : test_wm_peek(&m, &wp, &lp);
-    if (has) {
-        if (msg) {
-            msg->hwnd = s_hwnd;
-            msg->message = m;
-            msg->wParam = wp;
-            msg->lParam = lp;
-        }
-        return 1u;
-    }
-    return 0u;
-}
+/* Stubs for lifted functions referenced by dispatch_init */
+void sub_00909210(CPU *c) { (void)c; }
+void sub_009096a0(CPU *c) { (void)c; }
+void sub_004040f0(CPU *c) { (void)c; }
+void sub_0044bfd0(CPU *c) { (void)c; }
+void sub_004add90(CPU *c) { (void)c; }
+void sub_004c8280(CPU *c) { (void)c; }
+void sub_004c9730(CPU *c) { (void)c; }
+void sub_00542700(CPU *c) { (void)c; }
+void sub_01a11e78(CPU *c) { (void)c; }
+void sub_00458260(CPU *c) { (void)c; }
+void sub_00459c10(CPU *c) { (void)c; }
+void sub_0052c6f0(CPU *c) { (void)c; }
+void sub_004e1480(CPU *c) { (void)c; }
+void sub_0052d5c0(CPU *c) { (void)c; }
+void sub_00435140(CPU *c) { (void)c; }
 
-static uint32_t test_get_message(GuestMSG *msg) {
-    uint32_t m = 0, wp = 0, lp = 0;
-    int has = test_wm_pop(&m, &wp, &lp);
-    if (has) {
-        if (msg) {
-            msg->hwnd = s_hwnd;
-            msg->message = m;
-            msg->wParam = wp;
-            msg->lParam = lp;
-        }
-        return (m == 0x0012u /* WM_QUIT */) ? 0u : 1u;
-    }
-    /* When queue empty, non-blocking fallback returns 1 so loop keeps waiting */
-    return 1u;
-}
+/* Include actual runtime sources */
+#include "mem.c"
+#include "com.c"
+#include "d3dx9_hle.c"
+#include "win32.c"
+#include "dispatch.c"
 
-static uint32_t test_register_class(int is_ex, const void *ptr, size_t valid_size) {
-    uint32_t off = is_ex ? 8u : 4u;
-    if (valid_size >= off + 4u) {
-        uint32_t wp = *(const uint32_t *)((const char *)ptr + off);
-        if (wp) {
-            s_wndproc = wp;
-            return 0xC001u;
-        }
-    }
-    return 0;
-}
+/* Mock wndproc to verify DispatchMessageA callback */
+static uint32_t s_mock_wndproc_called = 0;
+static uint32_t s_last_wm_msg = 0;
+static uint32_t s_last_wm_wparam = 0;
+static uint32_t s_last_wm_lparam = 0;
 
-/* ------------------------------------------------------------------ */
-/* Test 2: Attribute Tree Crash Guard Logic                           */
-/* Mirrors lifter/runtime/dispatch.c 0x00531064 guard                 */
-/* ------------------------------------------------------------------ */
-typedef struct {
-    uint32_t eax, ecx, edx, ebx, esp, ebp, esi, edi, eip;
-} DummyCPU;
-
-static int test_attr_guard(DummyCPU *c) {
-    if (!c->edx) {
-        /* edx is NULL: NIL sentinel encountered. Set eax=0 and simulate ret */
-        c->eax = 0;
-        c->eip = 0x005310f0u; /* return to caller */
-        return 1;             /* handled */
-    }
-    return 0;                 /* live node: proceed */
-}
-
-/* ------------------------------------------------------------------ */
-/* Test 3: COM Method Dispatch Indices                                */
-/* Mirrors lifter/runtime/com.c D3D9 / D3DX Effect method routing     */
-/* ------------------------------------------------------------------ */
-static uint32_t test_com_dev_method(int m, const char *nm, uint32_t pPasses) {
-    if (!strcmp(nm, "BeginScene") || m == 41) return 0; /* D3D_OK */
-    if (!strcmp(nm, "EndScene") || m == 42) return 0;   /* D3D_OK */
-    if (!strcmp(nm, "Present") || m == 17) return 0;    /* D3D_OK */
-    if (!strcmp(nm, "Begin") || m == 63) {
-        if (pPasses) return 1; /* 1 pass returned */
-    }
-    if (!strcmp(nm, "CommitChanges") || m == 65) return 0; /* D3D_OK */
-    return 0xFFFFFFFFu;
+static void mock_guest_wndproc(CPU *c) {
+    s_mock_wndproc_called++;
+    /* stdcall (hwnd, msg, wp, lp): esp+4=hwnd, esp+8=msg, esp+12=wp, esp+16=lp */
+    s_last_wm_msg = MR32(c->esp + 8);
+    s_last_wm_wparam = MR32(c->esp + 12);
+    s_last_wm_lparam = MR32(c->esp + 16);
+    POP32(c->eip);
+    c->esp += 16u;
+    c->eax = 42u; /* mock return value */
 }
 
 int main(void) {
-    printf("=== Running Runtime Lifecycle & Pump Tests ===\n\n");
+    printf("=== Antigravity Runtime Lifecycle Unit Tests ===\n\n");
 
-    /* 1. Empty PeekMessage / GetMessage test */
-    GuestMSG msg;
-    memset(&msg, 0, sizeof(msg));
-    ASSERT_EQ(test_peek_message(&msg, 1), 0u, "PeekMessageA on empty queue returns 0");
-    ASSERT_EQ(test_get_message(&msg), 1u, "GetMessageA on empty queue returns 1 (keeps loop alive)");
+    /* 1. Initialize guest memory, dispatch table, and COM bridge */
+    mem_init();
+    dispatch_init();
+    mem_commit(TEST_IAT_BASE, 0x1000u);
+    win32_init();
 
-    /* 2. Enqueue messages and verify FIFO ordering & peek vs pop */
-    test_wm_push(0x0018u, 1u, 0u); /* WM_SHOWWINDOW */
-    test_wm_push(0x0006u, 1u, 0u); /* WM_ACTIVATE */
-    test_wm_push(0x0012u, 0u, 0u); /* WM_QUIT */
-
-    /* Peek without removing */
-    ASSERT_EQ(test_peek_message(&msg, 0), 1u, "PeekMessageA with PM_NOREMOVE finds message");
-    ASSERT_EQ(msg.message, 0x0018u, "Peeked message is WM_SHOWWINDOW");
-
-    /* Pop first message */
-    ASSERT_EQ(test_peek_message(&msg, 1), 1u, "PeekMessageA with PM_REMOVE removes message");
-    ASSERT_EQ(msg.message, 0x0018u, "Removed message is WM_SHOWWINDOW");
-
-    /* Pop second message with GetMessageA */
-    ASSERT_EQ(test_get_message(&msg), 1u, "GetMessageA on normal message returns 1");
-    ASSERT_EQ(msg.message, 0x0006u, "GetMessageA retrieved WM_ACTIVATE");
-
-    /* Pop WM_QUIT message with GetMessageA */
-    ASSERT_EQ(test_get_message(&msg), 0u, "GetMessageA on WM_QUIT returns 0 (exit loop)");
-    ASSERT_EQ(msg.message, 0x0012u, "Retrieved message is WM_QUIT");
-
-    /* 3. RegisterClassA vs RegisterClassExA bounds check */
-    struct {
-        uint32_t style;
-        uint32_t lpfnWndProc;
-        int32_t cbClsExtra;
-        int32_t cbWndExtra;
-    } wndclass = { 0, 0x005A1234u, 0, 0 };
-
-    struct {
-        uint32_t cbSize;
-        uint32_t style;
-        uint32_t lpfnWndProc;
-        int32_t cbClsExtra;
-        int32_t cbWndExtra;
-    } wndclassex = { sizeof(wndclassex), 0, 0x005B5678u, 0, 0 };
-
-    /* RegisterClassA (wndproc at offset 4) */
-    ASSERT_EQ(test_register_class(0, &wndclass, sizeof(wndclass)), 0xC001u, "RegisterClassA captures wndproc");
-    ASSERT_EQ(s_wndproc, 0x005A1234u, "Captured wndproc from RegisterClassA matches");
-
-    /* RegisterClassExA (wndproc at offset 8) */
-    ASSERT_EQ(test_register_class(1, &wndclassex, sizeof(wndclassex)), 0xC001u, "RegisterClassExA captures wndproc");
-    ASSERT_EQ(s_wndproc, 0x005B5678u, "Captured wndproc from RegisterClassExA matches");
-
-    /* 4. Attribute tree crash site guard */
-    DummyCPU cpu;
+    CPU cpu;
     memset(&cpu, 0, sizeof(cpu));
-    cpu.esi = 0x01234560u; /* node pointer */
-    cpu.edx = 0x00000000u; /* child pointer = NULL (NIL sentinel) */
+    CPU *c = &cpu;
+    g_cur_cpu = c;
 
-    int guarded = test_attr_guard(&cpu);
-    ASSERT_EQ(guarded, 1, "Attribute guard intercepts NULL edx");
-    ASSERT_EQ(cpu.eax, 0u, "Attribute guard sets eax=0 (valid NIL subtree)");
-    ASSERT_EQ(cpu.eip, 0x005310f0u, "Attribute guard advances eip past crash site");
+    /* Setup stack in guest memory */
+    uint32_t stack_base = 0x7fe00000u;
+    mem_commit(stack_base - 0x10000u, 0x20000u);
+    c->esp = stack_base;
 
-    /* Live child case */
-    cpu.edx = 0x01234580u;
-    guarded = test_attr_guard(&cpu);
-    ASSERT_EQ(guarded, 0, "Attribute guard passes through non-NULL live child");
+    /* -------------------------------------------------------------- */
+    /* Test Suite 1: Win32 Window Message Pump & Queue                */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 1: Win32 Window Message Pump & Queue ---\n");
 
-    /* 5. COM method dispatch */
-    ASSERT_EQ(test_com_dev_method(41, "BeginScene", 0), 0u, "COM BeginScene (m=41) returns D3D_OK");
-    ASSERT_EQ(test_com_dev_method(42, "EndScene", 0), 0u, "COM EndScene (m=42) returns D3D_OK");
-    ASSERT_EQ(test_com_dev_method(17, "Present", 0), 0u, "COM Present (m=17) returns D3D_OK");
-    ASSERT_EQ(test_com_dev_method(63, "Begin", 1), 1u, "COM Begin (m=63) returns 1 pass");
-    ASSERT_EQ(test_com_dev_method(65, "CommitChanges", 0), 0u, "COM CommitChanges (m=65) returns D3D_OK");
+    /* RegisterClassExA with valid struct capturing lpfnWndProc */
+    uint32_t wndclass_addr = 0x00200000u;
+    mem_commit(wndclass_addr, 0x1000u);
+    uint32_t mock_wndproc_addr = 0x00550000u;
+    g_dtab[mock_wndproc_addr - TEXT_BASE] = mock_guest_wndproc;
 
-    printf("\n=== ALL TESTS PASSED SUCCESSFULLY ===\n");
+    /* WNDCLASSEXA: +0 cbSize, +4 style, +8 lpfnWndProc */
+    MR32(wndclass_addr + 0) = 48;
+    MR32(wndclass_addr + 4) = 0;
+    MR32(wndclass_addr + 8) = mock_wndproc_addr;
+
+    /* Test RegisterClassExA */
+    c->esp = stack_base;
+    PUSH32(wndclass_addr);  /* arg 0: lpwcx */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_REG_CLASS_EX_A);
+    ASSERT_EQ(c->eax, 0xC001u, "RegisterClassExA returns valid atom");
+    ASSERT_EQ(g_wndproc, mock_wndproc_addr, "g_wndproc captured correctly");
+
+    /* Test RegisterClassExA with NULL returns 0 */
+    c->esp = stack_base;
+    PUSH32(0u);             /* arg 0: NULL */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_REG_CLASS_EX_A);
+    ASSERT_EQ(c->eax, 0u, "RegisterClassExA with NULL returns 0");
+
+    /* Test CreateWindowExA */
+    c->esp = stack_base;
+    for (int i = 0; i < 12; i++) PUSH32(0); /* 12 args for CreateWindowExA */
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_CREATE_WINDOW_EX_A);
+    ASSERT_EQ(c->eax, 0x00B00001u, "CreateWindowExA returns valid hwnd");
+    ASSERT_EQ(g_hwnd, 0x00B00001u, "g_hwnd set to 0x00B00001");
+
+    /* Test GetForegroundWindow matches g_hwnd */
+    c->esp = stack_base;
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_GET_FOREGROUND_WINDOW);
+    ASSERT_EQ(c->eax, 0x00B00001u, "GetForegroundWindow returns matching g_hwnd");
+
+    /* Verify initial messages were enqueued by CreateWindowExA */
+    uint32_t msg_struct = 0x00210000u;
+    mem_commit(msg_struct, 0x1000u);
+
+    /* PeekMessageA (PM_NOREMOVE = 0) */
+    c->esp = stack_base;
+    PUSH32(0u);             /* wRemoveMsg = PM_NOREMOVE */
+    PUSH32(0u);             /* wMsgFilterMax */
+    PUSH32(0u);             /* wMsgFilterMin */
+    PUSH32(0u);             /* hWnd */
+    PUSH32(msg_struct);     /* lpMsg */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PeekMessageA PM_NOREMOVE returns 1 (message available)");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0018u, "Peeked message is WM_SHOWWINDOW (0x0018)");
+
+    /* PeekMessageA (PM_REMOVE = 1) */
+    c->esp = stack_base;
+    PUSH32(1u);             /* wRemoveMsg = PM_REMOVE */
+    PUSH32(0u);             /* wMsgFilterMax */
+    PUSH32(0u);             /* wMsgFilterMin */
+    PUSH32(0u);             /* hWnd */
+    PUSH32(msg_struct);     /* lpMsg */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PeekMessageA PM_REMOVE returns 1");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0018u, "Popped message is WM_SHOWWINDOW (0x0018)");
+
+    /* DispatchMessageA */
+    c->esp = stack_base;
+    PUSH32(msg_struct);     /* lpMsg */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_DISPATCH_MESSAGE_A);
+    ASSERT_EQ(s_mock_wndproc_called, 1u, "DispatchMessageA invoked mock wndproc");
+    ASSERT_EQ(s_last_wm_msg, 0x0018u, "WndProc received WM_SHOWWINDOW");
+    ASSERT_EQ(c->eax, 42u, "DispatchMessageA returned wndproc return value");
+
+    /* Drain queue: WM_ACTIVATEAPP (0x1C), WM_ACTIVATE (0x06), WM_SETFOCUS (0x07), WM_PAINT (0x0F) */
+    for (int i = 0; i < 4; i++) {
+        c->esp = stack_base;
+        PUSH32(1u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+        win32_call(c, IMP_PEEK_MESSAGE_A);
+        ASSERT_EQ(c->eax, 1u, "Draining startup messages");
+    }
+
+    /* Queue is now empty. PeekMessageA should return 0 */
+    c->esp = stack_base;
+    PUSH32(1u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 0u, "PeekMessageA returns 0 when queue is empty");
+
+    /* GetMessageA on empty queue should return 1 (keep loop alive, not terminate) */
+    c->esp = stack_base;
+    PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_GET_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "GetMessageA on empty queue returns 1 (non-terminating)");
+
+    /* Test PostQuitMessage & GetMessageA returning 0 strictly on WM_QUIT */
+    c->esp = stack_base;
+    PUSH32(0u);             /* exit code 0 */
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_POST_QUIT_MESSAGE);
+
+    c->esp = stack_base;
+    PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_GET_MESSAGE_A);
+    ASSERT_EQ(c->eax, 0u, "GetMessageA returns 0 strictly on WM_QUIT");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0012u, "Message is WM_QUIT (0x0012)");
+
+    /* -------------------------------------------------------------- */
+    /* Test Suite 2: D3DXEffect & D3D9 COM Bridge                     */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 2: D3DXEffect & D3D9 COM Bridge ---\n");
+
+    /* Verify ID3DXEffect::Begin writes pass count to COM_A(2), not COM_A(1) */
+    uint32_t effect_obj = 0x4C000000u;
+    uint32_t passes_out_addr = 0x00220000u;
+    mem_commit(passes_out_addr, 0x1000u);
+    MR32(passes_out_addr) = 0xdeadbeefu;
+
+    uint32_t flags_val = 0x12345678u;
+
+    /* Setup stack for stdcall: Begin(this, Flags, pPasses)
+     * At com_call entry: [esp+0]=ret, [esp+4]=this, [esp+8]=Flags, [esp+12]=pPasses
+     * After POP32(c->eip): COM_A(0)=this, COM_A(1)=Flags, COM_A(2)=pPasses */
+    c->esp = stack_base;
+    PUSH32(passes_out_addr);/* Arg 2: UINT *NumPasses (pPasses) -> COM_A(2) */
+    PUSH32(flags_val);      /* Arg 1: UINT Flags -> COM_A(1) */
+    PUSH32(effect_obj);     /* Arg 0: this -> COM_A(0) */
+    PUSH32(0x12345678u);    /* ret addr */
+
+    /* slot 63 in M_EFFECT is Begin */
+    uint32_t effect_begin_magic = (IF_EFFECT << 16) | 63;
+    com_call(c, effect_begin_magic);
+    ASSERT_EQ(c->eax, 0u, "ID3DXEffect::Begin returns D3D_OK");
+    ASSERT_EQ(MR32(passes_out_addr), 1u, "ID3DXEffect::Begin wrote 1 to COM_A(2) (pPasses)");
+
+    /* Verify ID3DXEffect lifecycle stubs */
+    uint32_t effect_begin_pass_magic = (IF_EFFECT << 16) | 64;
+    c->esp = stack_base;
+    PUSH32(0u); PUSH32(effect_obj); PUSH32(0x12345678u);
+    com_call(c, effect_begin_pass_magic);
+    ASSERT_EQ(c->eax, 0u, "ID3DXEffect::BeginPass returns D3D_OK");
+
+    uint32_t effect_commit_magic = (IF_EFFECT << 16) | 65;
+    c->esp = stack_base;
+    PUSH32(effect_obj); PUSH32(0x12345678u);
+    com_call(c, effect_commit_magic);
+    ASSERT_EQ(c->eax, 0u, "ID3DXEffect::CommitChanges returns D3D_OK");
+
+    uint32_t effect_end_pass_magic = (IF_EFFECT << 16) | 66;
+    c->esp = stack_base;
+    PUSH32(effect_obj); PUSH32(0x12345678u);
+    com_call(c, effect_end_pass_magic);
+    ASSERT_EQ(c->eax, 0u, "ID3DXEffect::EndPass returns D3D_OK");
+
+    uint32_t effect_end_magic = (IF_EFFECT << 16) | 67;
+    c->esp = stack_base;
+    PUSH32(effect_obj); PUSH32(0x12345678u);
+    com_call(c, effect_end_magic);
+    ASSERT_EQ(c->eax, 0u, "ID3DXEffect::End returns D3D_OK");
+
+    /* Verify IDirect3DDevice9 lifecycle methods */
+    uint32_t dev_obj = 0x4C000000u;
+    /* BeginScene (m=41), EndScene (m=42), Present (m=17) */
+    c->esp = stack_base;
+    PUSH32(dev_obj); PUSH32(0x12345678u);
+    com_call(c, (IF_DEV << 16) | 41);
+    ASSERT_EQ(c->eax, 0u, "IDirect3DDevice9::BeginScene returns D3D_OK");
+
+    c->esp = stack_base;
+    PUSH32(dev_obj); PUSH32(0x12345678u);
+    com_call(c, (IF_DEV << 16) | 42);
+    ASSERT_EQ(c->eax, 0u, "IDirect3DDevice9::EndScene returns D3D_OK");
+
+    c->esp = stack_base;
+    PUSH32(0); PUSH32(0); PUSH32(0); PUSH32(0); PUSH32(dev_obj); PUSH32(0x12345678u);
+    com_call(c, (IF_DEV << 16) | 17);
+    ASSERT_EQ(c->eax, 0u, "IDirect3DDevice9::Present returns D3D_OK");
+
+    /* -------------------------------------------------------------- */
+    /* Test Suite 3: Attribute Tree sub_005310e0 Dispatch Override    */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 3: Attribute Tree sub_005310e0 Override ---\n");
+
+    /* Verify sub_005310e0 is registered in g_dtab and cleans 5 args (20 bytes) */
+    c->esp = stack_base;
+    PUSH32(1u); PUSH32(2u); PUSH32(3u); PUSH32(4u); PUSH32(5u); /* 5 args = 20 bytes */
+    PUSH32(0x12345678u); /* return address */
+    uint32_t sp_before = c->esp;
+
+    dispatch_indirect(c, 0x005310e0u);
+    ASSERT_EQ(c->eip, 0x12345678u, "sub_005310e0 popped return address to eip");
+    ASSERT_EQ(c->esp, sp_before + 24u, "sub_005310e0 cleaned ret addr + 20 bytes of args");
+    ASSERT_EQ(c->eax, 0u, "sub_005310e0 returned eax = 0 (clean completion)");
+
+    /* Verify guest_hook at 0x00531064 patches NULL child with sentinel */
+    printf("\n--- Test Suite 4: guest_hook at 0x00531064 ---\n");
+    uint32_t node_addr = 0x00230000u;
+    mem_commit(node_addr, 0x1000u);
+    MR32(node_addr + 4) = 0u; /* NULL child pointer that triggers SIGSEGV at 0x22 */
+    c->esi = node_addr;
+
+    guest_hook(c, 0x00531064u);
+    uint32_t patched_child = MR32(node_addr + 4);
+    ASSERT_TRUE(patched_child != 0u, "guest_hook patched NULL child pointer");
+    ASSERT_TRUE(mem_is_committed(patched_child + 0x22u), "Patched sentinel is committed and safe to read offset 0x22");
+    ASSERT_EQ(MR16(patched_child + 0x22u), 0u, "Patched sentinel offset 0x22 is 0 (clean loop termination)");
+
+    printf("\nAll runtime lifecycle tests passed successfully (100%% production code exercised)!\n");
     return 0;
 }

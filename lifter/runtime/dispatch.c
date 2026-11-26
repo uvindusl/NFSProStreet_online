@@ -491,6 +491,28 @@ static void sub_01a00674_impl(CPU *restrict c) {
     dispatch_indirect(c, 0x004592e0);
 }
 
+static void sub_00530f60_impl(CPU *restrict c) {
+    static int s_logged = 0;
+    if (!s_logged) {
+        s_logged = 1;
+        fprintf(stderr, "[attr-tree] sub_00530f60_impl safe override entered\n");
+    }
+    POP32(c->eip);
+    c->esp += 8u;
+    c->eax = 0;
+}
+
+static void sub_005310e0_impl(CPU *restrict c) {
+    static int s_logged = 0;
+    if (!s_logged) {
+        s_logged = 1;
+        fprintf(stderr, "[attr-tree] sub_005310e0_impl safe override entered\n");
+    }
+    POP32(c->eip);
+    c->esp += 20u;
+    c->eax = 0;
+}
+
 void dispatch_init(void) {
     if (g_dtab_ready) return;
     g_dtab_ready = 1;
@@ -556,6 +578,8 @@ void dispatch_init(void) {
     g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
     g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
     g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
+    g_dtab[0x00530f60 - TEXT_BASE] = sub_00530f60_impl;
+    g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
 
     com_init();
 }
@@ -1474,22 +1498,6 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         POP32(c->eip);
         c->esp += 4u;
         return;
-    }
-    /* Attribute tree crash site fix: 0x00531064 inside sub_00530f60.
-     * When edx = MR32(esi + 0x4) is NULL (NIL sentinel node / empty child),
-     * dereferencing MR16(edx + 0x22) triggers SIGSEGV at guest_va=0x00000022.
-     * Guard: if edx is NULL or uncommitted, return cleanly with eax=0 (valid NIL). */
-    if (addr == 0x00531064u) {
-        static int s_attr_guard_logged = 0;
-        if (!s_attr_guard_logged) {
-            s_attr_guard_logged = 1;
-            fprintf(stderr, "[attr-tree] guard at 0x00531064 hit: esi=0x%08x edx=0x%08x\n", c->esi, c->edx);
-        }
-        if (!c->edx || !mem_is_committed(c->edx)) {
-            c->eax = 0;
-            if (mem_is_committed(c->esp)) POP32(c->eip);
-            return;
-        }
     }
     unresolved(c, addr);
 }

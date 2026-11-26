@@ -497,7 +497,7 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "SetTechnique") || !strcmp(nm, "SetTechnique71") || m == 58 || m == 71) {
             r = 0;
         } else if (!strcmp(nm, "Begin") || !strcmp(nm, "Begin75") || m == 63 || m == 75) {
-            uint32_t pPasses = COM_A(1);
+            uint32_t pPasses = COM_A(2);
             if (pPasses && mem_is_committed(pPasses)) MR32(pPasses) = 1; /* 1 pass */
             r = 0; /* D3D_OK */
         } else if (!strcmp(nm, "BeginPass") || !strcmp(nm, "BeginPass77") || !strcmp(nm, "Pass76") || m == 64 || m == 76 || m == 77) {
