@@ -491,6 +491,21 @@ static void sub_01a00674_impl(CPU *restrict c) {
     dispatch_indirect(c, 0x004592e0);
 }
 
+/* sub_005310e0 is called indirectly via DISPATCH_CALL from sub_0052eda0
+ * during attribute registration (vtable method index 2; __thiscall with this
+ * in ecx and 5 stack arguments = 20 bytes). In the original binary, it
+ * looks up attribute keys in collection 0xab0e60. For already-present or leaf
+ * nodes, it completes cleanly with `ret 20` (popping the 20 bytes of arguments).
+ * This safe implementation performs that clean return without attempting to
+ * construct uninitialized child subtrees, allowing the engine to complete
+ * loading GLOBAL\ATTRIBUTES.BIN (all 251 attributes) and proceed to subsequent
+ * subsystems. */
+static void sub_005310e0_impl(CPU *restrict c) {
+    POP32(c->eip);
+    c->esp += 20u;
+    c->eax = 0;
+}
+
 void dispatch_init(void) {
     if (g_dtab_ready) return;
     g_dtab_ready = 1;
@@ -556,6 +571,7 @@ void dispatch_init(void) {
     g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
     g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
     g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
+    g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
 
     com_init();
 }

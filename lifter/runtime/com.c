@@ -294,6 +294,26 @@ int com_call(CPU *c, uint32_t magic) {
             uint32_t pp = COM_A(1);
             if (pp && mem_is_committed(pp)) MR32(pp) = g_d3d9;
             r = 0;
+        } else if (!strcmp(nm, "BeginScene") || m == 41) {
+            static uint64_t s_begin_frames = 0;
+            if (++s_begin_frames <= 10 || (s_begin_frames % 300) == 0) {
+                fprintf(stderr, "  [D3D9] BeginScene (frame %llu)\n", (unsigned long long)s_begin_frames);
+            }
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "EndScene") || m == 42) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "Present") || m == 17) {
+            static uint64_t s_present_frames = 0;
+            if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
+                fprintf(stderr, "  [D3D9] Present (frame %llu)\n", (unsigned long long)s_present_frames);
+            }
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "Clear") || m == 43) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "Reset") || m == 16) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "TestCooperativeLevel") || m == 3) {
+            r = 0; /* D3D_OK */
         } else {
             r = 0;
         }
@@ -474,6 +494,20 @@ int com_call(CPU *c, uint32_t magic) {
             uint32_t pp = COM_A(2);
             if (pp && mem_is_committed(pp)) MR32(pp) = 0x1000;
             r = 0;
+        } else if (!strcmp(nm, "SetTechnique") || !strcmp(nm, "SetTechnique71") || m == 58 || m == 71) {
+            r = 0;
+        } else if (!strcmp(nm, "Begin") || !strcmp(nm, "Begin75") || m == 63 || m == 75) {
+            uint32_t pPasses = COM_A(2);
+            if (pPasses && mem_is_committed(pPasses)) MR32(pPasses) = 1; /* 1 pass */
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "BeginPass") || !strcmp(nm, "BeginPass77") || !strcmp(nm, "Pass76") || m == 64 || m == 76 || m == 77) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "CommitChanges") || m == 65) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "EndPass") || !strcmp(nm, "EndPass79") || m == 66 || m == 79) {
+            r = 0; /* D3D_OK */
+        } else if (!strcmp(nm, "End") || !strcmp(nm, "End80") || m == 67 || m == 80) {
+            r = 0; /* D3D_OK */
         } else if (!strcmp(nm, "SetRawValue") || m == 78) {
             r = 0;
         } else {

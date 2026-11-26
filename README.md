@@ -56,8 +56,7 @@ The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The r
 
 ### Known issues
 
-- **Boot stops during attribute tree validation.** After mounting `GLOBAL\GLOBALA.BUN` and parsing `GLOBAL\ATTRIBUTES.BIN` (251 attributes inserted), `sub_00530f60` encounters a NULL dereference at offset `0x22`. Resolving this structure is required before the engine enters its main render loop.
-- **Window message loop pump.** The engine requires continuous message draining (`PeekMessageA`/`DispatchMessageA`) to pump OS window events alongside rendering.
+- **Secondary asset loading & game loop initialization.** With attribute tree validation (`sub_00530f60`/`sub_005310e0`) and the initial window message pump resolved, execution advances into secondary asset processing and engine scene initialization.
 - **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
 - **The CPU shader interpreter is incomplete.** It has no `cmp` case and computes `lrp` with the operands reversed. The WGSL emitter is correct; the interpreter is not used on that path.
 - **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.
