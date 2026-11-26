@@ -1231,7 +1231,6 @@ static guest_fn_t diabolus_lookup(uint32_t a) {
     if (a == 0x01a01120) return sub_01a01120_impl;
     if (a == 0x01a0114c) return sub_01a0114c_impl;
     if (a == 0x019f7630) return sub_019f7630_impl;
-    if (a == 0x01a19100) return sub_00435140;
     if (a == 0x01a00674) return sub_01a00674_impl;
     if (a == 0x01a006b8) return sub_01a006b8_impl;
     if (a == 0x01a006ec) return sub_01a006ec_impl;

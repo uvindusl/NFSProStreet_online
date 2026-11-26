@@ -781,6 +781,20 @@ class Lifter:
             # that reads c->eip (genexec) now uses the address it pushed.  The
             # callees of tools/retpast.txt always write it: their callers compare it.
             import os as _os
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM's obfuscated call: `push A; push B; ret` is a call to B
+                # that continues at A.  Keeping the literal stack semantics returns
+                # to the lifted caller with B never run, so run B here and then A
+                # (A is its own function; its ret goes back to our caller).
+                pb = self.fetch(i.address - 10, 11)
+                if len(pb) == 11 and pb[0] == 0x68 and pb[5] == 0x68 and pb[10] == 0xC3:
+                    a_ = int.from_bytes(pb[1:5], 'little')
+                    b_ = int.from_bytes(pb[6:10], 'little')
+                    if self.in_text(a_) and self.in_text(b_):
+                        return ["POP32(c->eip);",
+                                f"dispatch_indirect(c, 0x{b_:x}u);",
+                                f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
+                                "return;"]
             if _os.environ.get('RETEIP','1') == '0' and self.entry not in self.retpast:
                 return [f"c->esp += {4 + n}u; return;"]
             return [f"POP32(c->eip);" + (f" c->esp += {n}u;" if n else "") + " return;"]
