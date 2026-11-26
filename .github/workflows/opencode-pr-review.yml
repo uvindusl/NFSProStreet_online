@@ -1,0 +1,43 @@
+name: OpenCode PR Review
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install OpenCode CLI
+        run: npm install --global @opencode/cli
+
+      - name: Sign in to OpenCode
+        env:
+          AUDIENCE: https://opencode.ai/console
+          CLIENT_ID: ${{ secrets.OPENCODE_CLIENT_ID }}
+        run: |
+          oidc=$(curl -sSf --oauth2-bearer "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
+          token=$(curl -sSf https://opencode.ai/console/auth/oauth/token \
+            -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
+            -d subject_token_type=urn:ietf:params:oauth:token-type:jwt \
+            -d client_id="$CLIENT_ID" \
+            -d subject_token="$oidc" | jq -r .access_token)
+          echo "::add-mask::$token"
+          echo "OPENCODE_API_KEY=$token" >> "$GITHUB_ENV"
+
+      - name: Review pull request
+        run: |
+          opencode run --standalone --model opencode/big-pickle \
+            "Review this repository for the current pull request changes. Focus on correctness, regressions, security, and missing tests. Summarize any issues and call out anything risky."
