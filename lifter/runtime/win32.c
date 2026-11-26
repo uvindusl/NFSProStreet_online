@@ -18,6 +18,7 @@ extern uint32_t com_directinput8create(uint32_t ppvOut);
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,44 +241,115 @@ static uint32_t new_teb(uint32_t stack_lo, uint32_t stack_hi) {
 /* ------------------------------------------------------------------ */
 /* handles: threads, events, mutexes, semaphores                        */
 
+#define H_MAX 1024
+#define H_MASK (H_MAX - 1)
+
 enum { HK_THREAD = 1, HK_EVENT = 2, HK_MUTEX = 3, HK_SEM = 4 };
 typedef struct {
     int used, kind, manual, signaled, done, owns;
+    int closed, suspended;
+    uint32_t gen;
+    int prim_ok;
     long count;
     pthread_t th;
     uint32_t code, teb, stack_lo, stack_hi;
     uint32_t fn_unused, arg_unused;
     pthread_mutex_t m;
     pthread_cond_t cv;
+    pthread_cond_t resume_cv;
 } HEnt;
-static HEnt g_h[64];
+static HEnt g_h[H_MAX];
 static pthread_mutex_t g_h_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static uint32_t h_make(int kind) {
     pthread_mutex_lock(&g_h_mtx);
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < H_MAX; i++) {
         if (g_h[i].used) continue;
-        memset(&g_h[i], 0, sizeof g_h[i]);
+        if (!g_h[i].prim_ok) {
+            pthread_mutex_init(&g_h[i].m, 0);
+            pthread_cond_init(&g_h[i].cv, 0);
+            pthread_cond_init(&g_h[i].resume_cv, 0);
+            g_h[i].prim_ok = 1;
+        }
+        pthread_mutex_lock(&g_h[i].m);
         g_h[i].used = 1;
         g_h[i].kind = kind;
-        pthread_mutex_init(&g_h[i].m, 0);
-        pthread_cond_init(&g_h[i].cv, 0);
+        g_h[i].manual = 0;
+        g_h[i].signaled = 0;
+        g_h[i].done = 0;
+        g_h[i].owns = 0;
+        g_h[i].closed = 0;
+        g_h[i].suspended = 0;
+        g_h[i].count = 0;
+        g_h[i].th = (pthread_t)0;
+        g_h[i].code = 0;
+        g_h[i].teb = 0;
+        g_h[i].stack_lo = 0;
+        g_h[i].stack_hi = 0;
+        g_h[i].fn_unused = 0;
+        g_h[i].arg_unused = 0;
+        /* gen and prim_ok/pthread primitives are preserved in-place. */
+        uint32_t gen = g_h[i].gen;
+        pthread_mutex_unlock(&g_h[i].m);
+
+        uint32_t handle = 0x60000000u | ((gen & 0xFFFu) << 16) | (((uint32_t)i & H_MASK) << 4) | (uint32_t)(kind & 0xFu);
         pthread_mutex_unlock(&g_h_mtx);
-        return 0x60000000u | ((uint32_t)i << 4) | (uint32_t)kind;
+        return handle;
     }
     pthread_mutex_unlock(&g_h_mtx);
+    fprintf(stderr, "win32: WARNING: handle table full (H_MAX=%d)\n", H_MAX);
     return 0;
 }
+
 static HEnt *h_get(uint32_t h) {
     if ((h & 0xF0000000u) != 0x60000000u) return 0;
-    uint32_t i = (h >> 4) & 0x3F;
-    if (!g_h[i].used) return 0;
+    uint32_t i = (h >> 4) & H_MASK;
+    uint32_t gen = (h >> 16) & 0xFFF;
+    if (i >= H_MAX) return 0;
+    if (!g_h[i].used || g_h[i].gen != gen) return 0;
     return &g_h[i];
 }
 
+static void h_close(uint32_t h) {
+    if ((h & 0xF0000000u) != 0x60000000u) {
+        if (h - 0x20000u < 0x10000u) close((int)(h - 0x20000u));
+        return;
+    }
+    pthread_mutex_lock(&g_h_mtx);
+    uint32_t i = (h >> 4) & H_MASK;
+    uint32_t gen = (h >> 16) & 0xFFF;
+    if (i >= H_MAX || !g_h[i].used || g_h[i].gen != gen) {
+        pthread_mutex_unlock(&g_h_mtx);
+        return;
+    }
+    HEnt *e = &g_h[i];
+    pthread_mutex_lock(&e->m);
+    if (e->kind == HK_THREAD) {
+        e->closed = 1;
+        if (e->done) {
+            e->used = 0;
+            e->gen = (e->gen + 1) & 0xFFF;
+        }
+    } else {
+        e->used = 0;
+        e->gen = (e->gen + 1) & 0xFFF;
+        pthread_cond_broadcast(&e->cv);
+    }
+    pthread_mutex_unlock(&e->m);
+    pthread_mutex_unlock(&g_h_mtx);
+}
+
 static void *guest_thread(void *arg) {
-    int i = (int)(intptr_t)arg;
-    HEnt *h = &g_h[i];
+    HEnt *h = (HEnt *)arg;
+    int i = (int)(h - g_h);
+
+    /* If created with CREATE_SUSPENDED, wait for ResumeThread before running */
+    pthread_mutex_lock(&h->m);
+    while (h->suspended) {
+        pthread_cond_wait(&h->resume_cv, &h->m);
+    }
+    pthread_mutex_unlock(&h->m);
+
     CPU *c = calloc(1, sizeof *c);
     if (!c) return 0;
     /* Set up guest CPU context */
@@ -323,8 +395,20 @@ static void *guest_thread(void *arg) {
     h->code = c->eax;
     h->done = 1;
     pthread_cond_broadcast(&h->cv);
+    int is_closed = h->closed;
     pthread_mutex_unlock(&h->m);
     free(c);
+
+    if (is_closed) {
+        pthread_mutex_lock(&g_h_mtx);
+        pthread_mutex_lock(&h->m);
+        if (h->closed) {
+            h->used = 0;
+            h->gen = (h->gen + 1) & 0xFFF;
+        }
+        pthread_mutex_unlock(&h->m);
+        pthread_mutex_unlock(&g_h_mtx);
+    }
     return 0;
 }
 
@@ -545,11 +629,17 @@ static uint64_t real_ms(void) { return real_us() / 1000ull; }
 /* ------------------------------------------------------------------ */
 /* thread start                                                         */
 
-static uint32_t thread_create(uint32_t start, uint32_t arg, int beginthr) {
+static uint32_t g_next_stack = 0x70000000u;
+static pthread_mutex_t g_stack_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static uint32_t thread_create(uint32_t start, uint32_t arg, int beginthr, uint32_t flags) {
     uint32_t h = h_make(HK_THREAD);
     if (!h) return 0;
     HEnt *e = h_get(h);
-    uint32_t lo = 0x70000000u + ((h >> 4) & 0x3F) * 0x100000u;
+    pthread_mutex_lock(&g_stack_mtx);
+    uint32_t lo = g_next_stack;
+    g_next_stack += 0x100000u;
+    pthread_mutex_unlock(&g_stack_mtx);
     uint32_t hi = lo + 0x100000u;
     mem_commit(lo, hi - lo);
     e->stack_lo = lo;
@@ -558,20 +648,18 @@ static uint32_t thread_create(uint32_t start, uint32_t arg, int beginthr) {
     e->fn_unused = start;
     e->arg_unused = arg;
     e->owns = beginthr;
-    /* Diagnostics: verify the handle -> index -> HEnt mapping is consistent
-     * and that the guest thread argument is what the CRT passed in. */
-    {
-        HEnt *chk = h_get(h);
-        fprintf(stderr, "  [thread] handle=%08x idx=%u start=%08x arg=%08x "
-                        "teb=%08x stack=%08x-%08x h_get=%p g_h[idx]=%p %s\n",
-                h, (unsigned)((h >> 4) & 0x3F), start, arg, e->teb, lo, hi,
-                (void *)chk, (void *)&g_h[(h >> 4) & 0x3F],
-                chk == &g_h[(h >> 4) & 0x3F] ? "ok" : "MISMATCH");
-    }
+    e->suspended = (flags & 0x00000004u) != 0;
+
+    int idx = (int)((h >> 4) & H_MASK);
+    fprintf(stderr, "  [thread] handle=%08x idx=%u start=%08x arg=%08x "
+                    "teb=%08x stack=%08x-%08x suspended=%d\n",
+            h, (unsigned)idx, start, arg, e->teb, lo, hi, e->suspended);
+
     pthread_attr_t at;
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 64ull * 1024ull * 1024ull);
-    pthread_create(&e->th, &at, guest_thread, (void *)(intptr_t)((h >> 4) & 0x3F));
+    pthread_create(&e->th, &at, guest_thread, e);
+    pthread_detach(e->th);
     pthread_attr_destroy(&at);
     return h;
 }
@@ -1278,9 +1366,7 @@ int win32_call(CPU *c, uint32_t idx) {
         }
         r = (end >= 0);
     } else if (str_eq(n, "CloseHandle")) {
-        HEnt *h = h_get(A(0));
-        if (h && h->kind == HK_THREAD) h->used = 0;
-        else if (A(0) - 0x20000u < 0x10000u) close((int)(A(0) - 0x20000u));
+        h_close(A(0));
         r = 1;
 
     /* ---- time -------------------------------------------------------- */
@@ -1321,6 +1407,8 @@ int win32_call(CPU *c, uint32_t idx) {
         if (ms > 0 && ms < 100000u) {
             struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L };
             nanosleep(&ts, 0);
+        } else if (ms == 0) {
+            sched_yield();
         }
         r = 0;
     } else if (str_eq(n, "timeBeginPeriod") || str_eq(n, "timeEndPeriod")) {
@@ -1506,19 +1594,35 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 1;
     } else if (str_eq(n, "TerminateThread")) {
         r = 1;
-    } else if (str_eq(n, "SuspendThread") || str_eq(n, "ResumeThread") ||
+    } else if (str_eq(n, "SuspendThread") ||
                str_eq(n, "SetThreadPriority") || str_eq(n, "GetThreadPriority") ||
                str_eq(n, "SetThreadIdealProcessor") || str_eq(n, "SetPriorityClass") ||
                str_eq(n, "GetPriorityClass")) {
         r = 0;
+    } else if (str_eq(n, "ResumeThread")) {
+        HEnt *h = h_get(A(0));
+        uint32_t prev = 0;
+        if (h && h->kind == HK_THREAD) {
+            pthread_mutex_lock(&h->m);
+            prev = h->suspended ? 1 : 0;
+            h->suspended = 0;
+            pthread_cond_broadcast(&h->resume_cv);
+            pthread_mutex_unlock(&h->m);
+        }
+        r = prev;
     } else if (str_eq(n, "GetExitCodeThread")) {
         HEnt *h = h_get(A(0));
         if (A(1)) MR32(A(1)) = h && h->done ? h->code : 259;
         r = 1;
     } else if (str_eq(n, "CreateThread")) {
-        r = thread_create(A(2), A(3), 0);
+        r = thread_create(A(2), A(3), 0, A(4));
+        uint32_t tid_ptr = A(5);
+        if (tid_ptr && mem_is_committed(tid_ptr)) {
+            HEnt *e = h_get(r);
+            MR32(tid_ptr) = e ? MR32(e->teb + 0x24) : 0;
+        }
     } else if (str_eq(n, "_beginthreadex")) {
-        r = thread_create(A(2), A(3), 1);
+        r = thread_create(A(2), A(3), 1, A(4));
         /* the CRT wants the thread id in *thrdaddr (argument 6) */
         uint32_t tid_ptr = A(5);
         if (tid_ptr && mem_is_committed(tid_ptr)) {
@@ -1534,6 +1638,7 @@ int win32_call(CPU *c, uint32_t idx) {
         else if (h->kind == HK_THREAD) {
             pthread_mutex_lock(&h->m);
             if (ms == 0xFFFFFFFFu) { while (!h->done) pthread_cond_wait(&h->cv, &h->m); }
+            else if (ms == 0) { /* non-blocking poll */ }
             else {
                 struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000L;
@@ -1545,6 +1650,7 @@ int win32_call(CPU *c, uint32_t idx) {
         } else if (h->kind == HK_EVENT) {
             pthread_mutex_lock(&h->m);
             if (ms == 0xFFFFFFFFu) { while (!h->signaled) pthread_cond_wait(&h->cv, &h->m); }
+            else if (ms == 0) { /* non-blocking poll */ }
             else {
                 struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
                 ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000L;
@@ -1556,10 +1662,21 @@ int win32_call(CPU *c, uint32_t idx) {
             pthread_mutex_unlock(&h->m);
         } else if (h->kind == HK_SEM) {
             pthread_mutex_lock(&h->m);
-            while (h->count <= 0) pthread_cond_wait(&h->cv, &h->m);
-            h->count--;
+            if (ms == 0xFFFFFFFFu) { while (h->count <= 0) pthread_cond_wait(&h->cv, &h->m); }
+            else if (ms == 0) { /* non-blocking poll */ }
+            else {
+                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                while (h->count <= 0) { if (pthread_cond_timedwait(&h->cv, &h->m, &ts) == ETIMEDOUT) break; }
+            }
+            if (h->count > 0) {
+                h->count--;
+                r = 0;
+            } else {
+                r = 0x102u;
+            }
             pthread_mutex_unlock(&h->m);
-            r = 0;
         } else {
             r = 0;
         }
@@ -1582,10 +1699,18 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "CreateSemaphoreA")) {
         r = h_make(HK_SEM);
         HEnt *h = h_get(r);
-        if (h) h->count = (long)A(2);
+        if (h) h->count = (long)A(1);
     } else if (str_eq(n, "ReleaseSemaphore")) {
         HEnt *h = h_get(A(0));
-        if (h) { pthread_mutex_lock(&h->m); h->count += (long)A(1); pthread_cond_broadcast(&h->cv); pthread_mutex_unlock(&h->m); }
+        if (h) {
+            pthread_mutex_lock(&h->m);
+            if (A(2) && mem_is_committed(A(2))) {
+                MR32(A(2)) = (uint32_t)h->count;
+            }
+            h->count += (long)A(1);
+            pthread_cond_broadcast(&h->cv);
+            pthread_mutex_unlock(&h->m);
+        }
         r = 1;
     } else if (str_eq(n, "DuplicateHandle")) {
         r = 0;
