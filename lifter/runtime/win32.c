@@ -272,20 +272,24 @@ static uint32_t h_make(int kind) {
             g_h[i].prim_ok = 1;
         }
         pthread_mutex_lock(&g_h[i].m);
-        uint32_t gen = g_h[i].gen;
-        int prim_ok = g_h[i].prim_ok;
-        pthread_mutex_t m = g_h[i].m;
-        pthread_cond_t cv = g_h[i].cv;
-        pthread_cond_t resume_cv = g_h[i].resume_cv;
-
-        memset(&g_h[i], 0, sizeof g_h[i]);
-        g_h[i].gen = gen;
-        g_h[i].prim_ok = prim_ok;
-        g_h[i].m = m;
-        g_h[i].cv = cv;
-        g_h[i].resume_cv = resume_cv;
         g_h[i].used = 1;
         g_h[i].kind = kind;
+        g_h[i].manual = 0;
+        g_h[i].signaled = 0;
+        g_h[i].done = 0;
+        g_h[i].owns = 0;
+        g_h[i].closed = 0;
+        g_h[i].suspended = 0;
+        g_h[i].count = 0;
+        g_h[i].th = (pthread_t)0;
+        g_h[i].code = 0;
+        g_h[i].teb = 0;
+        g_h[i].stack_lo = 0;
+        g_h[i].stack_hi = 0;
+        g_h[i].fn_unused = 0;
+        g_h[i].arg_unused = 0;
+        /* gen and prim_ok/pthread primitives are preserved in-place. */
+        uint32_t gen = g_h[i].gen;
         pthread_mutex_unlock(&g_h[i].m);
 
         uint32_t handle = 0x60000000u | ((gen & 0xFFFu) << 16) | (((uint32_t)i & H_MASK) << 4) | (uint32_t)(kind & 0xFu);
