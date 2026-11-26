@@ -2016,13 +2016,20 @@ int win32_call(CPU *c, uint32_t idx) {
             if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x6e000000;
             r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXGetVertexShaderProfile")) {
-            void* pDevice = (void*)(uintptr_t)A(0);
-            const char* profile = D3DXGetVertexShaderProfile(pDevice);
-            r = (uint32_t)(uintptr_t)profile;
+            /* The guest dereferences the result in its own address space, so
+             * the string must live in guest memory. A host pointer cast to
+             * uint32_t is truncated and points at nothing the guest can read.
+             * The device argument is a guest address; pass it through only
+             * for logging. */
+            static uint32_t vs_profile_va;
+            const char* profile = D3DXGetVertexShaderProfile((void*)(uintptr_t)A(0));
+            if (!vs_profile_va) vs_profile_va = gh_guest_str(profile);
+            r = vs_profile_va;
         } else if (str_eq(n, "D3DXGetPixelShaderProfile")) {
-            void* pDevice = (void*)(uintptr_t)A(0);
-            const char* profile = D3DXGetPixelShaderProfile(pDevice);
-            r = (uint32_t)(uintptr_t)profile;
+            static uint32_t ps_profile_va;
+            const char* profile = D3DXGetPixelShaderProfile((void*)(uintptr_t)A(0));
+            if (!ps_profile_va) ps_profile_va = gh_guest_str(profile);
+            r = ps_profile_va;
         } else if (str_eq(n, "D3DXCreateCubeTextureFromFileInMemory")) {
             extern uint32_t com_new(uint32_t iface, uint32_t extra);
             uint32_t ppCubeTexture = A(3);
