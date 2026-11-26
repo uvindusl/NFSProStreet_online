@@ -301,7 +301,6 @@ struct VOut {
   presentPass.draw(6);
   presentPass.end();
   dev.queue.submit([presentEnc.finish()]);
-  dev.queue.submit([presentEnc.finish()]);
   log('RENDER_COMPLETE');
 })().catch(e => { log('ERR: ' + e.message); console.error(e); });
 </script>

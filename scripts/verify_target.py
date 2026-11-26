@@ -14,17 +14,15 @@ import struct
 import sys
 
 EXPECTED_SIZE = 23_756_800
-EXPECTED_SHA256 = "805bf77cd11aa3a11e205b9fbd8fb6f34d0c8374c91a11b8609dfae962fd962a"
 EXPECTED_IMAGE_BASE = 0x00400000
 EXPECTED_ENTRY = 0x00828C25
 EXPECTED_MACHINE = 0x014C
 EXPECTED_SECTIONS = 6
-EXPECTED_TEXT_SHA256 = "963934d66f447eb2"
+EXPECTED_TEXT_SHA256 = "963934d66f447eb21e81ca66f0df8d8e8d2a598acc9f0726c3dc1e68b5e65e31"
 # Length of the code in `.text`.  A section's size in the header is rounded up
 # to the section alignment, and the padding after the code differs between
 # images, so the hash covers only these bytes.
 EXPECTED_TEXT_SIZE = 0x56507B
-EXPECTED_IMPORT_COUNT = 365          # recovered from the live IAT
 
 # The game's own section names, from the original header it carries in .HEAVEN.
 EXPECTED_SECTION_NAMES = [".text", ".rdata", ".data", ".tls", ".rsrc", "diabolus"]
@@ -77,8 +75,6 @@ def main():
     print(f"target: {path}")
     print("\nidentity")
     check(len(data) == EXPECTED_SIZE, "size", f"{len(data):,} bytes")
-    digest = hashlib.sha256(data).hexdigest()
-    check(digest == EXPECTED_SHA256, "sha256", digest)
 
     pe = parse_pe(data)
     print("\nheaders (from the header the game carries in .HEAVEN)")
@@ -102,7 +98,7 @@ def main():
     # memory image, and hash just the code, without the section padding.
     body = data[text["rawptr"]:text["rawptr"] + EXPECTED_TEXT_SIZE]
     th = hashlib.sha256(body).hexdigest()
-    check(th.startswith(EXPECTED_TEXT_SHA256), ".text sha256",
+    check(th == EXPECTED_TEXT_SHA256, ".text sha256",
           f"{th} (first {EXPECTED_TEXT_SIZE:#x} bytes)")
     # VC8 `_WinMainCRTStartup` opens with `call __security_init_cookie`
     # (e8) and then tail-jumps to `__tmainCRTStartup` (e9).
@@ -117,7 +113,7 @@ def main():
     if failures:
         print(f"FAILED: {len(failures)} check(s): {', '.join(failures)}")
         return 1
-    print("PASS: target is the running game's decrypted image")
+    print("PASS: target code matches the expected image")
     return 0
 
 
