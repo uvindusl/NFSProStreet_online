@@ -120,7 +120,7 @@ The differential post-widening (`debug/shader-residual-classes.md`) reports
 |-------|---------|-------|
 | Vertex `O_POW` base == 0 (`0^negative`) | 21 of 297 | D3D9 ambiguous; CPU `b==0 ? 0 : powf` vs WGSL `pow(abs(x),y)`; emitter unchanged |
 | Vertex / pixel transcendental precision | 21 VS + 80 PS | GPU libm vs glibc at 1e-4 relative threshold |
-| Pixel `dsx`/`dsy` | 7 modules | CPU oracle has no `O_DSX`/`O_DSY` case; oracle-less |
+| Pixel `dsx`/`dsy` | 7 modules | checked by a render pass (`ps_<id>.dvec`); see `shader-differential.md` |
 
 All 21 vertex and 80 pixel residual failures are a strict subset of the 77 VS /
 78 PS pre-widening failures. The 8-wide ABI removed every structurally-caused

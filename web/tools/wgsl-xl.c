@@ -155,15 +155,21 @@ static void ftex(int k, const float *c, int n, float o[4]){
     o[2] = 0.5f + 0.4f * sinf((x + y) * 1.7f + f);
     o[3] = 0.5f + 0.4f * cosf(x * y * 5.3f + 0.2f * f);
 }
+static void ps_par_init(PSRefPar *P, int id){
+    memset(P, 0, sizeof *P);
+    P->aref = rndf(0.f, 0.5f);
+    for (int k = 0; k < 4; k++) P->proj[k] = (float)(k + 16 * (int)(rnd() % 3u));
+    for (int r = 0; r < 32; r++) for (int c = 0; c < 4; c++) P->c[r][c] = rndf(-1.f, 1.f);
+    for (int c = 0; c < 3; c++) P->fog[c] = rndf(0.f, 1.f);
+    P->fog[3] = (float)(id & 1);
+}
+/* A pixel shader that uses dsx/dsy has no per-pixel (compute) reference: its
+ * derivative needs neighbouring pixels.  write_ps_deriv_vectors covers it. */
 static int write_ps_vectors(const char *dir, int id, const VSProg *p, unsigned cubemask){
     enum { NP = 256 };
+    if (vs_nderiv(p)) return 1;
     g_rng = 0x85EBCA6Bu ^ (uint32_t)id * 2246822519u;
-    static PSRefPar P; memset(&P, 0, sizeof P);
-    P.aref = rndf(0.f, 0.5f);
-    for (int k = 0; k < 4; k++) P.proj[k] = (float)(k + 16 * (int)(rnd() % 3u));
-    for (int r = 0; r < 32; r++) for (int c = 0; c < 4; c++) P.c[r][c] = rndf(-1.f, 1.f);
-    for (int c = 0; c < 3; c++) P.fog[c] = rndf(0.f, 1.f);
-    P.fog[3] = (float)(id & 1);
+    static PSRefPar P; ps_par_init(&P, id);
     char path[1024]; snprintf(path, sizeof path, "%s/ps_%d.pvec", dir, id);
     FILE *f = fopen(path, "wb");
     if (!f){ perror(path); exit(1); }
@@ -197,6 +203,61 @@ static int write_ps_vectors(const char *dir, int id, const VSProg *p, unsigned c
     return ok;
 }
 
+/* ---- pixel shaders with dsx/dsy: ps_<id>.dvec, oracle = ps_ref_run ----
+ * A render-pass test: a 16x16 target covered by one triangle whose varyings
+ * (col0, col1, uv0..uv7, fog; the same 41 floats as a .pvec row) are linear in
+ * the pixel-centre coordinate, v(x, y) = base + gx * (x + 0.5) + gy * (y + 0.5),
+ * y down.  A derivative of a linear field is the same under fine, coarse or
+ * quad-difference rules, so the expected value is exact: dsx = gx, dsy = gy.
+ * That checks which register is differentiated, the swizzle, the sign and the
+ * axis; it does not tell fine from coarse derivatives.
+ * u32 magic 'PSD1', width, height, 0; the 560-byte PSPar block; base[41],
+ * gx[41], gy[41]; then W*H pixels (row-major), 5 f32 each: rgba after alpha
+ * test and fog, killed 0/1.  Textures are the same analytic function as in
+ * .pvec files.  The check also runs the module on the GPU with dpdx/dpdy
+ * replaced by gx/gy, which isolates the derivative lowering from the
+ * arithmetic the CPU oracle disagrees with elsewhere (shadercheck.ts dsDiff). */
+static int write_ps_deriv_vectors(const char *dir, int id, const VSProg *p){
+    enum { W = 16, H = 16 };
+    if (!vs_nderiv(p)) return 1;
+    g_rng = 0xC2B2AE35u ^ (uint32_t)id * 2654435761u;
+    static PSRefPar P; ps_par_init(&P, id);
+    float base[41], gx[41], gy[41];
+    for (int c = 0; c < 8; c++){ base[c] = rndf(0.f, 1.f); gx[c] = rndf(-0.15f, 0.15f); gy[c] = rndf(-0.15f, 0.15f); }
+    for (int k = 0; k < 8; k++){
+        float *b = base + 8 + 4 * k, *a = gx + 8 + 4 * k, *g = gy + 8 + 4 * k;
+        b[0] = rndf(0.f, 1.f); b[1] = rndf(0.f, 1.f); b[2] = rndf(0.5f, 2.f); b[3] = rndf(0.5f, 2.f);
+        a[0] = rndf(-0.03f, 0.03f); a[1] = rndf(-0.03f, 0.03f); a[2] = rndf(-0.02f, 0.02f); a[3] = rndf(-0.02f, 0.02f);
+        g[0] = rndf(-0.03f, 0.03f); g[1] = rndf(-0.03f, 0.03f); g[2] = rndf(-0.02f, 0.02f); g[3] = rndf(-0.02f, 0.02f);
+    }
+    base[40] = rndf(0.f, 1.f); gx[40] = 0.f; gy[40] = 0.f;
+    char path[1024]; snprintf(path, sizeof path, "%s/ps_%d.dvec", dir, id);
+    FILE *f = fopen(path, "wb");
+    if (!f){ perror(path); exit(1); }
+    uint32_t hdr[4] = { 0x31445350u, W, H, 0 };
+    fwrite(hdr, 4, 4, f);
+    float blk[140] = { 0 };
+    blk[0] = P.aref; memcpy(blk + 4, P.proj, 16); memcpy(blk + 8, P.c, 512); memcpy(blk + 136, P.fog, 16);
+    fwrite(blk, 4, 140, f);
+    fwrite(base, 4, 41, f); fwrite(gx, 4, 41, f); fwrite(gy, 4, 41, f);
+    int ok = 1;
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++){
+        float row[41];
+        for (int i = 0; i < 41; i++) row[i] = base[i] + gx[i] * ((float)x + 0.5f) + gy[i] * ((float)y + 0.5f);
+        PSRefIn in; memset(&in, 0, sizeof in);
+        memcpy(in.col, row, 32); memcpy(in.uv, row + 8, 128); in.fog = row[40];
+        in.has_deriv = 1;
+        memcpy(in.ddx, gx, 32); memcpy(in.ddy, gy, 32);
+        float o[5]; int killed = 0;
+        if (!ps_ref_run(p, &P, &in, ftex, 0u, o, &killed)) ok = 0;
+        o[4] = (float)killed;
+        fwrite(o, 4, 5, f);
+    }
+    fclose(f);
+    if (!ok) fprintf(stderr, "ps_%d.dvec: the reference refused an operand\n", id);
+    return ok;
+}
+
 /* every pixel shader object of the dump, and its stage-0 cube twin */
 static int game_ps_vectors(const char *dump, const char *dir){
     int n = 0;
@@ -205,7 +266,7 @@ static int game_ps_vectors(const char *dump, const char *dir){
         size_t bn; unsigned char *b = slurp(bp, &bn);
         if (!b) continue;
         VSProg *p = vs_compile((const uint32_t *)b, bn / 4);
-        if (p){ n += write_ps_vectors(dir, id, p, 0u); n += write_ps_vectors(dir, id + 256, p, 1u); vs_free(p); }
+        if (p){ n += write_ps_vectors(dir, id, p, 0u); n += write_ps_vectors(dir, id + 256, p, 1u); write_ps_deriv_vectors(dir, id, p); vs_free(p); }
         free(b);
     }
     return n;
@@ -348,6 +409,7 @@ static int corpus(const char *sdir, const char *dir){
             if (n > 0){ snprintf(name, sizeof name, "ps_%d.wgsl", id); put(dir, name, g_buf, (size_t)n); }
             else fails++;
             if (!write_ps_vectors(dir, id, pr, 0u)) fails++;
+            if (!write_ps_deriv_vectors(dir, id, pr)) fails++;
             fprintf(ix, "ps %d src=%s instr=%u unknown=%u len=%d\n", id, names[i], vs_ninstr(pr), vs_unknown(pr), n);
         } else {
             static const int ty_of_usage[14] = { 2, 3, 4, 2, 0, 1, 2, 2, 0, 3, 4, 0, 0, 0 };

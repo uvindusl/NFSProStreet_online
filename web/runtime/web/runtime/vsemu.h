@@ -58,6 +58,8 @@ int  vs_light_creg(const VSProg *p, float ramp[2]);
 /* diagnostics: instruction count, version */
 unsigned vs_version(const VSProg *p);
 unsigned vs_ninstr(const VSProg *p);
+/* number of dsx/dsy instructions (pixel shaders, ps_3_0) */
+unsigned vs_nderiv(const VSProg *p);
 /* Count of untranslatable instructions (0 = the shader ran fully) */
 unsigned vs_unknown(const VSProg *p);
 #include <stdio.h>

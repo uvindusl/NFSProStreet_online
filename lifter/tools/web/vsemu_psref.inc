@@ -100,6 +100,16 @@ int ps_ref_run(const VSProg *p, const PSRefPar *P, const PSRefIn *in, PSRefTex t
             }
             tex(smp, c, ((cubemask >> smp) & 1u) ? 3 : 2, d);
             break; }
+        case O_DSX: case O_DSY: {
+            /* Only an input register source (v0/v1), with no modifier or a
+             * negate, has a reference value: the caller supplies its
+             * derivative.  Anything else is refused rather than guessed. */
+            unsigned st = x->src[0];
+            if (!in->has_deriv || x->nsrc < 1 || RT(st) != R_INPUT || (SMOD(st) != 0 && SMOD(st) != 1)) return 0;
+            const float *g = (x->op == O_DSX ? in->ddx : in->ddy)[RN(st) & 1];
+            unsigned sw = SWIZ(st);
+            for (int i = 0; i < 4; i++) d[i] = (SMOD(st) == 1 ? -1.f : 1.f) * g[(sw >> (2*i)) & 3u];
+            break; }
         case O_TEXCOORD: memcpy(e.t[RN(x->dst) & 7], in->uv[RN(x->dst) & 7], 16); continue;
         case O_TEXKILL: {
             /* the register is the destination token (no sources); ps_1_x:
