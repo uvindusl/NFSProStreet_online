@@ -2188,7 +2188,9 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "Direct3DCreate9")) {
         r = com_direct3dcreate9();
     } else if (str_eq(n, "DirectInput8Create")) {
-        uint32_t ppvOut = A(2);
+        /* (hinst, dwVersion, riidltf, ppvOut, punkOuter): the interface goes to
+         * the fourth argument, not into the IID that the third points at. */
+        uint32_t ppvOut = A(3);
         r = com_directinput8create(ppvOut);
         /* Fall through to finish label */
     } else if (str_eq(e->dll, "DSOUND.dll") && str_eq(n, "#1")) {

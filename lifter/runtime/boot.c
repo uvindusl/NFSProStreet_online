@@ -773,9 +773,13 @@ int main(int argc, char **argv) {
      *   0x00ab27dc  object whose vtable+0x74 sub_00597140 calls
      *   0x00a83bcc  geometry of the static model at 0x00a83bc0 (sub_004be090)
      *   0x00ab27d8  object sub_0062cce0 reads at +0x108 while a frame is built
-     *   0x00bfbcac  node pool behind sub_004313f0, created on first use when null */
+     *   0x00bfbcac  node pool behind sub_004313f0, created on first use when null
+     *   0x00aba54c  instance count of the input system (1 in the dump): its
+     *               constructor sub_006c7d90 skips the set-up when it is not 0
+     *   0x00b34598  input device manager returned by sub_0089bfcd when not null */
     {
-        static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu };
+        static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
+                                         0x00aba54cu, 0x00b34598u };
         for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
             if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
     }
