@@ -692,7 +692,24 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
             uint32_t off = m == 78 ? A(3) : 0, bytes = m == 78 ? A(4) : A(3);
             if (off > 4u * n) off = 4u * n;
             if (bytes > 4u * n - off) bytes = 4u * n - off;
+            if (m == 78 && bytes == 64 && getenv("PROSTREET_FXLOG")) {
+                const float *f = (const float *)(g_mem + A(2));
+                fprintf(stderr, "fx: %s.%s raw matrix, caller %08x:", fx->name, p->name, MR32(c->esp + 4 * 5 + 0x0));
+                for (int i = 0; i < 16; i++) fprintf(stderr, "%s%.3f", i % 4 ? " " : " | ", f[i]);
+                fprintf(stderr, "\n");
+            }
             if (m == 21) memcpy(g_mem + A(2), dst, bytes);
+            else if (m == 78 && p->cls == 2 && p->rows == p->cols && !(off & 3)) {
+                /* SetRawValue takes a matrix in the layout the shader's registers
+                 * have (one column per register), without the transposition
+                 * SetMatrix does: the game sets all its matrices this way.  Values
+                 * are kept row-major here, so store the transpose. */
+                uint32_t dim = p->cols, per = dim * dim;
+                for (uint32_t i = 0; i + 4 <= bytes; i += 4) {
+                    uint32_t j = (off + i) / 4, e = j / per, w = j % per;
+                    dst[e * per + (w % dim) * dim + w / dim] = MR32(A(2) + i);
+                }
+            }
             else memcpy((uint8_t *)dst + off, g_mem + A(2), bytes);
         } else if (m != 78 && resolve(fx, A(1), &ref) && ref.p && ref.p->cls == 4 && A(2) && mem_is_committed(A(2))) {
             if (m == 20) ref.p->tex = MR32(A(2)); else MR32(A(2)) = ref.p->tex;   /* a texture as a value */

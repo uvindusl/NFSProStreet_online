@@ -33,8 +33,11 @@ D3DXMATRIX* __stdcall D3DXMatrixMultiply(D3DXMATRIX* pOut, const D3DXMATRIX* pM1
     
     if (!pOut || !pM1 || !pM2) return NULL;
     
-    const float* m1 = (const float*)pM1;
-    const float* m2 = (const float*)pM2;
+    /* The game multiplies in place (pOut == pM1 or pM2), which D3DX allows:
+     * read both operands before writing anything. */
+    float m1[16], m2[16];
+    memcpy(m1, pM1, sizeof m1);
+    memcpy(m2, pM2, sizeof m2);
     float* out = (float*)pOut;
     
     for (int i = 0; i < 4; i++) {
@@ -92,50 +95,39 @@ D3DXMATRIX* __stdcall D3DXMatrixTranspose(D3DXMATRIX* pOut, const D3DXMATRIX* pM
  */
 D3DXMATRIX* __stdcall D3DXMatrixInverse(D3DXMATRIX* pOut, float* pDeterminant, const D3DXMATRIX* pM) {
     d3dx9_log("D3DXMatrixInverse(pOut=%p, pDeterminant=%p, pM=%p)", pOut, pDeterminant, pM);
-    
+
     if (!pOut || !pM) return NULL;
-    
+
+    /* Gauss-Jordan with partial pivoting on a copy, so pOut may be pM. */
+    double a[4][8], det = 1.0;
     const float* m = (const float*)pM;
-    float* out = (float*)pOut;
-    
-    /* Compute determinant using cofactor expansion */
-    float det = 
-        m[0] * (m[5]*(m[10]*m[15] - m[11]*m[14]) - m[6]*(m[9]*m[15] - m[11]*m[13]) + m[7]*(m[9]*m[14] - m[10]*m[13]))
-      - m[1] * (m[4]*(m[10]*m[15] - m[11]*m[14]) - m[6]*(m[8]*m[15] - m[11]*m[12]) + m[7]*(m[8]*m[14] - m[10]*m[12]))
-      + m[2] * (m[4]*(m[9]*m[15] - m[11]*m[13]) - m[5]*(m[8]*m[15] - m[11]*m[12]) + m[7]*(m[8]*m[13] - m[9]*m[12]))
-      - m[3] * (m[4]*(m[9]*m[14] - m[10]*m[13]) - m[5]*(m[8]*m[14] - m[10]*m[12]) + m[6]*(m[8]*m[13] - m[9]*m[12]));
-    
-    if (pDeterminant) *pDeterminant = det;
-    
-    if (float_eq(det, 0.0f)) {
-        /* Singular matrix - return zero matrix */
-        memset(out, 0, sizeof(D3DXMATRIX));
-        return NULL;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) { a[i][j] = m[i*4 + j]; a[i][4 + j] = (i == j) ? 1.0 : 0.0; }
+    for (int col = 0; col < 4; col++) {
+        int piv = col;
+        for (int r = col + 1; r < 4; r++)
+            if (fabs(a[r][col]) > fabs(a[piv][col])) piv = r;
+        if (a[piv][col] == 0.0) {
+            if (pDeterminant) *pDeterminant = 0.0f;
+            return NULL;                       /* singular: D3DX leaves pOut alone */
+        }
+        if (piv != col) {
+            for (int j = 0; j < 8; j++) { double t = a[col][j]; a[col][j] = a[piv][j]; a[piv][j] = t; }
+            det = -det;
+        }
+        det *= a[col][col];
+        double inv = 1.0 / a[col][col];
+        for (int j = 0; j < 8; j++) a[col][j] *= inv;
+        for (int r = 0; r < 4; r++) {
+            if (r == col) continue;
+            double f = a[r][col];
+            if (f != 0.0) for (int j = 0; j < 8; j++) a[r][j] -= f * a[col][j];
+        }
     }
-    
-    float inv_det = 1.0f / det;
-    
-    /* Compute adjugate matrix (transpose of cofactor matrix) */
-    out[0] =  (m[5]*(m[10]*m[15] - m[11]*m[14]) - m[6]*(m[9]*m[15] - m[11]*m[13]) + m[7]*(m[9]*m[14] - m[10]*m[13])) * inv_det;
-    out[1] = -(m[1]*(m[10]*m[15] - m[11]*m[14]) - m[2]*(m[9]*m[15] - m[11]*m[13]) + m[3]*(m[9]*m[14] - m[10]*m[13])) * inv_det;
-    out[2] =  (m[1]*(m[6]*m[15] - m[7]*m[14]) - m[2]*(m[5]*m[15] - m[7]*m[13]) + m[3]*(m[5]*m[14] - m[6]*m[13])) * inv_det;
-    out[3] = -(m[1]*(m[6]*m[11] - m[7]*m[10]) - m[2]*(m[5]*m[11] - m[7]*m[9]) + m[3]*(m[5]*m[10] - m[6]*m[9])) * inv_det;
-    
-    out[4] = -(m[4]*(m[10]*m[15] - m[11]*m[14]) - m[6]*(m[8]*m[15] - m[11]*m[12]) + m[7]*(m[8]*m[14] - m[10]*m[12])) * inv_det;
-    out[5] =  (m[0]*(m[10]*m[15] - m[11]*m[14]) - m[2]*(m[8]*m[15] - m[11]*m[12]) + m[3]*(m[8]*m[14] - m[10]*m[12])) * inv_det;
-    out[6] = -(m[0]*(m[6]*m[15] - m[7]*m[14]) - m[2]*(m[4]*m[15] - m[7]*m[12]) + m[3]*(m[4]*m[14] - m[6]*m[12])) * inv_det;
-    out[7] =  (m[0]*(m[6]*m[11] - m[7]*m[10]) - m[2]*(m[4]*m[11] - m[7]*m[9]) + m[3]*(m[4]*m[10] - m[6]*m[9])) * inv_det;
-    
-    out[8] =  (m[4]*(m[9]*m[15] - m[11]*m[13]) - m[5]*(m[8]*m[15] - m[11]*m[12]) + m[7]*(m[8]*m[13] - m[9]*m[12])) * inv_det;
-    out[9] = -(m[0]*(m[9]*m[15] - m[11]*m[13]) - m[1]*(m[8]*m[15] - m[11]*m[12]) + m[3]*(m[8]*m[13] - m[9]*m[12])) * inv_det;
-    out[10] = (m[0]*(m[5]*m[15] - m[7]*m[13]) - m[1]*(m[4]*m[15] - m[7]*m[12]) + m[3]*(m[4]*m[13] - m[5]*m[12])) * inv_det;
-    out[11] = -(m[0]*(m[5]*m[11] - m[7]*m[9]) - m[1]*(m[4]*m[11] - m[7]*m[8]) + m[3]*(m[4]*m[9] - m[5]*m[8])) * inv_det;
-    
-    out[12] = -(m[4]*(m[9]*m[14] - m[10]*m[13]) - m[5]*(m[8]*m[14] - m[10]*m[12]) + m[6]*(m[8]*m[13] - m[9]*m[12])) * inv_det;
-    out[13] =  (m[0]*(m[9]*m[14] - m[10]*m[13]) - m[1]*(m[8]*m[14] - m[10]*m[12]) + m[2]*(m[8]*m[13] - m[9]*m[12])) * inv_det;
-    out[14] = -(m[0]*(m[5]*m[14] - m[6]*m[13]) - m[1]*(m[4]*m[14] - m[6]*m[12]) + m[2]*(m[4]*m[13] - m[5]*m[12])) * inv_det;
-    out[15] =  (m[0]*(m[5]*m[10] - m[6]*m[9]) - m[1]*(m[4]*m[10] - m[6]*m[8]) + m[2]*(m[4]*m[9] - m[5]*m[8])) * inv_det;
-    
+    if (pDeterminant) *pDeterminant = (float)det;
+    float* out = (float*)pOut;
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 4; j++) out[i*4 + j] = (float)a[i][4 + j];
     return pOut;
 }
 
@@ -149,11 +141,12 @@ D3DXVECTOR4* __stdcall D3DXVec3Transform(D3DXVECTOR4* pOut, const D3DXVECTOR3* p
     if (!pOut || !pV || !pM) return NULL;
     
     const float* m = (const float*)pM;
+    const float x = pV->x, y = pV->y, z = pV->z;   /* pOut may be pV */
     
-    pOut->x = pV->x * m[0] + pV->y * m[4] + pV->z * m[8] + m[12];
-    pOut->y = pV->x * m[1] + pV->y * m[5] + pV->z * m[9] + m[13];
-    pOut->z = pV->x * m[2] + pV->y * m[6] + pV->z * m[10] + m[14];
-    pOut->w = pV->x * m[3] + pV->y * m[7] + pV->z * m[11] + m[15];
+    pOut->x = x * m[0] + y * m[4] + z * m[8] + m[12];
+    pOut->y = x * m[1] + y * m[5] + z * m[9] + m[13];
+    pOut->z = x * m[2] + y * m[6] + z * m[10] + m[14];
+    pOut->w = x * m[3] + y * m[7] + z * m[11] + m[15];
     
     return pOut;
 }
@@ -168,11 +161,12 @@ D3DXVECTOR4* __stdcall D3DXVec4Transform(D3DXVECTOR4* pOut, const D3DXVECTOR4* p
     if (!pOut || !pV || !pM) return NULL;
     
     const float* m = (const float*)pM;
+    const float x = pV->x, y = pV->y, z = pV->z, w = pV->w;   /* pOut may be pV */
     
-    pOut->x = pV->x * m[0] + pV->y * m[4] + pV->z * m[8] + pV->w * m[12];
-    pOut->y = pV->x * m[1] + pV->y * m[5] + pV->z * m[9] + pV->w * m[13];
-    pOut->z = pV->x * m[2] + pV->y * m[6] + pV->z * m[10] + pV->w * m[14];
-    pOut->w = pV->x * m[3] + pV->y * m[7] + pV->z * m[11] + pV->w * m[15];
+    pOut->x = x * m[0] + y * m[4] + z * m[8] + w * m[12];
+    pOut->y = x * m[1] + y * m[5] + z * m[9] + w * m[13];
+    pOut->z = x * m[2] + y * m[6] + z * m[10] + w * m[14];
+    pOut->w = x * m[3] + y * m[7] + z * m[11] + w * m[15];
     
     return pOut;
 }

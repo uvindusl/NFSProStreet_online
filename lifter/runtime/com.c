@@ -324,6 +324,38 @@ static uint32_t tex_surface(uint32_t tex, uint32_t index) {
     return surf_new(mip(MR32(tex + R_W), level), mip(MR32(tex + R_H), level), MR32(tex + R_FMT), tex, index);
 }
 
+/* ---- accessors for the software renderer (swrast.c) ---- */
+uint32_t com_tex_level0(uint32_t tex, uint32_t *w, uint32_t *h, uint32_t *fmt, uint32_t *pitch) {
+    *w = *h = *fmt = *pitch = 0;
+    if (!tex || !mem_is_committed(tex + R_INDEX + 3) || MR32(tex) != g_vtab[IF_TEX]) return 0;
+    *w = MR32(tex + R_W); *h = MR32(tex + R_H); *fmt = MR32(tex + R_FMT);
+    return tex_level(tex, 0, pitch);
+}
+uint32_t com_surf_data(uint32_t surf, uint32_t *w, uint32_t *h, uint32_t *fmt, uint32_t *pitch) {
+    *w = *h = *fmt = *pitch = 0;
+    if (!surf || !mem_is_committed(surf + R_INDEX + 3) || MR32(surf) != g_vtab[IF_SURF]) return 0;
+    *w = MR32(surf + R_W); *h = MR32(surf + R_H); *fmt = MR32(surf + R_FMT);
+    if (!*w || !*h) return 0;
+    if (MR32(surf + R_PARENT)) return tex_level(MR32(surf + R_PARENT), MR32(surf + R_INDEX), pitch);
+    uint32_t size;
+    level_layout(*fmt, *w, *h, pitch, &size);
+    if (!MR32(surf + R_DATA)) MR32(surf + R_DATA) = res_alloc(size);
+    return MR32(surf + R_DATA);
+}
+uint32_t com_buf_data(uint32_t buf, uint32_t *len, uint32_t *fmt) {
+    *len = *fmt = 0;
+    if (!buf || !mem_is_committed(buf + R_INDEX + 3) || (MR32(buf) != g_vtab[IF_VB] && MR32(buf) != g_vtab[IF_IB])) return 0;
+    *len = MR32(buf + R_W); *fmt = MR32(buf + R_FMT);
+    return MR32(buf + R_DATA);
+}
+
+/* The device's own surfaces and current targets. */
+static uint32_t g_bb_w = 1280, g_bb_h = 720, g_backbuf, g_depth, g_cur_rt, g_cur_ds;
+static uint32_t dev_backbuffer(void) {
+    if (!g_backbuf) { g_backbuf = surf_new(g_bb_w, g_bb_h, 22, 0, 0); g_depth = surf_new(g_bb_w, g_bb_h, 75, 0, 0); }
+    return g_backbuf;
+}
+
 /* The last reference to a resource went: drop its data. */
 static void res_free_data(uint32_t iface, uint32_t obj) {
     if (iface == IF_TEX || iface == IF_CUBETEX) {
@@ -377,6 +409,9 @@ uint32_t com_directsoundcreate(uint32_t ppDS) {
 
 #define COM_A(i) MR32(c->esp + 4u * (uint32_t)(i))
 
+extern int sw_enabled(void);
+extern void sw_dev_call(CPU *c, const char *nm);
+
 int com_call(CPU *c, uint32_t magic) {
     POP32(c->eip);
     uint32_t iface = (magic >> 16) & 0xFFFu;
@@ -408,6 +443,7 @@ int com_call(CPU *c, uint32_t magic) {
             r = MR32(self + R_REF);
             if (!r) res_free_data(iface, self);
         }
+    } else if (iface == IF_DEV && sw_enabled() && (sw_dev_call(c, nm), 0)) {
     } else if (iface == IF_D3D9) {
         if (!strcmp(nm, "GetDeviceCaps")) {
             uint32_t pc = COM_A(3);
@@ -457,6 +493,9 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "CreateDevice")) {
             if (!g_dev) g_dev = com_new(IF_DEV, 256);
             uint32_t pp = COM_A(6);
+            /* D3DPRESENT_PARAMETERS: BackBufferWidth, BackBufferHeight first */
+            if (COM_A(5) && mem_is_committed(COM_A(5) + 4) && MR32(COM_A(5)) && MR32(COM_A(5)) <= 8192 &&
+                MR32(COM_A(5) + 4) && MR32(COM_A(5) + 4) <= 8192) { g_bb_w = MR32(COM_A(5)); g_bb_h = MR32(COM_A(5) + 4); }
             fprintf(stderr, "com: CreateDevice pp=0x%08x [pp]=0x%08x (0xac6ed4=0x%08x)\n",
                     pp, (pp && mem_is_committed(pp)) ? MR32(pp) : 0, MR32(0xac6ed4));
             if (pp && mem_is_committed(pp)) MR32(pp) = g_dev;
@@ -523,12 +562,45 @@ int com_call(CPU *c, uint32_t magic) {
             if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_QUERY, 64);
             r = 0;
         } else if (!strcmp(nm, "CreateVertexDeclaration")) {
-            uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_VDECL, 64);
+            /* keep a copy of the D3DVERTEXELEMENT9 array (8 bytes each, ends at stream 0xFF) */
+            uint32_t el = COM_A(1), pp = COM_A(2), n = 0, obj = com_new(IF_VDECL, 64);
+            while (el && n < 64 && mem_is_committed(el + 8 * n + 7) && MR16(el + 8 * n) != 0xFF) n++;
+            if (obj && el && mem_is_committed(el + 8 * n + 7)) {
+                uint32_t copy = res_alloc(8 * (n + 1));
+                if (copy) { memcpy(g_mem + copy, g_mem + el, 8 * (n + 1)); MR32(obj + 4) = copy; MR32(obj + 8) = n; }
+            }
+            if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
         } else if (!strcmp(nm, "CreateVertexShader") || !strcmp(nm, "CreatePixelShader")) {
-            uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_VSHADER, 64);
+            /* keep a copy of the bytecode, up to its END token */
+            uint32_t fn = COM_A(1), pp = COM_A(2), n = 0, obj = 0;
+            while (fn && n < 65536 && mem_is_committed(fn + 4 * n + 3) && MR32(fn + 4 * n) != 0x0000FFFFu) {
+                uint32_t t = MR32(fn + 4 * n);
+                n += ((t & 0xFFFFu) == 0xFFFEu) ? 1 + (t >> 16) : 1;      /* a comment may contain the END value */
+            }
+            if (fn && n < 65536 && mem_is_committed(fn + 4 * n + 3)) {
+                uint32_t copy = res_alloc(4 * (n + 1));
+                if (copy) { memcpy(g_mem + copy, g_mem + fn, 4 * (n + 1)); obj = com_new_shader(copy, 4 * (n + 1)); }
+            }
+            if (!obj) obj = com_new(IF_VSHADER, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = obj;
+            r = 0;
+        } else if (!strcmp(nm, "GetBackBuffer")) {
+            /* (this, iSwapChain, iBackBuffer, Type, ppBackBuffer) */
+            if (COM_A(4) && mem_is_committed(COM_A(4))) MR32(COM_A(4)) = dev_backbuffer();
+            r = 0;
+        } else if (!strcmp(nm, "GetRenderTarget")) {
+            if (COM_A(2) && mem_is_committed(COM_A(2))) MR32(COM_A(2)) = g_cur_rt ? g_cur_rt : dev_backbuffer();
+            r = 0;
+        } else if (!strcmp(nm, "GetDepthStencilSurface")) {
+            dev_backbuffer();
+            if (COM_A(1) && mem_is_committed(COM_A(1))) MR32(COM_A(1)) = g_cur_ds ? g_cur_ds : g_depth;
+            r = 0;
+        } else if (!strcmp(nm, "SetRenderTarget")) {
+            if (COM_A(1) == 0 && COM_A(2)) g_cur_rt = COM_A(2);
+            r = 0;
+        } else if (!strcmp(nm, "SetDepthStencilSurface")) {
+            g_cur_ds = COM_A(1);
             r = 0;
         } else if (!strcmp(nm, "GetDirect3D")) {
             uint32_t pp = COM_A(1);
@@ -545,6 +617,7 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "Present") || m == 17) {
             static uint64_t s_present_frames = 0;
             g_frame_no++;
+            { extern void sw_frame(long); sw_frame((long)g_frame_no); }
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
                 extern uint32_t gh_brk(void);
                 fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());
