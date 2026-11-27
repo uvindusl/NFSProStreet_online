@@ -56,6 +56,19 @@ static void *guest_main(void *arg) {
 
     null_dead_heap_pointers();
 
+    /* ICE camera system: its statics were just reset to the original
+     * executable's zeros (restore_original_ranges); run its static
+     * initializer again (ICEManager constructor sub_0063b500 on 0x00ab47e0,
+     * plus its atexit registration) so its element table names this run's
+     * objects. */
+    guest_call(c, 0x0095aa40u);
+    c->esp = STACK_HI - 0x1000u;
+    /* the restored range also holds the chunk descriptor list at 0x00ab47d4
+     * built above: build it again */
+    c->ecx = 0x00ab47d4u;
+    guest_call(c, 0x0063da30u);
+    c->esp = STACK_HI - 0x1000u;
+
     fprintf(stderr, "boot: calling entry 0x%08x  esp=0x%08x  teb=0x%08x\n",
             ENTRY_VA, c->esp, TEB_BASE);
 
@@ -393,12 +406,19 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  *   0x00a63d38-0x00a644b8 and its init-once flag 0x00acd8fc: the object the
  *       main loop services in sub_00704660.  With the dump's state it skipped
  *       its set-up and called a callback of the dumped process.
+ *   0x00ab2e70-0x00ab4950: the ICE camera system's statics, rebuilt in
+ *       guest_main by rerunning their static initializer: ICEManager at
+ *       0x00ab47e0 (element table: count +4, pointers from +0x10, all
+ *       dumped-heap objects) and the per-context index records (0x168 bytes
+ *       each) from 0x00ab2e70 that sub_00635180 appends to without clearing.
+ *       With the dump's counts the appends overran a record and sub_0063a340
+ *       indexed the table with garbage when the main menu first loaded.
  * More ranges for experiments: PROSTREET_RESTORE="0xLO-0xHI[,...]". */
 static void restore_original_ranges(void) {
     if (!g_orig_data) return;
     char ranges[512];
     const char *env = getenv("PROSTREET_RESTORE");
-    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8%s%s",
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950%s%s",
              (env && *env) ? "," : "", (env && *env) ? env : "");
     uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
     const char *p = ranges;
