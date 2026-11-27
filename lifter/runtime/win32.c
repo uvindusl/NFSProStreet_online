@@ -1480,14 +1480,16 @@ int win32_call(CPU *c, uint32_t idx) {
         r = (uint32_t)remove(xp(gs(A(0))));
     } else if (str_eq(n, "rename")) {
         r = (uint32_t)rename(xp(gs(A(0))), xp(gs(A(1))));
-    } else if (str_eq(n, "_open")) {
+    } else if (str_eq(n, "_open") || str_eq(n, "?_open@@YAHPBDHH@Z")) {
+        /* the C++ overload _open(const char *, int, int) is the same call;
+         * the mode is Windows' _S_IREAD/_S_IWRITE (0x100/0x80), not Unix bits */
         uint32_t f = A(1);
         int flags = (f & 3u) == 0 ? O_RDONLY : (f & 3u) == 1 ? O_WRONLY : O_RDWR;
         if (f & 0x0008u) flags |= O_APPEND;
         if (f & 0x0100u) flags |= O_CREAT;
         if (f & 0x0200u) flags |= O_TRUNC;
         if (f & 0x0400u) flags |= O_EXCL;
-        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, (mode_t)A(2));
+        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, 0644);
     } else if (str_eq(n, "_sopen")) {
         uint32_t f = A(1);
         int flags = (f & 3u) == 0 ? O_RDONLY : (f & 3u) == 1 ? O_WRONLY : O_RDWR;
