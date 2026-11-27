@@ -391,13 +391,15 @@ void null_dead_heap_pointers(void) {
      *   0x00a70000-0x00a80000  audio statics: the buffer object at 0x00a77dd4
      *       still owned a block of the dumped heap, which sub_00500580 freed
      *       (the allocator's bad-block assert in sub_00436130);
-     *   0x00aee800-0x00aee880  the track streamer's current-section pointers
-     *       (0x00aee830): the handler for STREAML6R_FE.BUN's chunks walked a
-     *       dead section (sub_0079fb20).  Not the whole 0x00ae0000 block: nulling
-     *       that stops the boot at sub_0074c2c0. */
+     *   0x00aee800-0x00aeea00  the track streamer / scenery statics: the
+     *       current-section pointer 0x00aee830 (the handler for
+     *       STREAML6R_FE.BUN's chunks walked a dead section, sub_0079fb20) and
+     *       0x00aee8a8, the object whose presence makes the scenery init
+     *       sub_0079b280 skip creating the collection at 0x00bfc1c0.  Not the
+     *       whole 0x00ae0000 block: nulling that stops the boot at sub_0074c2c0. */
     char ranges[512];
     const char *env = getenv("PROSTREET_NULL_STALE");
-    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000,0x00a70000-0x00a80000,0x00aee800-0x00aee880%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000,0x00a70000-0x00a80000,0x00aee800-0x00aeea00%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
     const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
