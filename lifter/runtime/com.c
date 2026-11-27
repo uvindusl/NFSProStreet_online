@@ -473,7 +473,25 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "Present") || m == 17) {
             static uint64_t s_present_frames = 0;
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
-                fprintf(stderr, "  [D3D9] Present (frame %llu)\n", (unsigned long long)s_present_frames);
+                extern uint32_t gh_brk(void);
+                fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());
+            }
+            /* Pace the game at the display rate: nothing blocks in Present here, and
+             * unthrottled it ran some 1,200 frames a second.  PROSTREET_NOVSYNC=1
+             * turns the wait off. */
+            {
+                static struct timespec s_next;
+                static int s_novsync = -1;
+                if (s_novsync < 0) s_novsync = getenv("PROSTREET_NOVSYNC") != NULL;
+                if (!s_novsync) {
+                    struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
+                    if (s_next.tv_sec == 0 || now.tv_sec > s_next.tv_sec + 1) s_next = now;
+                    s_next.tv_nsec += 16666667L;
+                    if (s_next.tv_nsec >= 1000000000L) { s_next.tv_sec++; s_next.tv_nsec -= 1000000000L; }
+                    if (now.tv_sec < s_next.tv_sec || (now.tv_sec == s_next.tv_sec && now.tv_nsec < s_next.tv_nsec))
+                        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &s_next, NULL);
+                    else s_next = now;
+                }
             }
             r = 0; /* D3D_OK */
         } else if (!strcmp(nm, "Clear") || m == 43) {

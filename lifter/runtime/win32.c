@@ -90,13 +90,47 @@ static pthread_mutex_t g_heap_mtx = PTHREAD_MUTEX_INITIALIZER;
 /* End of the part of the guest heap handed out so far. */
 uint32_t gh_brk(void) { return g_brk; }
 
+/* Freed blocks are kept by size and handed out again: the game allocates and
+ * frees every frame, and a bump arena alone fills its 640 MB in minutes.
+ * Blocks up to 64 KB sit in exact-size lists (index = size / 16); larger ones
+ * in one list searched for a block no more than twice the size asked for.
+ * The link is the fourth header word. */
+#define HEAP_FREE 0x46524545u
+#define GH_SMALL_MAX 0x10000u
+static uint32_t g_free_small[GH_SMALL_MAX / 16u + 1u];
+static uint32_t g_free_big;
+
 uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
     if (n == 0) n = 1;
     if (align < 16) align = 16;
-    pthread_mutex_lock(&g_heap_mtx);
-    uint32_t p = (g_brk + 15u) & ~15u;
     uint32_t total = (n + 15u) & ~15u;
-    if (p + 16u + total > HEAP_END) {
+    if (total < n) return 0;
+    pthread_mutex_lock(&g_heap_mtx);
+    uint32_t p = 0;
+    if (total <= GH_SMALL_MAX) {
+        p = g_free_small[total / 16u];
+        if (p) g_free_small[total / 16u] = MR32(p + 12);
+    } else {
+        uint32_t prev = 0, q = g_free_big;
+        for (int k = 0; q && k < 256; k++, prev = q, q = MR32(q + 12)) {
+            uint32_t t = MR32(q + 8);
+            if (t >= total && t / 2u <= total) {
+                if (prev) MR32(prev + 12) = MR32(q + 12); else g_free_big = MR32(q + 12);
+                p = q;
+                break;
+            }
+        }
+    }
+    if (p) {
+        MR32(p) = HEAP_MAGIC;
+        MR32(p + 4) = n;
+        MR32(p + 12) = 0;
+        if (zero) memset(g_mem + p + 16u, 0, n);
+        pthread_mutex_unlock(&g_heap_mtx);
+        return p + 16u;
+    }
+    p = (g_brk + 15u) & ~15u;
+    if (p + 16u + total > HEAP_END || p + 16u + total < p) {
         fprintf(stderr, "heap: exhausted at %08x (asked %u)\n", g_brk, n);
         pthread_mutex_unlock(&g_heap_mtx);
         return 0;
@@ -115,16 +149,22 @@ uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
 
 void gh_free(uint32_t p) {
     if (!p) return;
-    if (MR32(p - 16u) != HEAP_MAGIC)
+    if (p < HEAP_BASE + 16u || p >= HEAP_END || !mem_is_committed(p - 16u) || MR32(p - 16u) != HEAP_MAGIC) {
         fprintf(stderr, "heap: free of a bad pointer %08x\n", p);
-    /* A real free list is not needed to reach the first milestone; the
-     * arena is 192 MB.  Mark the block so a double free is visible. */
-    if (MR32(p - 16u) == HEAP_MAGIC) MR32(p - 16u) = 0;
+        return;
+    }
+    pthread_mutex_lock(&g_heap_mtx);
+    uint32_t h = p - 16u, total = MR32(h + 8);
+    MR32(h) = HEAP_FREE;        /* a second free of it is reported above */
+    if (total <= GH_SMALL_MAX) { MR32(h + 12) = g_free_small[total / 16u]; g_free_small[total / 16u] = h; }
+    else { MR32(h + 12) = g_free_big; g_free_big = h; }
+    pthread_mutex_unlock(&g_heap_mtx);
 }
 
+/* Size the caller asked for (the second header word). */
 uint32_t gh_usize(uint32_t p) {
     if (!p || MR32(p - 16u) != HEAP_MAGIC) return 0;
-    return MR32(p - 4);
+    return MR32(p - 12u);
 }
 
 /* Current top of the bump arena, for fault diagnostics. */
