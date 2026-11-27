@@ -787,8 +787,8 @@ int com_call(CPU *c, uint32_t magic) {
                 /* Scripted key presses for unattended runs:
                  *   PROSTREET_KEYS="600:28,900:28+30"
                  * holds DirectInput scan code 28 (Enter) for 10 frames from frame
-                 * 600, and for 30 frames from frame 900.  Keyboard state only
-                 * (the 256-byte buffer). */
+                 * 600, and for 30 frames from frame 900.  Codes 256-263 are mouse
+                 * buttons 0-7 (256 = left), held in the mouse state's rgbButtons. */
                 static struct { long frame, len; int key; } keys[32];
                 static int nkeys = -1;
                 if (nkeys < 0) {
@@ -805,13 +805,21 @@ int com_call(CPU *c, uint32_t magic) {
                         e = *end == ',' ? end + 1 : "";
                     }
                 }
-                if (sz == 256)
-                    for (int i = 0; i < nkeys; i++)
-                        if ((long)g_frame_no >= keys[i].frame && (long)g_frame_no < keys[i].frame + keys[i].len)
-                            MR8(p + (keys[i].key & 255)) = 0x80;
+                static uint32_t seen_sz[4];
+                for (int k = 0; k < 4 && seen_sz[k] != sz; k++)
+                    if (!seen_sz[k]) { seen_sz[k] = sz; fprintf(stderr, "dinput: GetDeviceState(%u bytes) into %#x from %#x first read at frame %lu\n", sz, p, c->eip, (unsigned long)g_frame_no); break; }
+                for (int i = 0; i < nkeys; i++) {
+                    if ((long)g_frame_no < keys[i].frame || (long)g_frame_no >= keys[i].frame + keys[i].len) continue;
+                    if (sz == 256 && keys[i].key < 256)
+                        MR8(p + keys[i].key) = 0x80;
+                    else if ((sz == 16 || sz == 20) && keys[i].key >= 256 && keys[i].key - 256 < (int)sz - 12)
+                        MR8(p + 12 + (keys[i].key - 256)) = 0x80;     /* DIMOUSESTATE(2).rgbButtons */
+                }
             }
             r = 0;
         } else if (!strcmp(nm, "GetDeviceData")) {
+            static int logged;
+            if (!logged++) fprintf(stderr, "dinput: GetDeviceData first call at frame %lu (kind %#x)\n", (unsigned long)g_frame_no, kind);
             uint32_t pq = COM_A(2);
             if (pq && mem_is_committed(pq)) MR32(pq) = 0;
             r = 0;
