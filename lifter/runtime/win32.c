@@ -1059,6 +1059,77 @@ void win32_text_tick(unsigned long frame) {
     }
 }
 
+/* _findfirst64i32 / _findnext64i32 / _findclose.  struct _finddata64i32_t:
+ * attrib +0, time_create +8, time_access +16, time_write +24 (int64),
+ * size +32, name[260] +36.  Matching is case-insensitive; "*.*" matches
+ * every name, as on Windows. */
+#include <fnmatch.h>
+#define FIND_MAX 16
+static struct { DIR *d; char dir[1024]; char pat[260]; } g_find[FIND_MAX];
+static pthread_mutex_t g_find_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static int find_fill(int h, uint32_t out) {
+    struct dirent *de;
+    while ((de = readdir(g_find[h].d)) != NULL) {
+        if (fnmatch(g_find[h].pat, de->d_name, FNM_CASEFOLD) != 0) continue;
+        char full[1400];
+        snprintf(full, sizeof full, "%s/%s", g_find[h].dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        if (out && mem_is_committed(out)) {
+            mem_commit(out, 296);
+            memset(g_mem + out, 0, 296);
+            MR32(out + 0) = S_ISDIR(st.st_mode) ? 0x10u : 0x20u;     /* _A_SUBDIR / _A_ARCH */
+            uint64_t t = (uint64_t)st.st_mtime;
+            for (int k = 0; k < 3; k++) { MR32(out + 8 + 8 * k) = (uint32_t)t; MR32(out + 12 + 8 * k) = (uint32_t)(t >> 32); }
+            MR32(out + 32) = S_ISDIR(st.st_mode) ? 0u : (uint32_t)st.st_size;
+            snprintf((char *)(g_mem + out + 36), 260, "%s", de->d_name);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static uint32_t find_first(const char *spec, uint32_t out) {
+    const char *sl = NULL;
+    for (const char *q = spec; *q; q++) if (*q == '\\' || *q == '/') sl = q;
+    char dir[1024], pat[260];
+    if (sl) { snprintf(dir, sizeof dir, "%.*s", (int)(sl - spec), spec); snprintf(pat, sizeof pat, "%s", sl + 1); }
+    else    { snprintf(dir, sizeof dir, "."); snprintf(pat, sizeof pat, "%s", spec); }
+    if (!strcmp(pat, "*.*")) snprintf(pat, sizeof pat, "*");
+    const char *hd = sl ? xp(dir) : g_gamedir;
+    pthread_mutex_lock(&g_find_mtx);
+    int h = -1;
+    for (int i = 0; i < FIND_MAX; i++) if (!g_find[i].d) { h = i; break; }
+    uint32_t r = 0xFFFFFFFFu;
+    if (h >= 0 && (g_find[h].d = opendir(hd)) != NULL) {
+        snprintf(g_find[h].dir, sizeof g_find[h].dir, "%s", hd);
+        snprintf(g_find[h].pat, sizeof g_find[h].pat, "%s", pat);
+        if (find_fill(h, out)) r = (uint32_t)h + 1;           /* handles 1..FIND_MAX */
+        else { closedir(g_find[h].d); g_find[h].d = NULL; }
+    }
+    pthread_mutex_unlock(&g_find_mtx);
+    return r;
+}
+
+static uint32_t find_next(uint32_t handle, uint32_t out) {
+    int h = (int)handle - 1;
+    if (h < 0 || h >= FIND_MAX) return 0xFFFFFFFFu;
+    pthread_mutex_lock(&g_find_mtx);
+    uint32_t r = (g_find[h].d && find_fill(h, out)) ? 0u : 0xFFFFFFFFu;
+    pthread_mutex_unlock(&g_find_mtx);
+    return r;
+}
+
+static uint32_t find_close(uint32_t handle) {
+    int h = (int)handle - 1;
+    if (h < 0 || h >= FIND_MAX) return 0xFFFFFFFFu;
+    pthread_mutex_lock(&g_find_mtx);
+    if (g_find[h].d) { closedir(g_find[h].d); g_find[h].d = NULL; }
+    pthread_mutex_unlock(&g_find_mtx);
+    return 0;
+}
+
 static int wm_match_filter(uint32_t msg, uint32_t min_msg, uint32_t max_msg) {
     if (min_msg == 0 && max_msg == 0) return 1;
     if (max_msg == 0) return msg >= min_msg;
@@ -2155,10 +2226,14 @@ int win32_call(CPU *c, uint32_t idx) {
     /* ---- getenv / filesystem find ------------------------------------ */
     } else if (str_eq(n, "getenv")) {
         r = 0;
-    } else if (str_eq(n, "_findfirst64i32") || str_eq(n, "_findnext64i32")) {
-        r = 0xFFFFFFFFu;
+    } else if (str_eq(n, "_findfirst64i32")) {
+        /* intptr_t _findfirst64i32(const char *spec, struct _finddata64i32_t *)
+         * (the memcard code lists the save folders with it) */
+        r = find_first(gs(A(0)), A(1));
+    } else if (str_eq(n, "_findnext64i32")) {
+        r = find_next(A(0), A(1));
     } else if (str_eq(n, "_findclose")) {
-        r = 0;
+        r = find_close(A(0));
 
     /* ---- MSVC C++ runtime -------------------------------------------- */
     } else if (str_eq(n, "__CxxThrowException")) {
