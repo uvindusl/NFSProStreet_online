@@ -481,6 +481,19 @@ int main(int argc, char **argv) {
         MR32(0x00a61244) = 0x00a61240;
     }
 
+    /* Stale render command queue from process dump (0x00ffc9f0: queued count,
+     * executed count, enabled, capacity, base, write ptr, read ptr).  The dump
+     * was taken mid-frame with commands still pending, so the render thread
+     * would replay draws against buffers this run has not created yet.  Mark
+     * the queue empty. */
+    if (mem_is_committed(0x00ffc9f0)) {
+        uint32_t base = MR32(0x00ffca00);
+        MR32(0x00ffc9f0) = 0;
+        MR32(0x00ffc9f4) = 0;
+        MR32(0x00ffca04) = base;
+        MR32(0x00ffca08) = base;
+    }
+
     apply_set_env();
 
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
