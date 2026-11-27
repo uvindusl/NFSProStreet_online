@@ -618,6 +618,7 @@ int com_call(CPU *c, uint32_t magic) {
             static uint64_t s_present_frames = 0;
             g_frame_no++;
             { extern void sw_frame(long); sw_frame((long)g_frame_no); }
+            { extern void win32_text_tick(unsigned long); win32_text_tick((unsigned long)g_frame_no); }
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
                 extern uint32_t gh_brk(void);
                 fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());

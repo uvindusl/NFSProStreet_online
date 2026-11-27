@@ -1020,6 +1020,35 @@ static void wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
     pthread_mutex_unlock(&g_wmq_mtx);
 }
 
+/* Scripted typing for unattended runs: PROSTREET_TEXT="9000:PLAYER" posts one
+ * WM_CHAR per character, every 4 frames from frame 9000 (the frontend's text
+ * boxes take characters from the window procedure, FEKeyboardInput::NotifyChar).
+ * Several entries are separated by commas.  Called once per Present. */
+void win32_text_tick(unsigned long frame) {
+    static struct { unsigned long frame; char text[64]; } ent[8];
+    static int n = -1;
+    if (n < 0) {
+        n = 0;
+        const char *e = getenv("PROSTREET_TEXT");
+        while (e && *e && n < 8) {
+            char *end;
+            ent[n].frame = strtoul(e, &end, 10);
+            if (*end != ':') break;
+            const char *t = end + 1, *c = strchr(t, ',');
+            size_t len = c ? (size_t)(c - t) : strlen(t);
+            if (len >= sizeof ent[n].text) len = sizeof ent[n].text - 1;
+            memcpy(ent[n].text, t, len); ent[n].text[len] = 0;
+            n++;
+            e = c ? c + 1 : "";
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        if (frame < ent[i].frame || (frame - ent[i].frame) % 4) continue;
+        unsigned long k = (frame - ent[i].frame) / 4;
+        if (k < strlen(ent[i].text)) wm_push(0x0102u, (uint8_t)ent[i].text[k], 1u);   /* WM_CHAR */
+    }
+}
+
 static int wm_match_filter(uint32_t msg, uint32_t min_msg, uint32_t max_msg) {
     if (min_msg == 0 && max_msg == 0) return 1;
     if (max_msg == 0) return msg >= min_msg;
