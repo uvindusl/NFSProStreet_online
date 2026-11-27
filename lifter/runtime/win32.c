@@ -2350,6 +2350,7 @@ int win32_call(CPU *c, uint32_t idx) {
             uint32_t ppEffect = A(7);
             uint32_t ppErrorBuffer = A(8);
             uint32_t eff = com_create_effect();
+            { extern int fx_create(uint32_t obj, uint32_t name_va); fx_create(eff, A(2)); }
             if (ppEffect && mem_is_committed(ppEffect)) {
                 MR32(ppEffect) = eff;
             }

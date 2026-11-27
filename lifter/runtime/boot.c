@@ -143,6 +143,30 @@ static void overlay_original_headers(void) {
     if (size_hdr > n) size_hdr = (uint32_t)n;
     memcpy(g_mem + image_base, hdr, size_hdr);
     fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
+
+    /* The artifact's .rsrc is all zero (the dump did not keep the resources),
+     * and the game's 34 compiled effects are RT_RCDATA resources that
+     * D3DXCreateEffectFromResourceA reads.  Map the section from the original
+     * executable when the artifact has nothing there. */
+    unsigned nsec = *(uint16_t *)(hdr + peoff + 6), optsz = *(uint16_t *)(hdr + peoff + 20);
+    for (unsigned i = 0; i < nsec; i++) {
+        uint8_t *sh = hdr + peoff + 24 + optsz + 40 * i;
+        if (sh + 40 > hdr + n) break;
+        if (memcmp(sh, ".rsrc\0\0\0", 8)) continue;
+        uint32_t vsz = *(uint32_t *)(sh + 8), va = image_base + *(uint32_t *)(sh + 12);
+        uint32_t rsz = *(uint32_t *)(sh + 16), raw = *(uint32_t *)(sh + 20);
+        if (rsz > vsz) rsz = vsz;
+        if (!rsz || rsz > 0x4000000u) break;
+        mem_commit(va, rsz);
+        int empty = 1;
+        for (uint32_t k = 0; k < 64 && empty; k++) empty = g_mem[va + k] == 0;
+        if (!empty) break;
+        f = fopen(path, "rb");
+        if (f && !fseek(f, (long)raw, SEEK_SET) && fread(g_mem + va, 1, rsz, f) == rsz)
+            fprintf(stderr, "boot: .rsrc (%u bytes at %08x) taken from %s\n", rsz, va, path);
+        if (f) fclose(f);
+        break;
+    }
 }
 
 /* The original executable's .data, kept from repair_stale_lists() until

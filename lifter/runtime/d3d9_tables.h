@@ -145,7 +145,7 @@ static const Method M_DSBUF[] = {
 /* --- D3DXEffect --- */
 static const Method M_EFFECT[] = {
  {"QueryInterface",3},{"AddRef",1},{"Release",1},
- {"GetDesc",2},{"GetParameterDesc",3},{"GetTechniqueDesc",3},{"GetPassDesc",4},{"GetFunctionDesc",3},
+ {"GetDesc",2},{"GetParameterDesc",3},{"GetTechniqueDesc",3},{"GetPassDesc",3},{"GetFunctionDesc",3},
  {"GetParameter",3},{"GetParameterByName",3},{"GetParameterBySemantic",3},{"GetParameterElement",3},
  {"GetTechnique",2},{"GetTechniqueByName",2},{"GetPass",3},{"GetPassByName",3},
  {"GetFunction",2},{"GetFunctionByName",2},{"GetAnnotation",3},{"GetAnnotationByName",3},
@@ -158,9 +158,9 @@ static const Method M_EFFECT[] = {
  {"SetString",3},{"GetString",3},{"SetTexture",3},{"GetTexture",3},{"GetPixelShader",3},{"GetVertexShader",3},
  {"SetArrayRange",4},{"GetPool",2},{"SetTechnique",2},{"GetCurrentTechnique",1},{"ValidateTechnique",2},
  {"FindNextValidTechnique",3},{"IsParameterUsed",3},{"Begin",3},{"BeginPass",2},{"CommitChanges",1},
- {"EndPass",1},{"End",1},{"GetDevice",2},{"OnLostDevice",1},{"OnResetDevice",1},{"SetTechnique71",2},
- {"FindNextValidTechnique72",3},{"ValidateTechnique73",2},{"IsParameterUsed74",3},{"Begin75",3},
- {"Pass76",2},{"BeginPass77",2},{"SetRawValue",5},{"EndPass79",1},{"End80",1},
+ {"EndPass",1},{"End",1},{"GetDevice",2},{"OnLostDevice",1},{"OnResetDevice",1},{"SetStateManager",2},
+ {"GetStateManager",2},{"BeginParameterBlock",1},{"EndParameterBlock",1},{"ApplyParameterBlock",2},
+ {"DeleteParameterBlock",2},{"CloneEffect",3},{"SetRawValue",5},{"m79",1},{"m80",1},
  {"m81",2},{"m82",2},{"m83",2},{"m84",2},{"m85",2},{"m86",2},{"m87",2},{"m88",2},{"m89",2},
  {"m90",2},{"m91",2},{"m92",2},{"m93",2},{"m94",2},{"m95",2},{"m96",2},{"m97",2},{"m98",2},{"m99",2},
  {"m100",2},{"m101",2},{"m102",2},{"m103",2},{"m104",2},{"m105",2},{"m106",2},{"m107",2},{"m108",2},{"m109",2},

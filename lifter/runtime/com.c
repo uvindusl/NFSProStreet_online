@@ -138,6 +138,14 @@ uint32_t com_create_effect(void) {
     return com_new(IF_EFFECT, 256);
 }
 
+/* A vertex or pixel shader object for bytecode already in guest memory (the
+ * effects create their shaders this way, see d3dx_effect.c). */
+uint32_t com_new_shader(uint32_t bytecode, uint32_t size) {
+    uint32_t obj = com_new(IF_VSHADER, 64);
+    if (obj) { MR32(obj + 4) = bytecode; MR32(obj + 8) = size; }
+    return obj;
+}
+
 uint32_t com_directinput8create(uint32_t ppvOut) {
     uint32_t di8 = com_new(IF_DI8, 64);
     if (ppvOut && mem_is_committed(ppvOut)) {
@@ -821,8 +829,12 @@ int com_call(CPU *c, uint32_t magic) {
             r = 0;
         }
     } else if (iface == IF_EFFECT) {
+        extern int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret);
         if (!strcmp(nm, "SetTexture")) tex_dump(COM_A(2));
-        if (!strcmp(nm, "GetDesc") || m == 3) {
+        if (fx_call(c, COM_A(0), m, &r)) {
+            /* a real effect (d3dx_effect.c); what follows is the old stub, kept
+             * for an effect whose resource could not be read */
+        } else if (!strcmp(nm, "GetDesc") || m == 3) {
             uint32_t pd = COM_A(1);
             if (pd && mem_is_committed(pd)) {
                 MR32(pd + 0) = 0x009f8ecc; /* Creator = "STANDARD" */
