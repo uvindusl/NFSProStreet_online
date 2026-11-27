@@ -63,7 +63,21 @@ def main():
     img = open(IMAGE, 'rb').read()
     base = 0x400000  # ImageBase of the dump; sections are at file offset == RVA
 
+    # SecuROM mixes bytes of the PE header page into its computed calls.  The
+    # dump's header was rebuilt, so read that page from the original executable
+    # (the runtime maps it there too, see overlay_original_headers in boot.c).
+    hdr = None
+    if os.path.exists(CLEAN):
+        with open(CLEAN, 'rb') as f:
+            hdr = f.read(0x1000)
+        if hdr[:2] != b'MZ':
+            hdr = None
+    if hdr is None:
+        print('boot_seeds: no original executable at %s, header-keyed gadgets use the dump header' % CLEAN)
+
     def rd32(va):
+        if hdr is not None and base <= va <= base + len(hdr) - 4:
+            return struct.unpack_from('<I', hdr, va - base)[0]
         return struct.unpack_from('<I', img, va - base)[0]
 
     def exec_addr(a):

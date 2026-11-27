@@ -91,6 +91,52 @@ static void overlay_clean_data(const char *pe, int argc, char **argv) {
         fprintf(stderr, "boot: .data overlay from %s failed, keeping loaded .data\n", clean);
 }
 
+/* Map the PE header page of the original game executable at the image base.
+ *
+ * SecuROM's computed calls and obfuscated constants mix image bytes into their
+ * arithmetic, and some of those bytes are in the header page (for example
+ * `mov esi,[0x19ee788]; add esi,[0x400148]`, the Fastmem size class requested
+ * by sub_00421c90).  The unpacked artifact has a rebuilt header, so those
+ * values come out wrong: that size class became 0xffb3f944 instead of 1 and
+ * the game stopped with "Out of Fastmem memory".  The running process had the
+ * headers of the on-disk executable there, so take them from it:
+ *   PROSTREET_HEADER_IMAGE=<path>, else <gamedir>/nfsps.exe. */
+static void overlay_original_headers(void) {
+    char path[4096];
+    const char *h = getenv("PROSTREET_HEADER_IMAGE");
+    if (h && *h) {
+        snprintf(path, sizeof path, "%s", h);
+    } else {
+        const char *d = getenv("PROSTREET_GAMEDIR");
+        snprintf(path, sizeof path, "%s/nfsps.exe", (d && *d) ? d : "game");
+    }
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "boot: no original executable at %s, keeping the artifact's PE headers "
+                        "(SecuROM constants that read the header page will be wrong)\n", path);
+        return;
+    }
+    uint8_t hdr[0x1000];
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    fclose(f);
+    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || peoff + 0x78 > n ||
+        *(uint32_t *)(hdr + peoff) != 0x00004550u) {
+        fprintf(stderr, "boot: %s is not a PE image, keeping the artifact's PE headers\n", path);
+        return;
+    }
+    uint8_t *opt = hdr + peoff + 24;
+    uint32_t image_base = *(uint32_t *)(opt + 28);
+    uint32_t size_hdr = *(uint32_t *)(opt + 60);
+    if (image_base != 0x400000u || !mem_is_committed(image_base)) {
+        fprintf(stderr, "boot: %s has ImageBase %08x, keeping the artifact's PE headers\n", path, image_base);
+        return;
+    }
+    if (size_hdr > n) size_hdr = (uint32_t)n;
+    memcpy(g_mem + image_base, hdr, size_hdr);
+    fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
+}
+
 static int hex_digit(int c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return 10 + c - 'a';
@@ -219,6 +265,7 @@ int main(int argc, char **argv) {
     mem_altstack_install();
     if (mem_load_pe(pe)) return 1;
     overlay_clean_data(pe, argc, argv);
+    overlay_original_headers();
     apply_zero_env();
 
     /* Initialize Pool descriptor circular sentinels to clean empty state */
