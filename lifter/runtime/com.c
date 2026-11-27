@@ -8,6 +8,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <time.h>
 
 #define COM_MAGIC 0xE0000000u
 #define COM_BASE  0x4C000000u
@@ -638,6 +639,9 @@ int com_call(CPU *c, uint32_t magic) {
             uint32_t obj = com_new(IF_DSBUF, 64);
             MR32(obj + 4) = com_alloc(len);
             MR32(obj + 8) = len;
+            /* WAVEFORMATEX.nAvgBytesPerSec drives the play cursor (see GetCurrentPosition) */
+            uint32_t fmt = (desc && mem_is_committed(desc)) ? MR32(desc + 16) : 0;
+            MR32(obj + 12) = (fmt && mem_is_committed(fmt) && MR32(fmt + 8)) ? MR32(fmt + 8) : 176400u;
             if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
         } else if (!strcmp(nm, "GetCaps")) {
@@ -663,7 +667,7 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "DuplicateSoundBuffer")) {
             uint32_t src = COM_A(1), pp = COM_A(2);
             uint32_t obj = com_new(IF_DSBUF, 64);
-            if (src && mem_is_committed(src)) { MR32(obj + 4) = MR32(src + 4); MR32(obj + 8) = MR32(src + 8); }
+            if (src && mem_is_committed(src)) { MR32(obj + 4) = MR32(src + 4); MR32(obj + 8) = MR32(src + 8); MR32(obj + 12) = MR32(src + 12); }
             if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
         } else {
@@ -677,24 +681,51 @@ int com_call(CPU *c, uint32_t magic) {
             uint32_t off = COM_A(1), n = COM_A(2), flags = COM_A(7);
             if (flags & 2u) { off = 0; n = len; }      /* DSBLOCK_ENTIREBUFFER */
             if (len && off >= len) off %= len;
-            if (n > len - off) n = len - off;          /* no wrap: the tail is not handed out */
+            if (n > len) n = len;
+            uint32_t n1 = n > len - off ? len - off : n;   /* the rest wraps to the start */
             uint32_t p1 = COM_A(3), c1 = COM_A(4), p2 = COM_A(5), c2 = COM_A(6);
             if (p1 && mem_is_committed(p1)) MR32(p1) = buf + off;
-            if (c1 && mem_is_committed(c1)) MR32(c1) = n;
-            if (p2 && mem_is_committed(p2)) MR32(p2) = 0;
-            if (c2 && mem_is_committed(c2)) MR32(c2) = 0;
+            if (c1 && mem_is_committed(c1)) MR32(c1) = n1;
+            if (p2 && mem_is_committed(p2)) MR32(p2) = (n > n1) ? buf : 0;
+            if (c2 && mem_is_committed(c2)) MR32(c2) = n - n1;
             r = 0;
-        } else if (!strcmp(nm, "GetCurrentPosition")) {
-            uint32_t pp = COM_A(1), pw = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = 0;
-            if (pw && mem_is_committed(pw)) MR32(pw) = 0;
+        } else if (!strcmp(nm, "Play") || !strcmp(nm, "Stop") || !strcmp(nm, "SetCurrentPosition") ||
+                   !strcmp(nm, "GetCurrentPosition") || !strcmp(nm, "GetStatus")) {
+            /* Nothing is played, but the play cursor moves in real time while the
+             * buffer is "playing": the game's mixer thread (sub_008c5f20) only
+             * mixes, and only drains its command queue, when the cursor has
+             * advanced.  With a cursor stuck at 0 that queue grew without bound
+             * and its writes ran over the import table.
+             * obj: +12 bytes/second, +16 playing, +20 position at +24, +24 start ms */
+            struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+            uint32_t now = (uint32_t)(ts.tv_sec * 1000u + ts.tv_nsec / 1000000u);
+            uint32_t rate = MR32(self + 12) ? MR32(self + 12) : 176400u;
+            uint32_t pos = MR32(self + 20);
+            if (MR32(self + 16) && len)
+                pos = (uint32_t)((pos + (uint64_t)(now - MR32(self + 24)) * rate / 1000u) % len);
+            pos &= ~3u;
+            if (!strcmp(nm, "Play")) {
+                if (!MR32(self + 16)) { MR32(self + 16) = 1; MR32(self + 24) = now; }
+            } else if (!strcmp(nm, "Stop")) {
+                MR32(self + 16) = 0; MR32(self + 20) = pos;
+            } else if (!strcmp(nm, "SetCurrentPosition")) {
+                MR32(self + 20) = len ? COM_A(1) % len : 0; MR32(self + 24) = now;
+            } else if (!strcmp(nm, "GetStatus")) {
+                uint32_t p = COM_A(1);
+                if (p && mem_is_committed(p)) MR32(p) = MR32(self + 16) ? 5u : 0u;  /* PLAYING|LOOPING */
+            } else {
+                uint32_t pp = COM_A(1), pw = COM_A(2);
+                uint32_t lead = (rate / 100u) & ~3u;       /* write cursor 10 ms ahead */
+                if (pp && mem_is_committed(pp)) MR32(pp) = pos;
+                if (pw && mem_is_committed(pw)) MR32(pw) = len ? (pos + lead) % len : 0;
+            }
             r = 0;
         } else if (!strcmp(nm, "GetCaps")) {
             /* DSBCAPS: dwSize, dwFlags, dwBufferBytes, dwUnlockTransferRate, dwPlayCpuOverhead */
             uint32_t p = COM_A(1);
             if (p && mem_is_committed(p)) { MR32(p + 4) = 0; MR32(p + 8) = len; MR32(p + 12) = 0; MR32(p + 16) = 0; }
             r = 0;
-        } else if (!strcmp(nm, "GetStatus") || !strcmp(nm, "GetVolume") ||
+        } else if (!strcmp(nm, "GetVolume") ||
                    !strcmp(nm, "GetPan") || !strcmp(nm, "GetFrequency")) {
             uint32_t p = COM_A(1);
             if (p && mem_is_committed(p)) MR32(p) = 0;
