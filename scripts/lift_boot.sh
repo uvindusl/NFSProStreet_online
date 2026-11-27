@@ -26,5 +26,5 @@ python3 scripts/boot_seeds.py "$PE" lifter/seeds-boot.txt
 # Instruction hooks: every HOOK_SITE(0x...) in the runtime sources; the
 # lifted code calls guest_hook() before each of those instructions.
 HOOKS="$( { grep -ohE 'HOOK_SITE\(0x00[0-9a-f]{6}\)' lifter/runtime/*.c || true; } | sed -E 's/HOOK_SITE\((0x[0-9a-f]+)\)/\1/' | sort -u | paste -sd, -)"
-GENOUT="$GEN" HOOKS="$HOOKS" SEEDS=lifter/seeds-boot.txt RELOCS=lifter/relocs-empty.txt JTSWITCH=1 PUSHRET=1 CALLCHK=${CALLCHK:-0} \
+GENOUT="$GEN" HOOKS="$HOOKS" SEEDS=lifter/seeds-boot.txt RELOCS=lifter/relocs-empty.txt JTSWITCH=1 PUSHRET=1 CALLCHK=${CALLCHK:-1} \
     python3 lifter/tools/genall.py "$PE" "$NSHARD"

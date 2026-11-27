@@ -1708,8 +1708,12 @@ void rtlog_dump(int n) {
 void callchk_slow(CPU *c, uint32_t expect) {
     static int mode = -1, shown = 0;
     if (mode < 0) {
+        /* default "run": follow the callee's continuation until the expected
+         * return address comes back (SecuROM gadgets that end in a tail jump,
+         * e.g. 0x19f8404 -> 0x10f8d70 returning to 0x19f8410, hand the
+         * continuation back in eip); "log" only reports, "off" ignores it */
         const char *e = getenv("PROSTREET_CALLCHK");
-        mode = !e ? 0 : (strcmp(e, "run") == 0 ? 2 : 1);
+        mode = !e || !strcmp(e, "run") ? 2 : !strcmp(e, "off") ? 0 : 1;
     }
     if (!mode) return;
     if (shown < 40) {
@@ -1719,7 +1723,7 @@ void callchk_slow(CPU *c, uint32_t expect) {
     if (mode == 2) {
         int guard = 0;
         while (c->eip != expect && !g_guest_exited && guard++ < 1000 &&
-               c->eip >= 0x401000u && c->eip < 0x10ea000u)
+               c->eip >= 0x401000u && c->eip < 0x1aa8000u)   /* .text and SecuROM's diabolus section */
             dispatch_indirect(c, c->eip);
     }
 }
