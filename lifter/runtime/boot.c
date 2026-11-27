@@ -806,6 +806,11 @@ int main(int argc, char **argv) {
      * LoadLanguage(English) (sub_005c3730) returns without loading anything
      * and every string lookup fails.  The original executable has -1 there. */
     if (mem_is_committed(0x00a54ee8)) MR32(0x00a54ee8) = 0xffffffffu;
+    /* The input system's device tables (0x00aba2d0-0x00aba500, all zero in the
+     * original executable) still describe the dumped process's devices: the
+     * main loop's first poll (sub_006c0d10) found a device count and called
+     * through a dead device object. */
+    if (mem_is_committed(0x00aba2d0)) memset(g_mem + 0x00aba2d0, 0, 0x00aba500 - 0x00aba2d0);
     /* "Built once" flag of the table that sub_0056a670 fills through
      * sub_0055ff80: set in the dump, so the table at +0x38 of the new object
      * stayed empty and sub_0050b920 read through its null pointer. */
