@@ -460,20 +460,42 @@ void dispatch_init(void) {
             g_dtab[a - TEXT_BASE] = (guest_fn_t)g_seh_fn_ptr[i];
     }
 
-    /* Register missing return/continuation points */
-    g_dtab[0x004040f0 - TEXT_BASE] = sub_004040f0;
-    g_dtab[0x0042857c - TEXT_BASE] = sub_0042857c_impl;
-    g_dtab[0x00431060 - TEXT_BASE] = sub_019f7630_impl;
-    g_dtab[0x0044bfd0 - TEXT_BASE] = sub_0044bfd0;
-    g_dtab[0x004add90 - TEXT_BASE] = sub_004add90;
-    g_dtab[0x004c8280 - TEXT_BASE] = sub_004c8280;
-    g_dtab[0x004c9730 - TEXT_BASE] = sub_004c9730;
-    g_dtab[0x00542700 - TEXT_BASE] = sub_00542700;
-    g_dtab[0x004591a0 - TEXT_BASE] = sub_004591a0;
-    g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
-    g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
-    g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
-    g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
+    /* Hand-written functions for addresses that had no usable lift.  They
+     * date from before the lifter ran SecuROM's obfuscated calls; every one of
+     * these addresses is lifted now, and the lifted function wins.  A stand-in
+     * that stays in front hides the real behaviour: the one for 0x005310e0
+     * returned 0 without registering the attribute class, which left the
+     * attribute database empty (the audio system then sized its tables to 0
+     * and faulted in sub_00500d00).  The table is kept as a fallback for a
+     * build whose lift lacks an address, and to compare behaviour:
+     *   PROSTREET_FORCE_OVERRIDE="0xADDR[,0xADDR...]" or "all"
+     * puts the hand-written function back in front. */
+    {
+        const char *force = getenv("PROSTREET_FORCE_OVERRIDE");
+        static const struct { uint32_t addr; guest_fn_t fn; } ovr[] = {
+            { 0x004040f0, sub_004040f0 },
+            { 0x0042857c, sub_0042857c_impl },
+            { 0x00431060, sub_019f7630_impl },
+            { 0x0044bfd0, sub_0044bfd0 },
+            { 0x004add90, sub_004add90 },
+            { 0x004c8280, sub_004c8280 },
+            { 0x004c9730, sub_004c9730 },
+            { 0x00542700, sub_00542700 },
+            { 0x004591a0, sub_004591a0 },
+            { 0x004ca7d0, sub_004040f0 },
+            { 0x005688e0, sub_005688e0_impl },
+            { 0x00909b00, sub_00909b00 },
+            { 0x005310e0, sub_005310e0_impl },
+        };
+        for (unsigned i = 0; i < sizeof ovr / sizeof *ovr; i++) {
+            guest_fn_t *slot = &g_dtab[ovr[i].addr - TEXT_BASE];
+            char key[16];
+            snprintf(key, sizeof key, "0x%x", ovr[i].addr);
+            if (*slot && !(force && (!strcmp(force, "all") || strstr(force, key)))) continue;
+            if (*slot) fprintf(stderr, "dispatch: PROSTREET_FORCE_OVERRIDE replaces the lifted %s\n", key);
+            *slot = ovr[i].fn;
+        }
+    }
 
     com_init();
 }
