@@ -1210,6 +1210,7 @@ int win32_call(CPU *c, uint32_t idx) {
     const char *n = e->name;
 
     POP32(c->eip);                 /* the caller's return address */
+    const uint32_t ret_eip = c->eip;
     g_calls[idx]++;
     if (g_trace && g_trace_n < 20000) {
         fprintf(stderr, "  [%5u] %-14s %-40s ret=%08x a0=%08x a1=%08x\n",
@@ -2650,6 +2651,13 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     }
 
+    /* A stand-in that calls back into guest code (qsort's and bsearch's
+     * comparators) leaves eip at the callback's SENTINEL return.  The lifted
+     * caller decides where to go next from eip: a call written as
+     * "push RET; push [IAT]; ret" (sub_00460ac0 calls qsort that way) runs its
+     * continuation only when eip is RET, so it skipped it and leaked the
+     * frame (a /GS failure in sub_004556e0 while a race loaded). */
+    if (c->eip == SENTINEL) c->eip = ret_eip;
     { extern void rt_watch_check(CPU *, const char *, uint32_t); rt_watch_check(c, n, c->eip); }
     c->eax = r;
     c->esp += 4u * (uint32_t)e->nargs;
