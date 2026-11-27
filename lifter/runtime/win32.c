@@ -1798,8 +1798,27 @@ int win32_call(CPU *c, uint32_t idx) {
         }
         r = 0;
     } else if (str_eq(n, "GetCurrentDirectoryA")) {
-        snprintf((char *)(g_mem + A(1)), A(0), "%s", g_gamedir);
-        r = (uint32_t)strlen(g_gamedir);
+        /* DWORD GetCurrentDirectoryA(DWORD nBufferLength, LPSTR lpBuffer).
+         * An absolute PROSTREET_GAMEDIR ("/home/.../Need for Speed ProStreet")
+         * is handed to the game as "C:\home\...": the game's path resolver
+         * (sub_008998f3) takes the drive of a rooted path from the current
+         * directory with strchr(cwd, ':') and copied "up to the colon" with a
+         * NULL result, overrunning its buffer.  xp() maps "C:\x" back to /x.
+         * A relative game directory ("game") stays as it is. */
+        char cwd[1024];
+        if (g_gamedir[0] == '/') {
+            snprintf(cwd, sizeof cwd, "C:%s", g_gamedir);
+            for (char *q = cwd; *q; q++) if (*q == '/') *q = '\\';
+        } else {
+            snprintf(cwd, sizeof cwd, "%s", g_gamedir);
+        }
+        size_t len = strlen(cwd);
+        if (A(1) && A(0) > len) {
+            memcpy(g_mem + A(1), cwd, len + 1);
+            r = (uint32_t)len;
+        } else {
+            r = (uint32_t)len + 1;          /* buffer too small: size needed */
+        }
     } else if (str_eq(n, "SHGetFolderPathA")) {
         /* (hwnd, csidl, token, flags, path[MAX_PATH]).  The game asks for
          * CSIDL_PERSONAL | CSIDL_FLAG_CREATE (0x8005) to find its save folder;
