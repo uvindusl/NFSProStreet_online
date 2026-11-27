@@ -339,7 +339,38 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  *   PROSTREET_NULL_STALE="0xLO-0xHI[,0xLO-0xHI...]"   (for experiments)
  * A pointer is kept when its target has content (boot code that builds an
  * object at the dumped address runs before this). */
+/* Put ranges of .data back to what the original executable has there.
+ *
+ * For a static object whose whole state is left over from the dumped process
+ * (not just a pointer or two), the original bytes are the state the game's
+ * own start-up expects.  Always restored:
+ *   0x00a63d38-0x00a644b8 and its init-once flag 0x00acd8fc: the object the
+ *       main loop services in sub_00704660.  With the dump's state it skipped
+ *       its set-up and called a callback of the dumped process.
+ * More ranges for experiments: PROSTREET_RESTORE="0xLO-0xHI[,...]". */
+static void restore_original_ranges(void) {
+    if (!g_orig_data) return;
+    char ranges[512];
+    const char *env = getenv("PROSTREET_RESTORE");
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900%s%s",
+             (env && *env) ? "," : "", (env && *env) ? env : "");
+    uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+    const char *p = ranges;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        uint32_t r0 = 0, r1 = 0; const char *q = p;
+        if (!parse_hex_u32(p, &q, &r0) || *q != '-' || !parse_hex_u32(q + 1, &q, &r1)) break;
+        p = q;
+        if (r0 < lo) r0 = lo;
+        if (r1 > hi) r1 = hi;
+        if (r1 <= r0) continue;
+        memcpy(g_mem + r0, g_orig_data + (r0 - lo), r1 - r0);
+        fprintf(stderr, "boot: %08x-%08x restored from the original executable\n", r0, r1);
+    }
+}
+
 void null_dead_heap_pointers(void) {
+    restore_original_ranges();
     /* Always treated:
      *   0x00ab1500-0x00ab2a00  the localisation system's globals (string tables,
      *       fonts, the loaded language file): with the dump's pointers there,
