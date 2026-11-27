@@ -17,7 +17,6 @@ jobs:
          contains(github.event.comment.body, '/opencode')))
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
       pull-requests: write
       issues: write
@@ -28,24 +27,10 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Get OpenCode OIDC token
-        env:
-          AUDIENCE: https://opencode.ai/console
-          CLIENT_ID: ${{ secrets.OPENCODE_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          oidc=$(curl -sSf --oauth2-bearer "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$AUDIENCE" | jq -r .value)
-          token=$(curl -sSf https://opencode.ai/console/auth/oauth/token \
-            -d grant_type=urn:ietf:params:oauth:grant-type:token-exchange \
-            -d subject_token_type=urn:ietf:params:oauth:token-type:jwt \
-            -d client_id="$CLIENT_ID" \
-            -d subject_token="$oidc" | jq -r .access_token)
-          echo "::add-mask::$token"
-          echo "OPENCODE_API_KEY=$token" >> "$GITHUB_ENV"
-
       - name: Run OpenCode
         uses: anomalyco/opencode/github@latest
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         with:
           model: opencode/big-pickle
           prompt: |
