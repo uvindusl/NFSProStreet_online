@@ -4,7 +4,8 @@
     python3 scripts/boot_seeds.py [pe-image] [out]
 
 Base: every function of the full-map lift (lifter/seeds-full.txt) plus the PE
-entry point.  On top of that, three things a static call graph cannot see:
+entry point.  On top of that, four things a static call graph cannot see
+(the fourth, function pointers held in code, is described at its step below):
 
 1. SecuROM thunks.  `.text` reaches part of the image only through
    `jmp/call dword ptr [slot]` where `slot` lives in the RWX 'diabolus' section
@@ -126,14 +127,89 @@ def main():
                     cont += 1
             i += 1
 
-    # 2b. SecuROM computed call:  push R; mov R,[X]; (not R) (xor|add|sub R,[Y]|imm);
+    # 2b. SecuROM computed call:  push R; <compute R from image data>;
     #     xchg [esp],R; add dword [esp+4],K; ret
-    #     = call T (T computed from image data) returning to entry+K.  Seed both.
+    #     = call T (the computed R) returning to entry+K.  Seed both.  Without
+    #     the return seed the dispatcher skips the rest of the caller (it treats
+    #     an unlifted diabolus address as junk), which leaks the caller's frame.
     import capstone
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
     md.detail = True
     X = capstone.x86_const
     comp = 0
+    FULL = {'al': 'eax', 'cl': 'ecx', 'dl': 'edx', 'bl': 'ebx'}
+    REGNAMES = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi']
+
+    def gadget_value(pos, end, reg):
+        """Evaluate the instructions between `push R` and `xchg [esp],R` and
+        return the value R ends up with, or None if they are not a gadget.
+        The image uses these shapes (117 gadgets in all):
+            mov R,[X]; (not R); xor|add|sub R,[Y]
+            clc|stc; mov R,[X]; adc|sbb R,[Y]
+            mov R,[X]; push r2; mov r2,[Y]; ror|rol R,cl; pop r2
+        each optionally preceded by `dec dword [counter]; je trap`, a use
+        counter whose trap branch is not followed here."""
+        regs, saved, cf = {}, [], 0
+
+        def name(r):
+            n = md.reg_name(r)
+            return FULL.get(n, n)
+
+        def src(o):
+            if o.type == X.X86_OP_IMM:
+                v = o.imm & 0xffffffff
+            elif o.type == X.X86_OP_MEM and o.mem.base == 0 and o.mem.index == 0:
+                a = o.mem.disp & 0xffffffff
+                if not base <= a <= base + len(img) - 4:
+                    return None
+                v = rd32(a)
+            elif o.type == X.X86_OP_REG:
+                v = regs.get(name(o.reg))
+            else:
+                return None
+            if v is not None and o.size == 1:
+                v &= 0xff
+            return v
+
+        while pos < end:
+            ins = next(md.disasm(img[pos:pos + 15], base + pos), None)
+            if ins is None:
+                return None
+            ops, mn = ins.operands, ins.mnemonic
+            dst = name(ops[0].reg) if ops and ops[0].type == X.X86_OP_REG else None
+            if mn in ('clc', 'stc'):
+                cf = int(mn == 'stc')
+            elif mn == 'dec' and ops[0].type == X.X86_OP_MEM:
+                pass
+            elif mn == 'je':
+                pass
+            elif mn == 'push' and dst:
+                saved.append(regs.get(dst))
+            elif mn == 'pop' and dst and saved:
+                regs[dst] = saved.pop()
+            elif mn == 'mov' and dst:
+                regs[dst] = src(ops[1])
+                if regs[dst] is None:
+                    return None
+            elif mn in ('not', 'neg') and dst and regs.get(dst) is not None:
+                regs[dst] = (~regs[dst] if mn == 'not' else -regs[dst]) & 0xffffffff
+            elif mn in ('xor', 'add', 'sub', 'adc', 'sbb', 'ror', 'rol') and dst and regs.get(dst) is not None:
+                y, v = src(ops[1]), regs[dst]
+                if y is None:
+                    return None
+                if mn in ('ror', 'rol'):
+                    n = y & 31
+                    if mn == 'rol':
+                        n = (32 - n) & 31
+                    v = (v >> n | v << (32 - n)) & 0xffffffff
+                else:
+                    v = {'xor': v ^ y, 'add': v + y, 'sub': v - y,
+                         'adc': v + y + cf, 'sbb': v - y - cf}[mn] & 0xffffffff
+                regs[dst] = v
+            else:
+                return None
+            pos += ins.size
+        return regs.get(REGNAMES[reg]) if pos == end and not saved else None
     for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
         i = lo - base
         end = hi - base
@@ -154,41 +230,8 @@ def main():
                 st = p0 - back
                 if img[st] != 0x50 + reg:
                     continue
-                val = None
-                ok = True
-                pos = st + 1
-                while pos < p0 and ok:
-                    ins = next(md.disasm(img[pos:pos + 15], base + pos), None)
-                    if ins is None:
-                        ok = False
-                        break
-                    ops = ins.operands
-                    mn = ins.mnemonic
-
-                    def src(o):
-                        if o.type == X.X86_OP_IMM:
-                            return o.imm & 0xffffffff
-                        if o.type == X.X86_OP_MEM and o.mem.base == 0 and o.mem.index == 0:
-                            return rd32(o.mem.disp & 0xffffffff)
-                        return None
-                    if mn == 'mov' and len(ops) == 2 and ops[0].type == X.X86_OP_REG:
-                        val = src(ops[1])
-                    elif mn == 'not' and val is not None:
-                        val = ~val & 0xffffffff
-                    elif mn == 'neg' and val is not None:
-                        val = -val & 0xffffffff
-                    elif mn in ('xor', 'add', 'sub') and val is not None and len(ops) == 2:
-                        y = src(ops[1])
-                        if y is None:
-                            ok = False
-                        else:
-                            val = {'xor': val ^ y, 'add': val + y, 'sub': val - y}[mn] & 0xffffffff
-                    else:
-                        ok = False
-                    if val is None:
-                        ok = False
-                    pos += ins.size
-                if ok and pos == p0 and val is not None and exec_addr(val):
+                val = gadget_value(st + 1, p0, reg)
+                if val is not None and exec_addr(val):
                     seeds.add(val)
                     r = base + st + k
                     if exec_addr(r):
@@ -210,14 +253,32 @@ def main():
     seeds |= rdata | data | diab
     dataptr = len(seeds) - before
 
+    # 4. function pointers held in code: `push offset fn`, `mov reg, offset fn`,
+    #    `mov [mem], offset fn` (callbacks, thread entries, sort comparators).
+    #    Nothing calls them directly, so the call graph misses them; the first
+    #    one the boot needed was 0x8b4e80 (a sound-system callback).  Any 4 bytes
+    #    of code that hold the address of a 16-byte-aligned .text location
+    #    following padding or a return are taken as one.  A false hit only adds
+    #    an unreachable function.
+    before = len(seeds)
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        for off in range(lo - base, hi - base - 3):
+            v = struct.unpack_from('<I', img, off)[0]
+            if v & 0xF or not (TEXT_LO < v < TEXT_HI):
+                continue
+            o = v - base
+            if img[o - 1] in (0xCC, 0xC3, 0x90) or img[o - 3] == 0xC2:
+                seeds.add(v)
+    codeptr = len(seeds) - before
+
     with open(OUT, 'w') as f:
         for a in sorted(seeds):
             f.write('%08x\n' % a)
     print('seeds-boot: %d seeds (%d .text + %d diabolus thunk targets, '
           '%d push/ret continuations, %d new data pointers: '
-          '%d .rdata + %d .data + %d diabolus) -> %s'
+          '%d .rdata + %d .data + %d diabolus, %d new code immediates) -> %s'
           % (len(seeds), thunk_text, thunk_dia, cont, dataptr,
-             len(rdata), len(data), len(diab), OUT))
+             len(rdata), len(data), len(diab), codeptr, OUT))
 
 
 if __name__ == '__main__':
