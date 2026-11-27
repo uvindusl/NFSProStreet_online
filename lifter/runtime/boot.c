@@ -35,6 +35,8 @@ static void setup_teb(void) {
     MR32(PEB_BASE + 0x08) = 0x00400000u;      /* ImageBaseAddress    */
 }
 
+void null_dead_heap_pointers(void);
+
 static void *guest_main(void *arg) {
     (void)arg;
     mem_altstack_install();
@@ -51,6 +53,8 @@ static void *guest_main(void *arg) {
     c->ecx = 0x00ab47d4u;
     guest_call(c, 0x0063da30u);
     c->esp = STACK_HI - 0x1000u;
+
+    null_dead_heap_pointers();
 
     fprintf(stderr, "boot: calling entry 0x%08x  esp=0x%08x  teb=0x%08x\n",
             ENTRY_VA, c->esp, TEB_BASE);
@@ -141,6 +145,11 @@ static void overlay_original_headers(void) {
     fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
 }
 
+/* The original executable's .data, kept from repair_stale_lists() until
+ * null_dead_heap_pointers() has run. */
+static uint8_t *g_orig_data;
+static uint32_t g_orig_lo, g_orig_size;
+
 /* Relink the list headed at `a` to the nodes that are static objects in
  * [lo,hi).  Returns 0 if the list was intact (or empty), 1 if it is now
  * empty, 2 if it kept static nodes. */
@@ -218,7 +227,7 @@ static void repair_stale_lists(void) {
         int r = relink_list(a, lo, hi);
         if (r == 1) emptied++; else if (r == 2) relinked++;
     }
-    free(orig);
+    g_orig_data = orig; g_orig_lo = lo; g_orig_size = size;
 
     /* Heads that a static constructor links to themselves are zero in the
      * original executable, so the scan above cannot see them.  Code can: a
@@ -302,6 +311,51 @@ static void repair_stale_vectors(void) {
     }
     fprintf(stderr, "boot: %u inline vectors in .data, %u listed objects of the dumped heap (%u entries dropped)\n",
             vectors, fixed, dropped);
+}
+
+static int hex_digit(int c);
+static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
+
+/* Null the words of .data that are zero in the original executable and hold
+ * an address in the dumped process's heap (singletons, caches, loaded-asset
+ * pointers): that heap is not part of the image, so the game finds "already
+ * created" objects that are all zeros.
+ *
+ * Doing this for all of .data (about 6,700 words) breaks the boot before the
+ * window opens, so it is an experiment switch, not the default:
+ *   PROSTREET_NULL_STALE="0xLO-0xHI[,0xLO-0xHI...]"   ranges of .data to treat
+ * A pointer is kept when its target has content (boot code that builds an
+ * object at the dumped address runs before this). */
+void null_dead_heap_pointers(void) {
+    const char *v = getenv("PROSTREET_NULL_STALE");
+    if (g_orig_data && v && *v) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        const char *p = v;
+        while (*p) {
+            while (*p == ' ' || *p == ',') p++;
+            uint32_t r0 = 0, r1 = 0; const char *q = p;
+            if (!parse_hex_u32(p, &q, &r0) || *q != '-' || !parse_hex_u32(q + 1, &q, &r1)) break;
+            p = q;
+            if (r0 < lo) r0 = lo;
+            if (r1 > hi) r1 = hi;
+            unsigned nulled = 0, kept = 0;
+            for (uint32_t a = (r0 + 3u) & ~3u; a + 4u <= r1; a += 4) {
+                uint32_t w = MR32(a);
+                if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
+                if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
+                int live = 0;
+                for (uint32_t k = 0; k < 64u && !live; k += 4)
+                    live = mem_is_committed(w + k) && MR32(w + k) != 0;
+                if (live) { kept++; continue; }
+                MR32(a) = 0;
+                nulled++;
+            }
+            fprintf(stderr, "boot: PROSTREET_NULL_STALE %08x-%08x: %u dead heap pointers nulled, %u kept\n",
+                    r0, r1, nulled, kept);
+        }
+    }
+    free(g_orig_data);
+    g_orig_data = NULL;
 }
 
 static int hex_digit(int c) {
