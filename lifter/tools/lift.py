@@ -520,6 +520,14 @@ class Lifter:
             k = ins[pos]
             if k.mnemonic == 'cmp':
                 o = k.operands
+                if len(o) == 2 and o[0].type == X86_OP_MEM and o[0].size == 4 and o[1].type == X86_OP_IMM \
+                   and o[0].mem.base in (X86_REG_EBP, X86_REG_ESP) and not o[0].mem.index and not o[0].mem.segment:
+                    # unoptimised code keeps the index in a local: `cmp dword [ebp-8], n; ja`,
+                    # then `mov r, [ebp-8]; jmp [r*4+table]` (0x553dec).  The bound is on the
+                    # local; _jt_table ties it to the register.
+                    if any(x.mnemonic != 'nop' for x in between): return None
+                    held = j.address + j.size if j.mnemonic == 'ja' else j.operands[0].imm
+                    return ('mem', o[0].mem.base, o[0].mem.disp), o[1].imm & 0xffffffff, held
                 if len(o) != 2 or o[0].type != X86_OP_REG or o[0].reg not in R32: return None
                 if any(self._jt_writes(x, R32[o[0].reg]) for x in between): return None
                 if o[1].type == X86_OP_IMM:
@@ -548,7 +556,20 @@ class Lifter:
         alone; else None"""
         reg, n = bound
         if not ins or n > 1023: return None
-        for k in ins[:-1]:
+        pre = ins[:-1]
+        if isinstance(reg, tuple):
+            # the bound is on a stack local: the block must load it into the index register
+            _, mb, md_ = reg; reg = None
+            for q, k in enumerate(pre):
+                ko = k.operands
+                if k.mnemonic == 'mov' and len(ko) == 2 and ko[0].type == X86_OP_REG and ko[0].reg in R32 \
+                   and ko[1].type == X86_OP_MEM and ko[1].size == 4 and ko[1].mem.base == mb \
+                   and ko[1].mem.disp == md_ and not ko[1].mem.index:
+                    reg = ko[0].reg; pre = pre[q + 1:]
+                elif k.mnemonic not in self._JT_PASS and reg is None:
+                    return None
+            if reg is None: return None
+        for k in pre:
             if k.mnemonic == 'movzx' and len(k.operands) == 2 and k.operands[1].type == X86_OP_MEM and k.operands[1].size == 1 \
                and k.operands[0].type == X86_OP_REG and k.operands[0].reg in R32:
                 m = k.operands[1].mem
