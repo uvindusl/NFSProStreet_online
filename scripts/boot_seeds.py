@@ -229,34 +229,32 @@ def main():
                 return None
             pos += ins.size
         return regs.get(REGNAMES[reg]) if pos == end and not saved else None
+    # the swap is `xchg [esp],R`, or the same thing as three xors
+    swaps = (re.compile(rb'\x87([\x04\x0c\x14\x1c\x2c\x34\x3c])\x24'),
+             re.compile(rb'\x33([\x04\x0c\x14\x1c\x2c\x34\x3c])\x24\x31\1\x24\x33\1\x24'))
     for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
-        i = lo - base
-        end = hi - base
-        while True:
-            m = re.compile(rb'\x87[\x04\x0c\x14\x1c\x2c\x34\x3c]\x24').search(img, i, end)
-            if not m:
-                break
-            p0 = m.start()
-            i = p0 + 1
-            reg = (img[p0 + 1] >> 3) & 7
-            if img[p0 + 3:p0 + 7] == b'\x83\x44\x24\x04' and img[p0 + 8] == 0xC3:
-                k = img[p0 + 7]
-            elif img[p0 + 3:p0 + 7] == b'\x81\x44\x24\x04' and img[p0 + 11] == 0xC3:
-                k = struct.unpack_from('<I', img, p0 + 7)[0]
-            else:
-                continue
-            for back in range(2, 48):
-                st = p0 - back
-                if img[st] != 0x50 + reg:
+        for pat in swaps:
+            for m in pat.finditer(img, lo - base, hi - base):
+                p0, p1 = m.start(), m.end()
+                reg = (m.group(1)[0] >> 3) & 7
+                if img[p1:p1 + 4] == b'\x83\x44\x24\x04' and img[p1 + 5] == 0xC3:
+                    k = img[p1 + 4]
+                elif img[p1:p1 + 4] == b'\x81\x44\x24\x04' and img[p1 + 8] == 0xC3:
+                    k = struct.unpack_from('<I', img, p1 + 4)[0]
+                else:
                     continue
-                val = gadget_value(st + 1, p0, reg)
-                if val is not None and exec_addr(val):
-                    seeds.add(val)
-                    r = base + st + k
-                    if exec_addr(r):
-                        seeds.add(r)
-                    comp += 1
-                    break
+                for back in range(2, 48):
+                    st = p0 - back
+                    if img[st] != 0x50 + reg:
+                        continue
+                    val = gadget_value(st + 1, p0, reg)
+                    if val is not None and exec_addr(val):
+                        seeds.add(val)
+                        r = base + st + k
+                        if exec_addr(r):
+                            seeds.add(r)
+                        comp += 1
+                        break
     cont += comp
 
     # 2c. SecuROM computed jump:  push R; <compute R>; xchg [esp],R; ret
