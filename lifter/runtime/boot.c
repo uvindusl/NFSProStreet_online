@@ -141,7 +141,7 @@ static void overlay_original_headers(void) {
     size_t n = fread(hdr, 1, sizeof hdr, f);
     fclose(f);
     uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
-    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || peoff + 0x78 > n ||
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x78 > n ||
         *(uint32_t *)(hdr + peoff) != 0x00004550u) {
         fprintf(stderr, "boot: %s is not a PE image, keeping the artifact's PE headers\n", path);
         return;
@@ -239,7 +239,7 @@ static void repair_stale_lists(void) {
     uint8_t hdr[0x1000];
     size_t n = fread(hdr, 1, sizeof hdr, f);
     uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
-    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || peoff + 0x100 > n) { fclose(f); return; }
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x100 > n) { fclose(f); return; }
     uint16_t nsec = *(uint16_t *)(hdr + peoff + 6);
     uint8_t *sh = hdr + peoff + 24 + *(uint16_t *)(hdr + peoff + 20);
     uint32_t lo = 0, size = 0, raw = 0;

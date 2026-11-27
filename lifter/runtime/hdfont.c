@@ -40,7 +40,7 @@ static int font_size(uint32_t ti, uint32_t *w, uint32_t *h) {
 
 /* Called before the instruction at ip; each site follows a width or height read. */
 int hdfont_hook(CPU *c, uint32_t ip) {
-    static uint32_t ti;                 /* sub_005a1720 / sub_005a1970: edx is overwritten by the height read */
+    static _Thread_local uint32_t ti;   /* sub_005a1720 / sub_005a1970: edx is overwritten by the height read; per guest thread */
     uint32_t w, h;
     switch (ip) {
     case HOOK_SITE(0x00700618): if (font_size(c->esi, &w, &h)) c->edi = w; return 1;   /* edi = [esi+0x28] */

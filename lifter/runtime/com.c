@@ -802,7 +802,8 @@ int com_call(CPU *c, uint32_t magic) {
                         keys[nkeys].key = (int)strtol(end + 1, &end, 10);
                         keys[nkeys].len = 10;
                         if (*end == '+') keys[nkeys].len = strtol(end + 1, &end, 10);
-                        nkeys++;
+                        /* scan codes 0-255, mouse buttons 256-263: skip anything else */
+                        if (keys[nkeys].key >= 0 && keys[nkeys].key < 264 && keys[nkeys].len > 0) nkeys++;
                         e = *end == ',' ? end + 1 : "";
                     }
                 }
