@@ -167,8 +167,9 @@ def main():
             mov R,[X]; (not R); xor|add|sub R,[Y]
             clc|stc; mov R,[X]; adc|sbb R,[Y]
             mov R,[X]; push r2; mov r2,[Y]; ror|rol R,cl; pop r2
-        each optionally preceded by `dec dword [counter]; je trap`, a use
-        counter whose trap branch is not followed here."""
+        each optionally preceded by a use counter, `dec dword [counter]; je trap`
+        or `lea R,[a]; sub R,b; dec dword [R]; je trap`, whose trap branch is
+        not followed here."""
         regs, saved, cf = {}, [], 0
 
         def name(r):
@@ -206,6 +207,10 @@ def main():
                 pass                    # filler on a register the gadget does not use
             elif mn == 'dec' and ops[0].type == X.X86_OP_MEM:
                 pass
+            elif mn == 'lea' and dst and ops[1].mem.base == 0 and ops[1].mem.index == 0:
+                # the use counter addressed through the gadget's own register:
+                # lea R,[imm]; sub R,imm; dec dword [R]; je trap   (0x19fdfc8)
+                regs[dst] = ops[1].mem.disp & 0xffffffff
             elif mn == 'je':
                 pass
             elif mn == 'push' and dst:
