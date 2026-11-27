@@ -1135,9 +1135,10 @@ static void sub_019fee40_impl(CPU *restrict c) {
     c->eip = ret_addr;
 }
 
-/* Lifted function at a diabolus-section address, or NULL.  The table is sorted
- * by dispatch_init(). */
-static guest_fn_t diabolus_lookup(uint32_t a) {
+/* Hand-written stand-in for a diabolus-section address, or NULL.  These were
+ * written when the lift of SecuROM's relocated functions dropped their
+ * obfuscated calls; they follow the old lift's stack conventions. */
+static guest_fn_t diabolus_impl(uint32_t a) {
     if (a == 0x019f4580) return sub_019f4580_impl;
     if (a == 0x019fee40) return sub_019fee40_impl;
     if (a == 0x016be884) return sub_016be884_impl;
@@ -1155,14 +1156,43 @@ static guest_fn_t diabolus_lookup(uint32_t a) {
     if (a == 0x01a01120) return sub_01a01120_impl;
     if (a == 0x01a0114c) return sub_01a0114c_impl;
     if (a == 0x019f7630) return sub_019f7630_impl;
+    return NULL;
+}
+
+/* PROSTREET_FORCE_OVERRIDE="0xADDR[,...]" or "all": prefer the hand-written
+ * function at these addresses even when a lifted one exists. */
+static int override_forced(uint32_t a) {
+    static const char *force;
+    static int read;
+    if (!read) { force = getenv("PROSTREET_FORCE_OVERRIDE"); read = 1; }
+    if (!force) return 0;
+    char key[16];
+    snprintf(key, sizeof key, "0x%x", a);
+    return !strcmp(force, "all") || strstr(force, key) != NULL;
+}
+
+/* Function to run for a diabolus-section address, or NULL.  The lifted
+ * function wins; a stand-in is only for an address the lift lacks.  (The one
+ * for 0x01a01120, the pool constructor, popped 0x14 bytes too many once its
+ * callees were lifted properly: the pool behind sub_004313f0 was never
+ * stored and its allocations returned null.)  The table is sorted by
+ * dispatch_init(). */
+static guest_fn_t diabolus_lookup(uint32_t a) {
+    guest_fn_t lifted = NULL;
     uint32_t lo = 0, hi = g_diab_count;
     while (lo < hi) {
         uint32_t m = (lo + hi) / 2;
         if (g_diab_addr[m] < a) lo = m + 1;
         else if (g_diab_addr[m] > a) hi = m;
-        else return g_diab_fn[m];
+        else { lifted = g_diab_fn[m]; break; }
     }
-    return NULL;
+    guest_fn_t impl = diabolus_impl(a);
+    /* 0x016ba000 is the exception: SecuROM's table dispatcher ends in
+     * `popal; jmp [esp-0x28]`, reading a slot below the stack pointer that the
+     * lift does not keep, so its lifted form jumps to 0.  Bypassing each of
+     * the other 16 stand-ins, one at a time, leaves the boot unchanged. */
+    if (impl && (!lifted || a == 0x016ba000u || override_forced(a))) return impl;
+    return lifted;
 }
 
 static uint32_t nearest_fn(uint32_t a) {
