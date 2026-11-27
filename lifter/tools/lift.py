@@ -900,6 +900,22 @@ class Lifter:
                             "  if (c->eip == _r) dispatch_indirect(c, _r); }",
                             "return;"]
             if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # The same call with the return address fixed up before the target
+                # is pushed: `add dword [esp], K; push R; (nop); ret` (0x1a11479,
+                # which calls the trigger handler 0x10f8d70 from sub_01a11420).
+                end_ = i.address
+                while self.fetch(end_ - 1, 1) == b'\x90': end_ -= 1
+                p1 = self.fetch(end_ - 1, 1)
+                q5 = self.fetch(end_ - 5, 4); q8 = self.fetch(end_ - 8, 3)
+                if len(p1) == 1 and 0x50 <= p1[0] <= 0x57 and p1[0] != 0x54 and (
+                        (len(q5) == 4 and q5[:3] == bytes([0x83, 0x04, 0x24]))
+                        or (len(q8) == 3 and q8 == bytes([0x81, 0x04, 0x24]))):
+                    return ["POP32(c->eip);",
+                            "{ uint32_t _t = c->eip, _r = MR32(c->esp);",
+                            "  dispatch_indirect(c, _t);",
+                            "  if (c->eip == _r) dispatch_indirect(c, _r); }",
+                            "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
                 # SecuROM computed jump: `push R; <compute R>; xchg [esp],R; ret` puts a
                 # computed target where R was saved and "returns" to it, i.e. `jmp T`
                 # with R restored.  Variants: `xchg [esp+4],R; popfd; ret` (flags saved

@@ -301,6 +301,27 @@ def main():
                         seeds.add(base + st + k)
                     comp += 1
                     break
+    # 2b''. The same again with the return address fixed up first:
+    #     <compute R>; add dword [esp],K; push R; (nop); ret
+    #     (0x1a11479, entered by `push A; push A; ret`: calls the trigger
+    #     handler 0x10f8d70 and returns to A+K).
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        for m in re.compile(rb'(?:\x83\x04\x24(.)|\x81\x04\x24(....))([\x50-\x57])\x90*\xc3', re.S).finditer(img, lo - base, hi - base):
+            p0 = m.start()
+            reg = m.group(3)[0] - 0x50
+            k = m.group(1)[0] if m.group(1) else struct.unpack('<I', m.group(2))[0]
+            for back in range(2, 48):
+                st = p0 - back
+                entry = struct.pack('<I', base + st)
+                if img.find(b'\x68' + entry, st - 64, st) < 0:
+                    continue
+                val = gadget_value(st, p0, reg)
+                if val is not None and exec_addr(val):
+                    seeds.add(val)
+                    if exec_addr(base + st + k):
+                        seeds.add(base + st + k)
+                    comp += 1
+                    break
     cont += comp - _comp0
 
     # 2c. SecuROM computed jump:  push R; <compute R>; xchg [esp],R; ret
