@@ -387,58 +387,11 @@ static void sub_019f7630_impl(CPU *restrict c) {
  * stand-in is gone. */
 void sub_004591a0(CPU *restrict c);
 
-static void sub_01a006ec_impl(CPU *restrict c) {
-    c->eax = c->edi;
-    c->ecx = MR32(c->esp + 0x1c);
-    MR32(c->fs_base) = c->ecx;
-    POP32(c->ecx);
-    POP32(c->edi);
-    POP32(c->esi);
-    POP32(c->ebp);
-    POP32(c->ebx);
-    c->esp += 0x14;
-    POP32(c->eip);
-}
-
-static void sub_01a006b8_impl(CPU *restrict c) {
-    c->eax = 0x1a6f89c - 0x4c00;
-    if (mem_is_committed(c->eax) && --MR32(c->eax) == 0) {
-        dispatch_indirect(c, 0x00556a04);
-        return;
-    }
-    c->eax = MR32(c->esp + 0x14);
-    if (c->eax != 0) {
-        c->esi = MR32(c->edi + 0x70);
-        PUSH32(0x1a006ecu);
-        dispatch_indirect(c, 0x004596c0);
-        return;
-    }
-    sub_01a006ec_impl(c);
-}
-
-static void sub_01a00674_impl(CPU *restrict c) {
-    uint32_t a = 0x1a61c0e;
-    if (mem_is_committed(a + 0x9088)) {
-        MR32(a + 0x9088)--;
-        if (MR32(a + 0x9088) == 0) {
-            dispatch_indirect(c, 0x00546832);
-            return;
-        }
-    }
-    c->ecx = MR32(c->esp + 0x2c);
-    MR32(c->esp + 0x24) = 0xffffffff;
-    MR32(c->edi + 0x70) = c->eax;
-    if (c->ecx == 0) {
-        sub_01a006b8_impl(c);
-        return;
-    }
-    PUSH32(c->ebx);
-    PUSH32(c->ebp);
-    PUSH32(c->eax);
-    c->eax = c->ecx;
-    PUSH32(0x1a006b8u);
-    dispatch_indirect(c, 0x004592e0);
-}
+/* The chunk-loader continuations 0x01a00674 / 0x01a006b8 / 0x01a006ec had
+ * hand-written stand-ins here.  They are lifted now (push/jmp and computed
+ * calls are seeded), and the stand-ins did not resume the continuation after
+ * `push 0x1a006b8; jmp 0x4592e0`, which left sub_01a00510's frame on the stack
+ * and faulted in sub_00458f80 while loading GLOBALA.BUN. */
 
 /* sub_005310e0 is called indirectly via DISPATCH_CALL from sub_0052eda0
  * during attribute registration (vtable method index 2; __thiscall with this
@@ -1180,9 +1133,6 @@ static guest_fn_t diabolus_lookup(uint32_t a) {
     if (a == 0x01a01120) return sub_01a01120_impl;
     if (a == 0x01a0114c) return sub_01a0114c_impl;
     if (a == 0x019f7630) return sub_019f7630_impl;
-    if (a == 0x01a00674) return sub_01a00674_impl;
-    if (a == 0x01a006b8) return sub_01a006b8_impl;
-    if (a == 0x01a006ec) return sub_01a006ec_impl;
     uint32_t lo = 0, hi = g_diab_count;
     while (lo < hi) {
         uint32_t m = (lo + hi) / 2;
