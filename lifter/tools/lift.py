@@ -506,7 +506,13 @@ class Lifter:
     # (the SSE moves too: 0x634c4c is `cmp eax,4; movss [..],xmm0 x4; ja; jmp [eax*4+table]`)
     _JT_PASS = frozenset(('mov', 'movzx', 'movsx', 'push', 'pop', 'lea', 'nop',
                           'movss', 'movsd', 'movaps', 'movups', 'movd', 'movq', 'movdqa', 'movdqu',
-                          'movlps', 'movhps'))
+                          'movlps', 'movhps',
+                          # x87 and SSE arithmetic leave EFLAGS alone too (0x5bdfe2:
+                          # `cmp eax,0xb; fstp; fld; ...; fabs; fstp; ja; movzx; jmp [eax*4+table]`)
+                          'fld', 'fst', 'fstp', 'fild', 'fist', 'fistp', 'fabs', 'fchs', 'fxch',
+                          'fld1', 'fldz', 'fadd', 'faddp', 'fsub', 'fsubp', 'fsubr', 'fsubrp',
+                          'fmul', 'fmulp', 'fdiv', 'fdivp', 'fdivr', 'fdivrp',
+                          'xorps', 'addss', 'subss', 'mulss', 'divss', 'cvtss2sd', 'cvtsd2ss'))
     def _jt_writes(self, i, fam):
         """does i write any part of the register family fam ('eax', ...)?"""
         try: return any((R32.get(r) or R16.get(r) or R8L.get(r) or R8H.get(r)) == fam for r in i.regs_access()[1])
