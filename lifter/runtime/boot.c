@@ -996,6 +996,16 @@ int main(int argc, char **argv) {
         for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
             if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
     }
+    /* Two frontend std::vectors {begin, end, capacity} at 0x00ab2a00 and
+     * 0x00ab2a58 (zero in the original executable; filled by sub_0060b070 /
+     * sub_0060b030, walked by sub_005aae20 through obj+0xac).  The dump's
+     * pointers name its heap at 0x033xxxxx, which this run's allocator hands
+     * out again, so the generic pass above keeps them as live; accepting the
+     * title screen then called through garbage (sub_005ab1b0). */
+    if (mem_is_committed(0x00ab2a00)) {
+        memset(g_mem + 0x00ab2a00, 0, 12);
+        memset(g_mem + 0x00ab2a58, 0, 12);
+    }
 
     apply_set_env();
 
