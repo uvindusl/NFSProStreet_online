@@ -101,15 +101,19 @@ static void overlay_clean_data(const char *pe, int argc, char **argv) {
  * the game stopped with "Out of Fastmem memory".  The running process had the
  * headers of the on-disk executable there, so take them from it:
  *   PROSTREET_HEADER_IMAGE=<path>, else <gamedir>/nfsps.exe. */
-static void overlay_original_headers(void) {
-    char path[4096];
+static void original_exe_path(char *path, size_t n) {
     const char *h = getenv("PROSTREET_HEADER_IMAGE");
     if (h && *h) {
-        snprintf(path, sizeof path, "%s", h);
+        snprintf(path, n, "%s", h);
     } else {
         const char *d = getenv("PROSTREET_GAMEDIR");
-        snprintf(path, sizeof path, "%s/nfsps.exe", (d && *d) ? d : "game");
+        snprintf(path, n, "%s/nfsps.exe", (d && *d) ? d : "game");
     }
+}
+
+static void overlay_original_headers(void) {
+    char path[4096];
+    original_exe_path(path, sizeof path);
     FILE *f = fopen(path, "rb");
     if (!f) {
         fprintf(stderr, "boot: no original executable at %s, keeping the artifact's PE headers "
@@ -135,6 +139,80 @@ static void overlay_original_headers(void) {
     if (size_hdr > n) size_hdr = (uint32_t)n;
     memcpy(g_mem + image_base, hdr, size_hdr);
     fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
+}
+
+/* Repair the intrusive lists whose chain leaves the image.
+ *
+ * The artifact's .data is a snapshot of a running process, so a list head
+ * there can link to nodes in that process's heap, which the image does not
+ * contain.  Walking such a list reads whatever this run has at those
+ * addresses (sub_00455110 faulted on the list at 0x00a9e04c).  The original
+ * executable tells us where the list heads are: an empty head is two
+ * pointers to itself, {X, X} at X.  For each one that is not empty in the
+ * dump, keep the nodes that are static objects in .data (they were linked by
+ * static constructors, which do not run again) and drop the rest. */
+static void repair_stale_lists(void) {
+    char path[4096];
+    original_exe_path(path, sizeof path);
+    FILE *f = fopen(path, "rb");
+    if (!f) return;                         /* overlay_original_headers already said so */
+    uint8_t hdr[0x1000];
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || peoff + 0x100 > n) { fclose(f); return; }
+    uint16_t nsec = *(uint16_t *)(hdr + peoff + 6);
+    uint8_t *sh = hdr + peoff + 24 + *(uint16_t *)(hdr + peoff + 20);
+    uint32_t lo = 0, size = 0, raw = 0;
+    for (uint16_t i = 0; i < nsec && (size_t)(sh - hdr) + 40 <= n; i++, sh += 40) {
+        if (!memcmp(sh, ".data\0\0\0", 8)) {
+            uint32_t vsize = *(uint32_t *)(sh + 8), rsize = *(uint32_t *)(sh + 16);
+            lo = 0x400000u + *(uint32_t *)(sh + 12);
+            size = rsize < vsize ? rsize : vsize;
+            raw = *(uint32_t *)(sh + 20);
+        }
+    }
+    uint8_t *orig = size ? malloc(size) : NULL;
+    if (!orig || fseek(f, (long)raw, SEEK_SET) != 0 || fread(orig, 1, size, f) != size ||
+        !mem_is_committed(lo) || !mem_is_committed(lo + size - 1)) {
+        fclose(f); free(orig); return;
+    }
+    fclose(f);
+    uint32_t hi = lo + size;
+#define IN_DATA(p) ((p) >= lo && (p) + 8u <= hi)
+    enum { MAXN = 4096 };
+    static uint32_t fwd[MAXN], bwd[MAXN];
+    unsigned heads = 0, emptied = 0, relinked = 0;
+    for (uint32_t a = lo; a + 8u <= hi; a += 4) {
+        if (*(uint32_t *)(orig + (a - lo)) != a || *(uint32_t *)(orig + (a - lo) + 4) != a) continue;
+        heads++;
+        if (MR32(a) == a && MR32(a + 4) == a) continue;
+        unsigned nf = 0, nb = 0;
+        uint32_t p = MR32(a);
+        while (p != a && IN_DATA(p) && nf < MAXN) { fwd[nf++] = p; p = MR32(p); }
+        if (p == a) continue;               /* every node is in the image: the list is intact */
+        p = MR32(a + 4);
+        while (p != a && IN_DATA(p) && nb < MAXN) {
+            unsigned k = 0;
+            while (k < nf && fwd[k] != p) k++;
+            if (k < nf) break;
+            bwd[nb++] = p; p = MR32(p + 4);
+        }
+        /* head -> fwd[0..] -> bwd[nb-1..0] -> head */
+        uint32_t prev = a;
+        for (unsigned k = 0; k < nf + nb; k++) {
+            uint32_t node = k < nf ? fwd[k] : bwd[nb - 1 - (k - nf)];
+            MR32(prev) = node;
+            MR32(node + 4) = prev;
+            prev = node;
+        }
+        MR32(prev) = a;
+        MR32(a + 4) = prev;
+        if (nf + nb) relinked++; else emptied++;
+    }
+#undef IN_DATA
+    free(orig);
+    fprintf(stderr, "boot: %u list heads in .data, %u pointed into the dumped heap: %u emptied, "
+                    "%u relinked to their static nodes\n", heads, emptied + relinked, emptied, relinked);
 }
 
 static int hex_digit(int c) {
@@ -266,6 +344,7 @@ int main(int argc, char **argv) {
     if (mem_load_pe(pe)) return 1;
     overlay_clean_data(pe, argc, argv);
     overlay_original_headers();
+    repair_stale_lists();
     apply_zero_env();
 
     /* Initialize Pool descriptor circular sentinels to clean empty state */
