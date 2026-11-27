@@ -12,8 +12,10 @@ import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = path.join(REPO, 'out/web/test'); fs.mkdirSync(OUT, { recursive: true });
-const sources = execFileSync('bash', [path.join(REPO, 'tools/genstamp.sh'), 'sources'], { encoding: 'utf8' }).trim();
-const orig = execFileSync('bash', [path.join(REPO, 'tools/genstamp.sh'), 'overrides'], { encoding: 'utf8' }).trim().split(',').filter(Boolean);
+const haveBash = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0;
+const skip = !haveBash && 'no bash';
+const sources = haveBash ? execFileSync('bash', [path.join(REPO, 'tools/genstamp.sh'), 'sources'], { encoding: 'utf8' }).trim() : '';
+const orig = haveBash ? execFileSync('bash', [path.join(REPO, 'tools/genstamp.sh'), 'overrides'], { encoding: 'utf8' }).trim().split(',').filter(Boolean) : [];
 const STAMP = `# gen.sh 2026-10-18T00:00:00Z: what gen/all and gen/server were lifted from\n${sources}\nexe 0 server.dll 0\noptions X87PC=1 X87OPT=1 FLAGABI=0\n`;
 
 /** a fake gen dir: decls.h with the runtime's _orig declarations, and the given stamps */
@@ -28,13 +30,13 @@ function gen(name, { all = STAMP, server = all, decls = orig } = {}) {
 }
 const check = (g, env = {}) => spawnSync('bash', [path.join(REPO, 'web/tools/gencheck.sh')], { cwd: REPO, encoding: 'utf8', timeout: 120_000, env: { ...process.env, GEN: g, ...env } });
 
-test('gencheck: a gen stamped from this checkout passes', () => {
+test('gencheck: a gen stamped from this checkout passes', { skip }, () => {
   const r = check(gen('ok'));
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(r.stdout, '');
 });
 
-test('gencheck: another hook list, override list or lifter is refused, and says which', () => {
+test('gencheck: another hook list, override list or lifter is refused, and says which', { skip }, () => {
   for (const [k, what] of [['hooks', /hook list/], ['overrides', /override list/], ['lifter', /lifter \(tools\/lift\.py/]]) {
     const stale = STAMP.replace(new RegExp(`^${k} \\S+`, 'm'), `${k} 0000000000000000`);
     const r = check(gen(`stale-${k}`, { all: stale }));
@@ -47,7 +49,7 @@ test('gencheck: another hook list, override list or lifter is refused, and says 
   }
 });
 
-test('gencheck: an unfinished lift, a gen/server from another run, missing _orig declarations are refused', () => {
+test('gencheck: an unfinished lift, a gen/server from another run, missing _orig declarations are refused', { skip }, () => {
   let r = check(gen('incomplete', { all: 'incomplete: gen.sh has not finished (or failed)\n', server: null }));
   assert.equal(r.status, 1); assert.match(r.stdout, /not a finished lift/);
   r = check(gen('server', { server: STAMP.replace('2026-10-18T00:00:00Z', '2026-10-17T00:00:00Z') }));
@@ -58,13 +60,13 @@ test('gencheck: an unfinished lift, a gen/server from another run, missing _orig
   assert.equal(r.status, 1); assert.match(r.stdout, /older than the runtime/);
 });
 
-test('gencheck: a gen without a stamp (made before stamps) gets a note only', () => {
+test('gencheck: a gen without a stamp (made before stamps) gets a note only', { skip }, () => {
   const r = check(gen('nostamp', { all: null, server: null }));
   assert.equal(r.status, 0, r.stdout);
   assert.match(r.stdout, /has no stamp/);
 });
 
-test('a plain ./gen.sh drops web-lift.txt and leaves gen/all unstamped until it finishes', () => {
+test('a plain ./gen.sh drops web-lift.txt and leaves gen/all unstamped until it finishes', { skip }, () => {
   // gen.sh in a copy of the checkout's scripts and runtime sources; it fails
   // at its first lifter step (no Python there), after its preamble
   const t = path.join(OUT, 'gencheck-gensh');
@@ -84,7 +86,7 @@ test('a plain ./gen.sh drops web-lift.txt and leaves gen/all unstamped until it 
   assert.match(fs.readFileSync(path.join(t, 'gen/all/stamp.txt'), 'utf8'), /^incomplete/);
 });
 
-test('web/gen.sh refuses to lift through a worktree\'s link to the shared gen', () => {
+test('web/gen.sh refuses to lift through a worktree\'s link to the shared gen', { skip }, () => {
   const t = path.join(OUT, 'gencheck-shared');
   fs.rmSync(t, { recursive: true, force: true });
   fs.mkdirSync(path.join(t, 'web'), { recursive: true }); fs.mkdirSync(path.join(t, 'shared/all'), { recursive: true }); fs.mkdirSync(path.join(t, 'gen'));

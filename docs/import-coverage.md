@@ -8,7 +8,7 @@
 | DLL | Import count in game | Implemented in win32.c |
 |---|---|---|
 | `kernel32.dll` | 89 | 89 |
-| `msvcr80.dll` | 156 | 155 |
+| `msvcr80.dll` | 156 | 156 |
 | `msvcp80.dll` | 3 | 3 |
 | `user32.dll` | 39 | 39 |
 | `dsound.dll` | 1 | 1 |

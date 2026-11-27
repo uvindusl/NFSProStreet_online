@@ -69,8 +69,11 @@ def main():
         raise SystemExit(f"usage: {sys.argv[0]} <nfs.exe.unpacked>")
 
     path = sys.argv[1]
-    with open(path, "rb") as f:
-        data = f.read()
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as exc:
+        raise SystemExit(f"cannot read {path}: {exc}")
 
     print(f"target: {path}")
     print("\nidentity")
