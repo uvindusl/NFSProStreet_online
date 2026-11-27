@@ -47,7 +47,9 @@ enum {
     IMP_PEEK_MESSAGE_A,
     IMP_GET_MESSAGE_A,
     IMP_DISPATCH_MESSAGE_A,
+    IMP_TRANSLATE_MESSAGE,
     IMP_POST_QUIT_MESSAGE,
+    IMP_POST_MESSAGE_A,
     IMP_GET_FOREGROUND_WINDOW,
     IMP_GET_DESKTOP_WINDOW,
     IMP_TEST_COUNT
@@ -60,9 +62,11 @@ const ImpEnt g_imp[] = {
     [IMP_PEEK_MESSAGE_A]        = {TEST_IAT_BASE + 3 * 4, "USER32.dll", "PeekMessageA", 5},
     [IMP_GET_MESSAGE_A]         = {TEST_IAT_BASE + 4 * 4, "USER32.dll", "GetMessageA", 4},
     [IMP_DISPATCH_MESSAGE_A]    = {TEST_IAT_BASE + 5 * 4, "USER32.dll", "DispatchMessageA", 1},
-    [IMP_POST_QUIT_MESSAGE]     = {TEST_IAT_BASE + 6 * 4, "USER32.dll", "PostQuitMessage", 1},
-    [IMP_GET_FOREGROUND_WINDOW] = {TEST_IAT_BASE + 7 * 4, "USER32.dll", "GetForegroundWindow", 0},
-    [IMP_GET_DESKTOP_WINDOW]    = {TEST_IAT_BASE + 8 * 4, "USER32.dll", "GetDesktopWindow", 0},
+    [IMP_TRANSLATE_MESSAGE]     = {TEST_IAT_BASE + 6 * 4, "USER32.dll", "TranslateMessage", 1},
+    [IMP_POST_QUIT_MESSAGE]     = {TEST_IAT_BASE + 7 * 4, "USER32.dll", "PostQuitMessage", 1},
+    [IMP_POST_MESSAGE_A]        = {TEST_IAT_BASE + 8 * 4, "USER32.dll", "PostMessageA", 4},
+    [IMP_GET_FOREGROUND_WINDOW] = {TEST_IAT_BASE + 9 * 4, "USER32.dll", "GetForegroundWindow", 0},
+    [IMP_GET_DESKTOP_WINDOW]    = {TEST_IAT_BASE + 10 * 4, "USER32.dll", "GetDesktopWindow", 0},
 };
 const uint32_t g_imp_count = IMP_TEST_COUNT;
 
@@ -224,6 +228,13 @@ int main(void) {
     ASSERT_EQ(s_mock_wndproc_called, 1u, "DispatchMessageA invoked mock wndproc");
     ASSERT_EQ(s_last_wm_msg, 0x0018u, "WndProc received WM_SHOWWINDOW");
     ASSERT_EQ(c->eax, 42u, "DispatchMessageA returned wndproc return value");
+
+    /* TranslateMessage on WM_SHOWWINDOW (non-key message) returns 0 */
+    c->esp = stack_base;
+    PUSH32(msg_struct);
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_TRANSLATE_MESSAGE);
+    ASSERT_EQ(c->eax, 0u, "TranslateMessage on non-key message returns 0");
 
     /* Drain queue: WM_ACTIVATEAPP (0x1C), WM_ACTIVATE (0x06), WM_SETFOCUS (0x07), WM_PAINT (0x0F) */
     for (int i = 0; i < 4; i++) {
@@ -420,6 +431,58 @@ int main(void) {
     win32_call(c, IMP_PEEK_MESSAGE_A);
     ASSERT_EQ(c->eax, 1u, "Popped remaining message");
     ASSERT_EQ(MR32(msg_struct + 4), 0x0100u, "Extracted WM_KEYDOWN (0x0100)");
+
+    /* TranslateMessage on WM_KEYDOWN (0x0100) returns 1 and pushes WM_CHAR (0x0102) */
+    c->esp = stack_base;
+    PUSH32(msg_struct);
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_TRANSLATE_MESSAGE);
+    ASSERT_EQ(c->eax, 1u, "TranslateMessage on WM_KEYDOWN returns 1");
+
+    /* Pop translated WM_CHAR message */
+    c->esp = stack_base;
+    PUSH32(1u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PeekMessageA popped translated character message");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0102u, "Message is WM_CHAR (0x0102)");
+    ASSERT_EQ(MR32(msg_struct + 8), 0x41u, "Char is 'A' (0x41)");
+
+    /* Test TranslateMessage with non-character key like VK_LEFT (0x25) -> returns 1 but no WM_CHAR */
+    MR32(msg_struct + 4) = 0x0100u; /* WM_KEYDOWN */
+    MR32(msg_struct + 8) = 0x25u;   /* VK_LEFT */
+    c->esp = stack_base;
+    PUSH32(msg_struct);
+    PUSH32(0x12345678u);
+    win32_call(c, IMP_TRANSLATE_MESSAGE);
+    ASSERT_EQ(c->eax, 1u, "TranslateMessage on VK_LEFT returns 1");
+
+    /* Queue should have no WM_CHAR */
+    c->esp = stack_base;
+    PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 0u, "No WM_CHAR emitted for non-character key VK_LEFT");
+
+    /* Test PostMessageA with invalid hWnd */
+    c->esp = stack_base;
+    PUSH32(0u); PUSH32(0u); PUSH32(0x0400u); PUSH32(0xDEADBEEFu); PUSH32(0x12345678u);
+    win32_call(c, IMP_POST_MESSAGE_A);
+    ASSERT_EQ(c->eax, 0u, "PostMessageA with invalid hWnd returns 0");
+
+    /* Test PostMessageA with valid hWnd */
+    c->esp = stack_base;
+    PUSH32(0x9999u);        /* lParam */
+    PUSH32(0x8888u);        /* wParam */
+    PUSH32(0x0400u);        /* Msg = WM_USER */
+    PUSH32(0x00B00001u);    /* hWnd */
+    PUSH32(0x12345678u);    /* ret addr */
+    win32_call(c, IMP_POST_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PostMessageA returned 1");
+
+    c->esp = stack_base;
+    PUSH32(1u); PUSH32(0u); PUSH32(0u); PUSH32(0u); PUSH32(msg_struct); PUSH32(0x12345678u);
+    win32_call(c, IMP_PEEK_MESSAGE_A);
+    ASSERT_EQ(c->eax, 1u, "PeekMessageA retrieved posted message");
+    ASSERT_EQ(MR32(msg_struct + 4), 0x0400u, "Retrieved WM_USER (0x0400)");
 
     printf("\nAll runtime lifecycle tests passed successfully (100%% production code exercised)!\n");
     return 0;
