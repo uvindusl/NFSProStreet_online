@@ -68,6 +68,12 @@ static void *guest_main(void *arg) {
     c->ecx = 0x00ab47d4u;
     guest_call(c, 0x0063da30u);
     c->esp = STACK_HI - 0x1000u;
+    /* the two vector-holding statics at 0x0100e0b0 / 0x0100e358 (constructors
+     * sub_004db210 / sub_004db4d0, plus their atexit registrations) */
+    guest_call(c, 0x00959670u);
+    c->esp = STACK_HI - 0x1000u;
+    guest_call(c, 0x00959690u);
+    c->esp = STACK_HI - 0x1000u;
 
     fprintf(stderr, "boot: calling entry 0x%08x  esp=0x%08x  teb=0x%08x\n",
             ENTRY_VA, c->esp, TEB_BASE);
@@ -413,12 +419,22 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  *       each) from 0x00ab2e70 that sub_00635180 appends to without clearing.
  *       With the dump's counts the appends overran a record and sub_0063a340
  *       indexed the table with garbage when the main menu first loaded.
+ *   0x0100e0b0-0x0100e440: two statically constructed objects holding
+ *       fixed-capacity vectors (vtables 0x009f9d38 / 0x009f9e00, 0x28 and 0xc
+ *       entries) that the dump left with live entries of its heap; rebuilt in
+ *       guest_main by their static initializers.  The first race load freed
+ *       those entries through their vtables (sub_004db2b0) and faulted.
+ *   0x00ae3320-0x00ae3350: a streaming subsystem's statics (a buffer that
+ *       sub_00743400 frees, the pool sub_00743430 creates on first use, an
+ *       array and its count): all pointers into the dumped heap and arena.
+ *       The first race load freed the buffer and the allocator asserted on a
+ *       block it never handed out (sub_00436130).
  * More ranges for experiments: PROSTREET_RESTORE="0xLO-0xHI[,...]". */
 static void restore_original_ranges(void) {
     if (!g_orig_data) return;
     char ranges[512];
     const char *env = getenv("PROSTREET_RESTORE");
-    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950%s%s",
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950,0x0100e0b0-0x0100e440,0x00ae3320-0x00ae3350%s%s",
              (env && *env) ? "," : "", (env && *env) ? env : "");
     uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
     const char *p = ranges;
@@ -1010,6 +1026,13 @@ int main(int argc, char **argv) {
      * sub_0055ff80: set in the dump, so the table at +0x38 of the new object
      * stayed empty and sub_0050b920 read through its null pointer. */
     if (mem_is_committed(0x00ab0f91)) MR8(0x00ab0f91) = 0;
+    /* 0x00aad020: the object chunk 0x37220's handler keeps between loads
+     * (set by sub_004e9e00 at 0x4e9fb5; sub_004e0620 destroys it through its
+     * vtable).  Zero in the original; the dump's pointer names memory this
+     * run hands out again, so the first race load called a "destructor" of
+     * whatever lives there, the chunk loader's stack came back 4 bytes off and
+     * it asserted on a chunk it read from the wrong slot (sub_006d2c70). */
+    if (mem_is_committed(0x00aad020)) MR32(0x00aad020) = 0;
     {
         static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
                                          0x00aba54cu, 0x00b34598u, 0x00ad07bcu, 0x00acfa6cu };
