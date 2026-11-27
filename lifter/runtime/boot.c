@@ -1033,6 +1033,42 @@ int main(int argc, char **argv) {
      * whatever lives there, the chunk loader's stack came back 4 bytes off and
      * it asserted on a chunk it read from the wrong slot (sub_006d2c70). */
     if (mem_is_committed(0x00aad020)) MR32(0x00aad020) = 0;
+    /* Track streamer statics (0x00ae3350-0x00ae6100) as the dump left them:
+     * its loaded-section slots (0x00ae34b4[], a 0x1c-byte node per loaded
+     * section), the section table pointer and count (0x00ae33a0/a4), buffers,
+     * and the free list of section nodes (circular, sentinel 0x00ae607c/80,
+     * in-use count 0x00ae6074; sub_0074c3e0 takes nodes from it, sub_0074ba60
+     * and sub_007479a0 give them back).  Every node lived in the dumped heap,
+     * which this run hands out again, so loading a race linked a node
+     * through a dead pointer.  The words that differ from the original and
+     * point outside the image are cleared, no section is loaded, and the
+     * free list gets 512 fresh nodes in this run's memory.  The self-linked
+     * static heads at 0x00ae3460-0x00ae3494 and the code pointers stay. */
+    if (g_orig_data && mem_is_committed(0x00ae6084)) {
+        unsigned cleared = 0;
+        for (uint32_t a = 0x00ae3350u; a < 0x00ae6100u; a += 4) {
+            uint32_t w = MR32(a), o = *(uint32_t *)(g_orig_data + (a - g_orig_lo));
+            if (w != o && w >= 0x01aa8000u && w < 0x30000000u) { MR32(a) = o; cleared++; }
+        }
+        MR32(0x00ae33a4) = 0;
+        MR32(0x00ae6074) = 0;
+        enum { NODES = 512, NODE = 0x1c };
+        uint32_t pool = gh_alloc(NODES * NODE, 1, 16), prev = 0x00ae607cu;
+        if (pool) {
+            MR32(0x00ae607c) = pool;                       /* sentinel.next = first */
+            for (uint32_t i = 0; i < NODES; i++) {
+                uint32_t n = pool + i * NODE;
+                MR32(n + 4) = prev;                        /* node.prev */
+                MR32(n) = i + 1 < NODES ? n + NODE : 0x00ae607cu;   /* node.next */
+                prev = n;
+            }
+            MR32(0x00ae6080) = prev;                       /* sentinel.prev = last */
+        } else {
+            MR32(0x00ae607c) = MR32(0x00ae6080) = 0x00ae607cu;
+        }
+        fprintf(stderr, "boot: track streamer: %u dumped pointers cleared, %u fresh section nodes at %#x\n",
+                cleared, pool ? NODES : 0, pool);
+    }
     {
         static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
                                          0x00aba54cu, 0x00b34598u, 0x00ad07bcu, 0x00acfa6cu };
