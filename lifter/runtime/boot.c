@@ -327,12 +327,18 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  * A pointer is kept when its target has content (boot code that builds an
  * object at the dumped address runs before this). */
 void null_dead_heap_pointers(void) {
-    /* Always treated: 0x00ab1500-0x00ab2a00, the localisation system's globals
-     * (string tables, fonts, the loaded language file).  With the dump's
-     * pointers there, loading a language walks dead objects (sub_005b3700). */
+    /* Always treated:
+     *   0x00ab1500-0x00ab2a00  the localisation system's globals (string tables,
+     *       fonts, the loaded language file): with the dump's pointers there,
+     *       loading a language walks dead objects (sub_005b3700);
+     *   0x00abae00-0x00abb000  the attribute-database loader's globals: the dump
+     *       says the frontend database is loaded (0x00abaf3c), so sub_006d53f0
+     *       "unloads" frontend.bin/.vlt, which this run never registered, and
+     *       erases the end marker of the file tree at 0x00a61138; the next
+     *       lookup then loops forever. */
     char ranges[512];
     const char *env = getenv("PROSTREET_NULL_STALE");
-    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
     const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
