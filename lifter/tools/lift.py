@@ -543,7 +543,9 @@ class Lifter:
                            and eo[0].reg == o[1].reg and eo[1].type == X86_OP_IMM:
                             n = eo[1].imm & 0xffffffff; break
                         if self._jt_writes(e, R32[o[1].reg]): break
-                    if n is None: return None
+                    # loaded in an earlier block (0x516608: `cmp eax, ebp`): the size is
+                    # then read off the table itself, see _jt_table
+                    if n is None: n = -1
                 else:
                     return None
                 held = j.address + j.size if j.mnemonic == 'ja' else j.operands[0].imm
@@ -559,6 +561,7 @@ class Lifter:
         alone; else None"""
         reg, n = bound
         if not ins or n > 1023: return None
+        unknown = n == -1
         pre = ins[:-1]
         if isinstance(reg, tuple):
             # the bound is on a stack local: the block must load it into the index register
@@ -578,6 +581,7 @@ class Lifter:
                 m = k.operands[1].mem
                 if not m.segment and ((m.base == reg and not m.index) or (not m.base and m.index == reg and m.scale == 1)):
                     bd = m.disp & 0xffffffff
+                    if unknown: return None
                     if not (self.in_text(bd) and self.in_text(bd + n)): return None
                     n = max(self.fetch(bd, n + 1)); reg = k.operands[0].reg
                     continue
@@ -587,6 +591,17 @@ class Lifter:
         m = i.operands[0].mem
         if m.segment or m.base or m.index != reg or m.scale != 4: return None
         d = m.disp & 0xffffffff
+        if unknown:
+            # Bound not known statically: take the entries that point at code near
+            # the jump.  Reading one table too many only adds cases the guest's own
+            # bound check never reaches (each case still tests its table entry).
+            cnt = 0
+            while cnt < 256 and self.in_text(d + 4 * cnt + 3):
+                t = struct.unpack_from('<I', self.fetch(d + 4 * cnt, 4))[0]
+                if not self.in_text(t) or abs(t - i.address) > 0x4000: break
+                cnt += 1
+            if cnt < 2: return None
+            n = cnt - 1
         if not (self.in_text(d) and self.in_text(d + 4 * n + 3)): return None
         ents = list(struct.unpack_from(f'<{n + 1}I', self.fetch(d, 4 * n + 4)))
         return (reg, d, ents) if all(self.in_text(t) for t in ents) else None
