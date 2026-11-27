@@ -52,7 +52,7 @@ export ROOT OBJ FULL CC CFLAGS RTFLAGS STRICT GEN
 echo "== compiling $(ls "$GEN"/shard_*.c | wc -l) shards with $J jobs =="
 export DEPS="$ROOT/lifter/runtime/cpu.h $GEN/decls.h"
 time ls "$GEN"/shard_*.c | \
-    xargs -P "$J" -n1 sh -c 'compile_one "$1" "$OBJ/$(basename "$1" .c).o" $CFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"' sh
+    xargs -P "$J" -n1 bash -c 'compile_one "$1" "$OBJ/$(basename "$1" .c).o" $CFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"' sh
 
 echo "== function table =="
 compile_one "$GEN/fntab.c" "$OBJ/fntab.o" $CFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"

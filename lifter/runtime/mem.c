@@ -231,6 +231,7 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
         guest_va >= g_wwatch_lo && guest_va < g_wwatch_hi) {
         fprintf(stderr, "\n*** GUEST WRITE WATCH hit guest_va=0x%08x host=%p\n",
                 guest_va, si->si_addr);
+#if defined(__x86_64__)
         if (uc) {
             greg_t *g = uc->uc_mcontext.gregs;
             fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
@@ -242,6 +243,7 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
                     (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                     (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
         }
+#endif
         if (g_cur_cpu) {
             CPU *c = g_cur_cpu;
             fprintf(stderr, "    cpu: eip=%08x esp=%08x ebp=%08x eax=%08x ecx=%08x edx=%08x\n",
@@ -268,6 +270,7 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
             sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" :
             sig == SIGILL ? "SIGILL" : sig == SIGFPE ? "SIGFPE" : "signal",
             si->si_addr, in_guest ? "0x" : "(none) ", in_guest ? guest_va : 0u);
+#if defined(__x86_64__)
     if (uc) {
         greg_t *g = uc->uc_mcontext.gregs;
         fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
@@ -279,6 +282,7 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
                 (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                 (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
     }
+#endif
     if (g_cur_cpu) {
         CPU *c = g_cur_cpu;
         fprintf(stderr, "    cpu: eip=%08x esp=%08x ebp=%08x eax=%08x ecx=%08x edx=%08x\n",
