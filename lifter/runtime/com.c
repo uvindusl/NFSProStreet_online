@@ -784,6 +784,31 @@ int com_call(CPU *c, uint32_t magic) {
             if (p) {
                 mem_commit(p, sz);
                 memset(g_mem + p, 0, sz);
+                /* Scripted key presses for unattended runs:
+                 *   PROSTREET_KEYS="600:28,900:28+30"
+                 * holds DirectInput scan code 28 (Enter) for 10 frames from frame
+                 * 600, and for 30 frames from frame 900.  Keyboard state only
+                 * (the 256-byte buffer). */
+                static struct { long frame, len; int key; } keys[32];
+                static int nkeys = -1;
+                if (nkeys < 0) {
+                    nkeys = 0;
+                    const char *e = getenv("PROSTREET_KEYS");
+                    while (e && *e && nkeys < 32) {
+                        char *end;
+                        keys[nkeys].frame = strtol(e, &end, 10);
+                        if (*end != ':') break;
+                        keys[nkeys].key = (int)strtol(end + 1, &end, 10);
+                        keys[nkeys].len = 10;
+                        if (*end == '+') keys[nkeys].len = strtol(end + 1, &end, 10);
+                        nkeys++;
+                        e = *end == ',' ? end + 1 : "";
+                    }
+                }
+                if (sz == 256)
+                    for (int i = 0; i < nkeys; i++)
+                        if ((long)g_frame_no >= keys[i].frame && (long)g_frame_no < keys[i].frame + keys[i].len)
+                            MR8(p + (keys[i].key & 255)) = 0x80;
             }
             r = 0;
         } else if (!strcmp(nm, "GetDeviceData")) {
