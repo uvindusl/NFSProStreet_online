@@ -661,6 +661,19 @@ int main(int argc, char **argv) {
         MR32(0x00ffca08) = base;
     }
 
+    /* Stale singleton pointers from process dump, found one fault at a time
+     * during render init (sub_004b4090).  Each is tested for null before use,
+     * so null is the state the game's own start-up expects.  (Nulling every
+     * pointer into the dumped heap, about 6,700 words of .data, was tried and
+     * breaks the boot long before the window opens: much of that state is
+     * relied on.)
+     *   0x00ab27dc  object whose vtable+0x74 sub_00597140 calls */
+    {
+        static const uint32_t dead[] = { 0x00ab27dcu };
+        for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
+            if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
+    }
+
     apply_set_env();
 
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
