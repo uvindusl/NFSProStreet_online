@@ -202,6 +202,9 @@ def main():
                 cf = int(mn == 'stc')
             elif mn in ('pushfd', 'popfd', 'nop'):
                 pass
+            elif mn == 'lea' and dst and ops[1].mem.base and md.reg_name(ops[1].mem.base) == dst \
+                    and not ops[1].mem.index and not ops[1].mem.disp:
+                pass                    # lea r,[r]: filler
             elif len(ops) >= 2 and dst and dst != REGNAMES[reg] and dst not in regs \
                     and mn in ('and', 'or', 'shrd', 'shld', 'shl', 'shr', 'sar', 'test', 'cmp'):
                 pass                    # filler on a register the gadget does not use
@@ -267,6 +270,32 @@ def main():
                         comp += 1
                         break
     cont += comp
+
+    _comp0 = comp
+    # 2b'. The same call with the target pushed instead of swapped in:
+    #     <compute R>; push R; add dword [esp+4],K; (filler); ret
+    #     entered by `push A; push A; ret` or `push A; jmp A`, so it returns to
+    #     A+K.  SecuROM calls its trigger handler this way (0x16bf3ef); 7 sites.
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        for m in re.compile(rb'([\x50-\x57])(?:\x83\x44\x24\x04(.)|\x81\x44\x24\x04(....))', re.S).finditer(img, lo - base, hi - base):
+            if b'\xc3' not in img[m.end():m.end() + 7]:
+                continue
+            p0 = m.start()
+            reg = m.group(1)[0] - 0x50
+            k = m.group(2)[0] if m.group(2) else struct.unpack('<I', m.group(3))[0]
+            for back in range(2, 48):
+                st = p0 - back
+                entry = struct.pack('<I', base + st)
+                if img.find(b'\x68' + entry, st - 64, st) < 0:
+                    continue        # nothing pushes this address: not the gadget's entry
+                val = gadget_value(st, p0, reg)
+                if val is not None and exec_addr(val):
+                    seeds.add(val)
+                    if exec_addr(base + st + k):
+                        seeds.add(base + st + k)
+                    comp += 1
+                    break
+    cont += comp - _comp0
 
     # 2c. SecuROM computed jump:  push R; <compute R>; xchg [esp],R; ret
     #     (also `xchg [esp+4],R; popfd; ret`, and the swap as three xors).

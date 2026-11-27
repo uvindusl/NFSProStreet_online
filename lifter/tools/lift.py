@@ -821,10 +821,22 @@ class Lifter:
                 # SecuROM computed call: `... xchg [esp],eax; add dword [esp+4], K; ret`
                 # pops a computed target T and leaves R (= entry + K) on the stack top,
                 # i.e. `call T` returning to R.  Run T, then R (seeded by boot_seeds.py).
-                pb8 = self.fetch(i.address - 8, 9)
-                pb5 = self.fetch(i.address - 5, 6)
-                if ((len(pb8) == 9 and pb8[:4] == bytes([0x81, 0x44, 0x24, 0x04]))
-                        or (len(pb5) == 6 and pb5[:4] == bytes([0x83, 0x44, 0x24, 0x04]))):
+                # Filler may sit between the add and the ret (`sar eax,0`, nop,
+                # `xchg r,r`): 0x16bf400 is `add dword [esp+4],0x1d; sar eax,0; ret`,
+                # the form used to call SecuROM's trigger handler (`push T` instead
+                # of the xchg, since the register is not preserved).
+                end_ = i.address
+                for _ in range(3):
+                    f3 = self.fetch(end_ - 3, 3); f2 = f3[1:]
+                    if len(f3) == 3 and f3[0] == 0xC1 and (f3[1] & 0xC0) == 0xC0 and f3[2] == 0: end_ -= 3
+                    elif len(f2) == 2 and f2[0] in (0x87, 0x89, 0x8B) and (f2[1] & 0xC0) == 0xC0 \
+                            and ((f2[1] >> 3) & 7) == (f2[1] & 7): end_ -= 2
+                    elif len(f3) == 3 and f3[2] == 0x90: end_ -= 1
+                    else: break
+                pb8 = self.fetch(end_ - 8, 8)
+                pb5 = self.fetch(end_ - 5, 5)
+                if ((len(pb8) == 8 and pb8[:4] == bytes([0x81, 0x44, 0x24, 0x04]))
+                        or (len(pb5) == 5 and pb5[:4] == bytes([0x83, 0x44, 0x24, 0x04]))):
                     return ["POP32(c->eip);",
                             "{ uint32_t _t = c->eip, _r = MR32(c->esp);",
                             "  dispatch_indirect(c, _t);",
