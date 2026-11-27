@@ -382,10 +382,15 @@ void null_dead_heap_pointers(void) {
      *       lookup then loops forever;
      *   0x00a59000-0x00a5a000  the static manager at 0x00a590e0 and its
      *       neighbours: its item list still names heap nodes of the dumped
-     *       process (sub_0062c1c0 walked into a freed-memory fill pattern). */
+     *       process (sub_0062c1c0 walked into a freed-memory fill pattern);
+     *   0x00b00000-0x00c00000  mostly middleware statics.  The input library
+     *       keeps lazily created singletons here (0x00b345ac, 0x00b36f78, ...):
+     *       with the dump's pointers the frontend got a device handle with no
+     *       device behind it (sub_005a97f0).  Nulling the whole megabyte (465
+     *       words) was checked not to change anything else in the boot. */
     char ranges[512];
     const char *env = getenv("PROSTREET_NULL_STALE");
-    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
     const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;

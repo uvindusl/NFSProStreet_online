@@ -557,14 +557,63 @@ int com_call(CPU *c, uint32_t magic) {
         }
     } else if (iface == IF_DI8) {
         if (!strcmp(nm, "CreateDevice")) {
-            uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_DIDEV, 64);
+            /* (this, rguid, ppDevice, pUnkOuter); remember which system device it is */
+            uint32_t rguid = COM_A(1), pp = COM_A(2);
+            uint32_t dev = com_new(IF_DIDEV, 64);
+            MR32(dev + 4) = (rguid && mem_is_committed(rguid) && MR8(rguid) == 0x60) ? 0x12u : 0x13u;
+            if (pp && mem_is_committed(pp)) MR32(pp) = dev;
+            r = 0;
+        } else if (!strcmp(nm, "EnumDevices")) {
+            /* (this, dwDevType, lpCallback, pvRef, dwFlags)
+             * BOOL CALLBACK cb(const DIDEVICEINSTANCEA *, void *pvRef), stdcall.
+             * Report the system keyboard and mouse: with no device at all the
+             * game's input layer keeps null device objects and the frontend
+             * faults on the first one it uses (sub_005a97f0). */
+            static const struct { uint32_t type; uint8_t guid0; const char *name; } devs[] = {
+                { 0x00000413u, 0x61, "Keyboard" },   /* DI8DEVTYPE_KEYBOARD, PC enhanced */
+                { 0x00000112u, 0x60, "Mouse" },      /* DI8DEVTYPE_MOUSE */
+            };
+            static const uint8_t guid_tail[15] = { 0x2B, 0x1D, 0x6F, 0xA0, 0xD5, 0xCF, 0x11,
+                                                   0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 };
+            uint32_t want = COM_A(1), cb = COM_A(2), ref = COM_A(3), ret = c->eip;
+            uint32_t inst = com_alloc(0x250);
+            for (unsigned i = 0; i < NEL(devs) && cb && inst; i++) {
+                uint32_t kind = devs[i].type & 0xFFu;                 /* 0x13 keyboard, 0x12 mouse */
+                uint32_t cls = kind == 0x13u ? 3u : 2u;              /* DI8DEVCLASS_KEYBOARD / _POINTER */
+                if (want && want != cls && want != kind) continue;   /* 0 = DI8DEVCLASS_ALL */
+                memset(g_mem + inst, 0, 0x244);
+                MR32(inst) = 0x244;                                   /* dwSize */
+                for (unsigned g = 0; g < 2; g++) {                    /* guidInstance, guidProduct */
+                    MR8(inst + 4 + 16 * g) = devs[i].guid0;
+                    memcpy(g_mem + inst + 5 + 16 * g, guid_tail, 15);
+                }
+                MR32(inst + 0x24) = devs[i].type;                     /* dwDevType */
+                snprintf((char *)(g_mem + inst + 0x28), 260, "%s", devs[i].name);
+                snprintf((char *)(g_mem + inst + 0x12C), 260, "%s", devs[i].name);
+                PUSH32(ref);
+                PUSH32(inst);
+                guest_call(c, cb);
+                if (!c->eax) break;                                   /* DIENUM_STOP */
+            }
+            c->eip = ret;
             r = 0;
         } else {
             r = 0;
         }
     } else if (iface == IF_DIDEV) {
-        if (!strcmp(nm, "GetDeviceState")) {
+        uint32_t kind = MR32(COM_A(0) + 4);                           /* 0x13 keyboard, 0x12 mouse */
+        if (!strcmp(nm, "GetCapabilities")) {
+            /* DIDEVCAPS: dwSize, dwFlags, dwDevType, dwAxes, dwButtons, dwPOVs, ... */
+            uint32_t p = COM_A(1);
+            if (p && mem_is_committed(p)) {
+                MR32(p + 4) = 1;                                      /* DIDC_ATTACHED */
+                MR32(p + 8) = kind == 0x12u ? 0x00000112u : 0x00000413u;
+                MR32(p + 12) = kind == 0x12u ? 3 : 0;
+                MR32(p + 16) = kind == 0x12u ? 3 : 256;
+                MR32(p + 20) = 0;
+            }
+            r = 0;
+        } else if (!strcmp(nm, "GetDeviceState")) {
             uint32_t sz = COM_A(1);
             uint32_t p = COM_A(2);
             if (p) {
