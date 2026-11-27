@@ -141,6 +141,39 @@ static void overlay_original_headers(void) {
     fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
 }
 
+/* Relink the list headed at `a` to the nodes that are static objects in
+ * [lo,hi).  Returns 0 if the list was intact (or empty), 1 if it is now
+ * empty, 2 if it kept static nodes. */
+static int relink_list(uint32_t a, uint32_t lo, uint32_t hi) {
+#define IN_DATA(p) ((p) >= lo && (p) + 8u <= hi)
+    enum { MAXN = 4096 };
+    static uint32_t fwd[MAXN], bwd[MAXN];
+    if (MR32(a) == a && MR32(a + 4) == a) return 0;
+    unsigned nf = 0, nb = 0;
+    uint32_t p = MR32(a);
+    while (p != a && IN_DATA(p) && nf < MAXN) { fwd[nf++] = p; p = MR32(p); }
+    if (p == a) return 0;               /* every node is in the image: the list is intact */
+    p = MR32(a + 4);
+    while (p != a && IN_DATA(p) && nb < MAXN) {
+        unsigned k = 0;
+        while (k < nf && fwd[k] != p) k++;
+        if (k < nf) break;
+        bwd[nb++] = p; p = MR32(p + 4);
+    }
+    /* head -> fwd[0..] -> bwd[nb-1..0] -> head */
+    uint32_t prev = a;
+    for (unsigned k = 0; k < nf + nb; k++) {
+        uint32_t node = k < nf ? fwd[k] : bwd[nb - 1 - (k - nf)];
+        MR32(prev) = node;
+        MR32(node + 4) = prev;
+        prev = node;
+    }
+    MR32(prev) = a;
+    MR32(a + 4) = prev;
+    return (nf + nb) ? 2 : 1;
+#undef IN_DATA
+}
+
 /* Repair the intrusive lists whose chain leaves the image.
  *
  * The artifact's .data is a snapshot of a running process, so a list head
@@ -178,41 +211,57 @@ static void repair_stale_lists(void) {
     }
     fclose(f);
     uint32_t hi = lo + size;
-#define IN_DATA(p) ((p) >= lo && (p) + 8u <= hi)
-    enum { MAXN = 4096 };
-    static uint32_t fwd[MAXN], bwd[MAXN];
     unsigned heads = 0, emptied = 0, relinked = 0;
     for (uint32_t a = lo; a + 8u <= hi; a += 4) {
         if (*(uint32_t *)(orig + (a - lo)) != a || *(uint32_t *)(orig + (a - lo) + 4) != a) continue;
         heads++;
-        if (MR32(a) == a && MR32(a + 4) == a) continue;
-        unsigned nf = 0, nb = 0;
-        uint32_t p = MR32(a);
-        while (p != a && IN_DATA(p) && nf < MAXN) { fwd[nf++] = p; p = MR32(p); }
-        if (p == a) continue;               /* every node is in the image: the list is intact */
-        p = MR32(a + 4);
-        while (p != a && IN_DATA(p) && nb < MAXN) {
-            unsigned k = 0;
-            while (k < nf && fwd[k] != p) k++;
-            if (k < nf) break;
-            bwd[nb++] = p; p = MR32(p + 4);
-        }
-        /* head -> fwd[0..] -> bwd[nb-1..0] -> head */
-        uint32_t prev = a;
-        for (unsigned k = 0; k < nf + nb; k++) {
-            uint32_t node = k < nf ? fwd[k] : bwd[nb - 1 - (k - nf)];
-            MR32(prev) = node;
-            MR32(node + 4) = prev;
-            prev = node;
-        }
-        MR32(prev) = a;
-        MR32(a + 4) = prev;
-        if (nf + nb) relinked++; else emptied++;
+        int r = relink_list(a, lo, hi);
+        if (r == 1) emptied++; else if (r == 2) relinked++;
     }
-#undef IN_DATA
     free(orig);
+
+    /* Heads that a static constructor links to themselves are zero in the
+     * original executable, so the scan above cannot see them.  Code can: a
+     * walk loads the head and compares the result with the head's own address
+     * (`mov r,[X]; ...; cmp r,X`).  sub_0077def0 walks the one at 0x00ffad24. */
+    unsigned heads2 = 0;
+    const uint32_t text_lo = 0x00401000u, text_hi = 0x00401000u + 0x0056507bu;
+    for (uint32_t t = text_lo; t + 32u < text_hi; t++) {
+        uint32_t x, reg, n;
+        if (MR8(t) == 0xA1) { reg = 0; x = MR32(t + 1); n = 5; }
+        else if (MR8(t) == 0x8B && (MR8(t + 1) & 0xC7) == 0x05) { reg = (MR8(t + 1) >> 3) & 7; x = MR32(t + 2); n = 6; }
+        else continue;
+        if (x < lo || x + 8u > hi || (x & 3u)) continue;
+        int cmp = 0;
+        for (uint32_t k = t + n; k < t + n + 16u && !cmp; k++) {
+            cmp = (MR8(k) == 0x81 && MR8(k + 1) == 0xF8 + reg && MR32(k + 2) == x) ||
+                  (reg == 0 && MR8(k) == 0x3D && MR32(k + 1) == x);
+        }
+        if (!cmp || MR32(x) == 0 || MR32(x) == x) continue;
+        int r = relink_list(x, lo, hi);
+        if (r) { heads2++; if (r == 1) emptied++; else relinked++; }
+    }
+    /* Arrays of heads (one list per bucket or per priority) are reached
+     * through a register, so neither scan sees their members; an empty member
+     * gives the array away.  Next to a self-linked head, a pair of pointers
+     * into the dumped heap at the same 8-byte stride is another head of that
+     * array (0x00ae3448 and 0x00ae3450, beside the empty 0x00ae3460, are walked
+     * by sub_007476d0). */
+#define STALE(v) ((v) >= 0x01aa8000u && (v) < 0x40000000u && !((v) & 3u))
+    for (uint32_t a = lo + 8u; a + 16u <= hi; a += 4) {
+        if (MR32(a) != a || MR32(a + 4) != a) continue;
+        for (int dir = -8; dir <= 8; dir += 16) {
+            for (uint32_t b = a + (uint32_t)dir; b >= lo && b + 8u <= hi; b += (uint32_t)dir) {
+                if (!STALE(MR32(b)) || !STALE(MR32(b + 4))) break;
+                int r = relink_list(b, lo, hi);
+                if (!r) break;
+                heads2++; if (r == 1) emptied++; else relinked++;
+            }
+        }
+    }
+#undef STALE
     fprintf(stderr, "boot: %u list heads in .data, %u pointed into the dumped heap: %u emptied, "
-                    "%u relinked to their static nodes\n", heads, emptied + relinked, emptied, relinked);
+                    "%u relinked to their static nodes\n", heads + heads2, emptied + relinked, emptied, relinked);
 }
 
 /* Drop the elements of inline pointer vectors that point into the dumped heap.
