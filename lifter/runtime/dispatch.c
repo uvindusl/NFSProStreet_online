@@ -3,6 +3,7 @@
  * IMP_MAGIC + index and are routed to win32_call(). */
 #include "rt.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1265,7 +1266,40 @@ static void unresolved(CPU *c, uint32_t addr) {
     exit(3);
 }
 
+/* PROSTREET_WATCH_VAL=0xADDR: report every change of the 32-bit guest word
+ * at ADDR.  It is checked at each indirect call and after each import and COM
+ * method, and the report names the checkpoint that first saw the new value,
+ * with that thread's guest stack.  The page-protection watch
+ * (PROSTREET_WATCH_W) only works for memory committed before boot and stops at
+ * the first write; a debugger's hardware watchpoint misses writes made by the
+ * kernel (read) and by a memset that zeroes whole cache lines.  This one is
+ * coarse but works for any address and keeps going. */
+void rt_watch_check(CPU *c, const char *what, uint32_t detail) {
+    static int state;                   /* 0 unread, 1 off, 2 on */
+    static uint32_t va, last;
+    static int have;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    if (state == 1) return;
+    pthread_mutex_lock(&lock);
+    if (state == 0) {
+        const char *v = getenv("PROSTREET_WATCH_VAL");
+        va = v ? (uint32_t)strtoul(v, NULL, 16) : 0;
+        state = va ? 2 : 1;
+    }
+    if (state == 2 && mem_is_committed(va)) {
+        uint32_t now = MR32(va);
+        if (!have || now != last) {
+            fprintf(stderr, "\n[watch] [%08x] %08x -> %08x, first seen at %s %08x (thread esp=%08x)\n",
+                    va, have ? last : 0, now, what, detail, c->esp);
+            guest_backtrace(c, 6);
+            last = now; have = 1;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+}
+
 void dispatch_indirect(CPU *c, uint32_t addr) {
+    rt_watch_check(c, "dispatch of", addr);
     static int s_main_entry_logged = 0;
     if (!s_main_entry_logged && (addr == 0x016beea2u || addr == 0x004afee0u)) {
         s_main_entry_logged = 1;

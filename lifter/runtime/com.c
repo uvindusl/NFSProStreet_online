@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #define COM_MAGIC 0xE0000000u
 #define COM_BASE  0x4C000000u
@@ -49,19 +50,29 @@ static uint32_t g_com_ptr = COM_BASE;
 static uint32_t g_d3d9 = 0;
 static uint32_t g_dev = 0;
 
+/* The guest's render, sound and main threads all create COM objects, so the
+ * bump pointer and the lazily built vtables need a lock: without it two
+ * threads were handed the same block and one zeroed the other's object (the
+ * sound thread then called through a null vtable in sub_008c5d90). */
+static pthread_mutex_t g_com_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static uint32_t com_alloc(uint32_t n) {
     n = (n + 15u) & ~15u;
-    if (g_com_ptr + n > COM_MAX) return 0;
+    pthread_mutex_lock(&g_com_lock);
+    if (g_com_ptr + n > COM_MAX) { pthread_mutex_unlock(&g_com_lock); return 0; }
     uint32_t p = g_com_ptr;
     g_com_ptr += n;
     mem_commit(p, n);
     memset(g_mem + p, 0, n);
+    pthread_mutex_unlock(&g_com_lock);
     return p;
 }
 
 uint32_t com_new(uint32_t iface, uint32_t extra) {
     if (iface == 0 || iface >= NEL(g_if)) return 0;
     unsigned n = g_if[iface].n;
+    static pthread_mutex_t vt_lock = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&vt_lock);
     uint32_t vt = g_vtab[iface];
     if (!vt) {
         vt = com_alloc(n * 4u);
@@ -70,6 +81,7 @@ uint32_t com_new(uint32_t iface, uint32_t extra) {
         }
         g_vtab[iface] = vt;
     }
+    pthread_mutex_unlock(&vt_lock);
     uint32_t blk = com_alloc(16u + 4u + extra);
     if (!blk) return 0;
     uint32_t obj = blk + 16u;
@@ -719,5 +731,6 @@ int com_call(CPU *c, uint32_t magic) {
 
     c->eax = r;
     c->esp += 4u * (uint32_t)nargs;
+    { extern void rt_watch_check(CPU *, const char *, uint32_t); rt_watch_check(c, nm, magic); }
     return 1;
 }

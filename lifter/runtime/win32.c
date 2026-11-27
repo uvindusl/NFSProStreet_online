@@ -1032,6 +1032,22 @@ int win32_call(CPU *c, uint32_t idx) {
                 A(0), A(1));
     }
 
+    /* PROSTREET_WATCH_VAL: a block operation that covers the watched word is
+     * reported before it runs (see rt_watch_check in dispatch.c). */
+    {
+        static uint32_t wva; static int wread;
+        if (!wread) { const char *v = getenv("PROSTREET_WATCH_VAL"); wva = v ? (uint32_t)strtoul(v, NULL, 16) : 0; wread = 1; }
+        if (wva && (!strncmp(n, "mem", 3) || str_eq(n, "ReadFile") || str_eq(n, "fread"))) {
+            uint32_t dst = str_eq(n, "ReadFile") ? A(1) : A(0);
+            uint32_t len = str_eq(n, "fread") ? A(1) * A(2) : A(2);
+            if (wva >= dst && wva - dst < len) {
+                fprintf(stderr, "\n[watch] %s(dst=%08x, a1=%08x, len=%08x) covers %08x, ret=%08x esp=%08x\n",
+                        n, dst, A(1), len, wva, c->eip, c->esp);
+                guest_backtrace(c, 8);
+            }
+        }
+    }
+
     uint32_t r = 0;
     int handled = 1;
 
@@ -1436,6 +1452,9 @@ int win32_call(CPU *c, uint32_t idx) {
         fprintf(stderr, "win32: %s('%s' -> '%s') = 0x%08x (fd=%d, errno=%d)\n",
                 n, path ? path : "", resolved ? resolved : "", r, fd, errno);
     } else if (str_eq(n, "ReadFile")) {
+        if (getenv("PROSTREET_READTRACE"))
+            fprintf(stderr, "  [ReadFile] h=%08x buf=%08x n=%08x ovl=%08x ret=%08x esp=%08x\n",
+                    A(0), A(1), A(2), A(4), c->eip, c->esp);
         r = (uint32_t)read((int)(A(0) - 0x20000u), g_mem + A(1), A(2));
         if (A(3)) MR32(A(3)) = r;
     } else if (str_eq(n, "WriteFile")) {
@@ -1443,6 +1462,16 @@ int win32_call(CPU *c, uint32_t idx) {
         if (A(3)) MR32(A(3)) = r;
     } else if (str_eq(n, "SetFilePointer")) {
         r = (uint32_t)lseek((int)(A(0) - 0x20000u), (off_t)(int32_t)A(1), (int)A(3));
+    } else if (str_eq(n, "SetFilePointerEx")) {
+        /* (hFile, LARGE_INTEGER liDistanceToMove, PLARGE_INTEGER lpNewFilePointer, dwMoveMethod):
+         * the 64-bit distance is passed by value, so this takes five stack slots. */
+        int64_t dist = (int64_t)(((uint64_t)A(2) << 32) | A(1));
+        off_t pos = lseek((int)(A(0) - 0x20000u), (off_t)dist, (int)A(4));
+        if (pos >= 0 && A(3) && mem_is_committed(A(3))) {
+            MR32(A(3)) = (uint32_t)pos;
+            MR32(A(3) + 4) = (uint32_t)((uint64_t)pos >> 32);
+        }
+        r = (pos >= 0);
     } else if (str_eq(n, "GetFileSize")) {
         off_t cur = lseek((int)(A(0) - 0x20000u), 0, SEEK_CUR);
         off_t end = lseek((int)(A(0) - 0x20000u), 0, SEEK_END);
@@ -2270,6 +2299,7 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     }
 
+    { extern void rt_watch_check(CPU *, const char *, uint32_t); rt_watch_check(c, n, c->eip); }
     c->eax = r;
     c->esp += 4u * (uint32_t)e->nargs;
     return 1;
