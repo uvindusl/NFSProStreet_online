@@ -378,14 +378,52 @@ def main():
                 seeds.add(v)
     codeptr = len(seeds) - before
 
+    # 5. switch tables: `jmp dword ptr [reg*4 + table]` (FF 24 85/8D/95/9D/
+    #    AD/B5/BD + disp32).  The lifter follows the cases when it reaches the
+    #    jump from inside its function, but SecuROM moved some switch heads
+    #    into stubs elsewhere (0x5bde93 jumps through a diabolus slot to
+    #    0x4b24ac, which indexes the byte table and jumps back to the `jmp
+    #    [eax*4+0x5bdf68]` at 0x5bde9a), so the jump is lifted in another
+    #    function and its cases reach the dispatcher as unknown addresses.
+    #    Every table word that points into .text within 64 KB of the jump is
+    #    seeded, stopping at the first one that does not.
+    #    Cases lifted on their own in lifter/runtime/seh_lifted.c (the SEH
+    #    scope-table targets, scripts/lift_seh.py) are left out: two
+    #    definitions would not link.
+    seh = set()
+    try:
+        with open('lifter/runtime/seh_lifted.c') as f:
+            seh = {int(m, 16) for m in re.findall(r'^void sub_([0-9a-f]{8})\(', f.read(), re.M)}
+    except OSError:
+        pass
+    before = len(seeds)
+    for off in range(TEXT_LO - base, TEXT_HI - base - 7):
+        if img[off] != 0xFF or img[off + 1] != 0x24 or img[off + 2] & 0xC7 != 0x85:
+            continue
+        jva = base + off
+        tab = struct.unpack_from('<I', img, off + 3)[0]
+        if not (TEXT_LO <= tab < TEXT_HI):
+            continue
+        for k in range(256):
+            o = tab - base + 4 * k
+            if o + 4 > len(img):
+                break
+            v = struct.unpack_from('<I', img, o)[0]
+            if not (TEXT_LO <= v < TEXT_HI) or abs(v - jva) > 0x10000:
+                break
+            if v not in seh:
+                seeds.add(v)
+    switches = len(seeds) - before
+
     with open(OUT, 'w') as f:
         for a in sorted(seeds):
             f.write('%08x\n' % a)
     print('seeds-boot: %d seeds (%d .text + %d diabolus thunk targets, '
           '%d push/ret continuations, %d new data pointers: '
-          '%d .rdata + %d .data + %d diabolus, %d new code immediates) -> %s'
+          '%d .rdata + %d .data + %d diabolus, %d new code immediates, '
+          '%d new switch cases) -> %s'
           % (len(seeds), thunk_text, thunk_dia, cont, dataptr,
-             len(rdata), len(data), len(diab), codeptr, OUT))
+             len(rdata), len(data), len(diab), codeptr, switches, OUT))
 
 
 if __name__ == '__main__':
