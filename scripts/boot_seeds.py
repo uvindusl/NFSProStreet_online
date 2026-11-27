@@ -282,8 +282,11 @@ def main():
     #     <compute R>; push R; add dword [esp+4],K; (filler); ret
     #     entered by `push A; push A; ret` or `push A; jmp A`, so it returns to
     #     A+K.  SecuROM calls its trigger handler this way (0x16bf3ef); 7 sites.
+    #     A nop may sit between the push and the add (0x4b23bd in the render
+    #     path: mov eax,K1; xor eax,K2; push eax; nop; add [esp+4],0x16; nop; ret
+    #     calls 0x10f89b0 and returns to 0x4b23c9).
     for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
-        for m in re.compile(rb'([\x50-\x57])(?:\x83\x44\x24\x04(.)|\x81\x44\x24\x04(....))', re.S).finditer(img, lo - base, hi - base):
+        for m in re.compile(rb'([\x50-\x57])\x90*(?:\x83\x44\x24\x04(.)|\x81\x44\x24\x04(....))', re.S).finditer(img, lo - base, hi - base):
             if b'\xc3' not in img[m.end():m.end() + 7]:
                 continue
             p0 = m.start()
@@ -322,6 +325,27 @@ def main():
                         seeds.add(base + st + k)
                     comp += 1
                     break
+    # 2b'''. Return fix-up followed by a plain jump:
+    #     add dword [esp],K; jmp T
+    #     entered by `push A; jmp A` (or `push A; push A; ret`), so it calls T
+    #     and returns to A+K.  0x19f8404 calls the trigger handler 0x10f8d70
+    #     this way and returns to 0x19f8410; without that seed the continuation
+    #     was skipped as junk and sub_004dc190 returned with its frame leaked
+    #     (the race-loading thread then read a garbage tree).
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        for m in re.compile(rb'(?:\x83\x04\x24(.)|\x81\x04\x24(....))\xe9(....)', re.S).finditer(img, lo - base, hi - base):
+            st = m.start()
+            entry = struct.pack('<I', base + st)
+            if img.find(b'\x68' + entry, max(0, st - 64), st) < 0:
+                continue            # nothing pushes this address: not entered as a call gadget
+            k = m.group(1)[0] if m.group(1) else struct.unpack('<I', m.group(2))[0]
+            jend = m.end()
+            t = (base + jend + struct.unpack('<i', m.group(3))[0]) & 0xffffffff
+            if exec_addr(t):
+                seeds.add(t)
+            if exec_addr(base + st + k):
+                seeds.add(base + st + k)
+                comp += 1
     cont += comp - _comp0
 
     # 2c. SecuROM computed jump:  push R; <compute R>; xchg [esp],R; ret
