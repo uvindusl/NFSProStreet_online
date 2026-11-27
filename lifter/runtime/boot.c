@@ -322,12 +322,18 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  * created" objects that are all zeros.
  *
  * Doing this for all of .data (about 6,700 words) breaks the boot before the
- * window opens, so it is an experiment switch, not the default:
- *   PROSTREET_NULL_STALE="0xLO-0xHI[,0xLO-0xHI...]"   ranges of .data to treat
+ * window opens, so it is applied to ranges known to need it, plus any given in
+ *   PROSTREET_NULL_STALE="0xLO-0xHI[,0xLO-0xHI...]"   (for experiments)
  * A pointer is kept when its target has content (boot code that builds an
  * object at the dumped address runs before this). */
 void null_dead_heap_pointers(void) {
-    const char *v = getenv("PROSTREET_NULL_STALE");
+    /* Always treated: 0x00ab1500-0x00ab2a00, the localisation system's globals
+     * (string tables, fonts, the loaded language file).  With the dump's
+     * pointers there, loading a language walks dead objects (sub_005b3700). */
+    char ranges[512];
+    const char *env = getenv("PROSTREET_NULL_STALE");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
         const char *p = v;
@@ -350,7 +356,7 @@ void null_dead_heap_pointers(void) {
                 MR32(a) = 0;
                 nulled++;
             }
-            fprintf(stderr, "boot: PROSTREET_NULL_STALE %08x-%08x: %u dead heap pointers nulled, %u kept\n",
+            fprintf(stderr, "boot: %08x-%08x: %u dead heap pointers nulled, %u kept\n",
                     r0, r1, nulled, kept);
         }
     }
@@ -777,6 +783,10 @@ int main(int argc, char **argv) {
      *   0x00aba54c  instance count of the input system (1 in the dump): its
      *               constructor sub_006c7d90 skips the set-up when it is not 0
      *   0x00b34598  input device manager returned by sub_0089bfcd when not null */
+    /* The current language (0x00a54ee8) is English in the dump, so the game's
+     * LoadLanguage(English) (sub_005c3730) returns without loading anything
+     * and every string lookup fails.  The original executable has -1 there. */
+    if (mem_is_committed(0x00a54ee8)) MR32(0x00a54ee8) = 0xffffffffu;
     {
         static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
                                          0x00aba54cu, 0x00b34598u };
