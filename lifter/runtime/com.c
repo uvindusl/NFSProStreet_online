@@ -133,6 +133,156 @@ uint32_t com_directinput8create(uint32_t ppvOut) {
     return 0; /* DI_OK */
 }
 
+/* ---- Direct3D resources ----------------------------------------------
+ * Nothing is rendered by this bridge yet, but the game fills its textures and
+ * buffers through Lock, so each resource needs real, correctly sized storage.
+ * Pixel and vertex data live in the guest heap (the COM region is a small
+ * bump allocator for the objects themselves) and are allocated on first lock.
+ * When the last reference goes the data is freed; a later lock just
+ * allocates it again, so a miscounted reference cannot leave a dangling
+ * pointer behind.
+ *
+ * Fields after the vtable pointer (objects are created with 64 spare bytes): */
+#define R_W      0x04u   /* width; byte length for vertex/index buffers */
+#define R_H      0x08u
+#define R_LEVELS 0x0Cu
+#define R_FMT    0x10u
+#define R_FACES  0x14u   /* 1, or 6 for a cube texture */
+#define R_DATA   0x18u   /* texture: table of faces*levels data pointers; surface/buffer: the data */
+#define R_REF    0x1Cu
+#define R_PARENT 0x20u   /* surface: the texture it is a level of, or 0 */
+#define R_INDEX  0x24u   /* surface: face*levels + level in the parent */
+
+static uint32_t res_alloc(uint32_t n) {
+    uint32_t p = gh_alloc(n ? n : 16u, 1, 16);
+    if (!p) {
+        static int warned;
+        if (!warned++) fprintf(stderr, "com: guest heap exhausted allocating %u bytes of resource data\n", n);
+    }
+    return p;
+}
+
+static uint32_t mip(uint32_t d, uint32_t level) {
+    d >>= level;
+    return d ? d : 1u;
+}
+
+/* Bytes per pixel of an uncompressed D3DFORMAT, or 0 for the DXTn block formats. */
+static uint32_t fmt_bytes(uint32_t fmt) {
+    switch (fmt) {
+    case 0x31545844u: case 0x32545844u: case 0x33545844u:
+    case 0x34545844u: case 0x35545844u: return 0;                 /* DXT1..DXT5 */
+    case 20: return 3;                                            /* R8G8B8 */
+    case 23: case 24: case 25: case 26: case 29: case 30:         /* 16-bit RGB */
+    case 40: case 51: case 60: case 70: case 80: case 81:         /* A8P8 A8L8 V8U8 D16_LOCKABLE D16 L16 */
+    case 101: case 111: return 2;                                 /* INDEX16 R16F */
+    case 27: case 28: case 41: case 50: case 52: return 1;        /* R3G3B2 A8 P8 L8 A4L4 */
+    case 36: case 113: case 115: return 8;                        /* A16B16G16R16(F) G32R32F */
+    case 116: return 16;                                          /* A32B32G32R32F */
+    default: return 4;
+    }
+}
+
+static void level_layout(uint32_t fmt, uint32_t w, uint32_t h, uint32_t *pitch, uint32_t *size) {
+    uint32_t bpp = fmt_bytes(fmt);
+    if (bpp) {
+        *pitch = w * bpp;
+        *size = *pitch * h;
+    } else {
+        uint32_t block = (fmt == 0x31545844u) ? 8u : 16u;
+        *pitch = ((w + 3u) / 4u) * block;
+        *size = *pitch * ((h + 3u) / 4u);
+    }
+}
+
+static uint32_t full_chain(uint32_t w, uint32_t h) {
+    uint32_t n = 1;
+    while (w > 1 || h > 1) { w >>= 1; h >>= 1; n++; }
+    return n;
+}
+
+static uint32_t tex_new(uint32_t iface, uint32_t w, uint32_t h, uint32_t levels, uint32_t fmt, uint32_t faces) {
+    uint32_t obj = com_new(iface, 64);
+    if (!obj) return 0;
+    if (!w) w = 1;
+    if (!h) h = 1;
+    if (!levels || levels > full_chain(w, h)) levels = full_chain(w, h);
+    MR32(obj + R_W) = w; MR32(obj + R_H) = h; MR32(obj + R_LEVELS) = levels;
+    MR32(obj + R_FMT) = fmt; MR32(obj + R_FACES) = faces;
+    MR32(obj + R_DATA) = res_alloc(4u * faces * levels);
+    MR32(obj + R_REF) = 1;
+    return obj;
+}
+
+/* Storage of one level of a texture, allocated on first use.  0 if out of range. */
+static uint32_t tex_level(uint32_t tex, uint32_t index, uint32_t *pitch) {
+    uint32_t levels = MR32(tex + R_LEVELS), faces = MR32(tex + R_FACES), tab = MR32(tex + R_DATA);
+    if (!tab || !levels || index >= levels * faces) return 0;
+    uint32_t level = index % levels, size;
+    level_layout(MR32(tex + R_FMT), mip(MR32(tex + R_W), level), mip(MR32(tex + R_H), level), pitch, &size);
+    if (!MR32(tab + 4u * index)) MR32(tab + 4u * index) = res_alloc(size);
+    return MR32(tab + 4u * index);
+}
+
+static uint32_t surf_new(uint32_t w, uint32_t h, uint32_t fmt, uint32_t parent, uint32_t index) {
+    uint32_t obj = com_new(IF_SURF, 64);
+    if (!obj) return 0;
+    MR32(obj + R_W) = w; MR32(obj + R_H) = h; MR32(obj + R_FMT) = fmt;
+    MR32(obj + R_PARENT) = parent; MR32(obj + R_INDEX) = index;
+    MR32(obj + R_REF) = 1;
+    return obj;
+}
+
+static uint32_t tex_surface(uint32_t tex, uint32_t index) {
+    uint32_t levels = MR32(tex + R_LEVELS);
+    uint32_t level = levels ? index % levels : 0;
+    return surf_new(mip(MR32(tex + R_W), level), mip(MR32(tex + R_H), level), MR32(tex + R_FMT), tex, index);
+}
+
+/* The last reference to a resource went: drop its data. */
+static void res_free_data(uint32_t iface, uint32_t obj) {
+    if (iface == IF_TEX || iface == IF_CUBETEX) {
+        uint32_t tab = MR32(obj + R_DATA), n = MR32(obj + R_LEVELS) * MR32(obj + R_FACES);
+        for (uint32_t i = 0; tab && i < n; i++) {
+            if (MR32(tab + 4u * i)) { gh_free(MR32(tab + 4u * i)); MR32(tab + 4u * i) = 0; }
+        }
+    } else if (MR32(obj + R_DATA)) {
+        gh_free(MR32(obj + R_DATA));
+        MR32(obj + R_DATA) = 0;
+    }
+}
+
+static int res_counted(uint32_t iface) {
+    return iface == IF_TEX || iface == IF_CUBETEX || iface == IF_SURF || iface == IF_VB || iface == IF_IB;
+}
+
+static void fill_surface_desc(uint32_t pd, uint32_t fmt, uint32_t w, uint32_t h, uint32_t usage) {
+    if (!pd || !mem_is_committed(pd)) return;
+    mem_commit(pd, 32);
+    MR32(pd + 0) = fmt;
+    MR32(pd + 4) = 1;      /* D3DRTYPE_SURFACE */
+    MR32(pd + 8) = usage;
+    MR32(pd + 12) = 1;     /* D3DPOOL_MANAGED */
+    MR32(pd + 16) = 0;     /* D3DMULTISAMPLE_NONE */
+    MR32(pd + 20) = 0;
+    MR32(pd + 24) = w;
+    MR32(pd + 28) = h;
+}
+
+/* D3DLOCKED_RECT for a level; pRect selects a sub-rectangle (block-aligned for DXTn). */
+static void fill_locked_rect(uint32_t plr, uint32_t prect, uint32_t fmt, uint32_t data, uint32_t pitch) {
+    if (!plr || !mem_is_committed(plr)) return;
+    mem_commit(plr, 8);
+    uint32_t off = 0;
+    if (data && prect && mem_is_committed(prect)) {
+        uint32_t left = MR32(prect), top = MR32(prect + 4), bpp = fmt_bytes(fmt);
+        off = bpp ? top * pitch + left * bpp
+                  : (top / 4u) * pitch + (left / 4u) * ((fmt == 0x31545844u) ? 8u : 16u);
+    }
+    MR32(plr + 0) = pitch;
+    MR32(plr + 4) = data ? data + off : 0;
+}
+
 uint32_t com_directsoundcreate(uint32_t ppDS) {
     uint32_t ds = com_new(IF_DS, 64);
     if (ppDS && mem_is_committed(ppDS)) MR32(ppDS) = ds;
@@ -164,9 +314,15 @@ int com_call(CPU *c, uint32_t magic) {
         if (ppv && mem_is_committed(ppv)) MR32(ppv) = COM_A(0);
         r = 0;
     } else if (m == 1) { /* AddRef(this) */
-        r = 1;
+        r = res_counted(iface) ? ++MR32(COM_A(0) + R_REF) : 1;
     } else if (m == 2) { /* Release(this) */
         r = 0;
+        if (res_counted(iface)) {
+            uint32_t self = COM_A(0);
+            if (MR32(self + R_REF)) MR32(self + R_REF)--;
+            r = MR32(self + R_REF);
+            if (!r) res_free_data(iface, self);
+        }
     } else if (iface == IF_D3D9) {
         if (!strcmp(nm, "GetDeviceCaps")) {
             uint32_t pc = COM_A(3);
@@ -250,36 +406,28 @@ int com_call(CPU *c, uint32_t magic) {
             }
             r = 0;
         } else if (!strcmp(nm, "CreateTexture")) {
+            /* (this, Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle) */
             uint32_t pp = COM_A(7);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_TEX, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = tex_new(IF_TEX, COM_A(1), COM_A(2), COM_A(3), COM_A(5), 1);
             r = 0;
         } else if (!strcmp(nm, "CreateCubeTexture")) {
+            /* (this, EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle) */
             uint32_t pp = COM_A(6);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_CUBETEX, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = tex_new(IF_CUBETEX, COM_A(1), COM_A(1), COM_A(2), COM_A(4), 6);
             r = 0;
-        } else if (!strcmp(nm, "CreateVertexBuffer")) {
-            uint32_t len = COM_A(1);
-            if (len < 65536) len = 65536;
-            uint32_t buf = com_alloc(len);
-            uint32_t obj = com_new(IF_VB, 64);
-            MR32(obj + 4) = buf;
-            MR32(obj + 8) = len;
-            uint32_t pp = COM_A(5);
-            if (pp && mem_is_committed(pp)) MR32(pp) = obj;
-            r = 0;
-        } else if (!strcmp(nm, "CreateIndexBuffer")) {
-            uint32_t len = COM_A(1);
-            if (len < 65536) len = 65536;
-            uint32_t buf = com_alloc(len);
-            uint32_t obj = com_new(IF_IB, 64);
-            MR32(obj + 4) = buf;
-            MR32(obj + 8) = len;
+        } else if (!strcmp(nm, "CreateVertexBuffer") || !strcmp(nm, "CreateIndexBuffer")) {
+            /* (this, Length, Usage, FVF|Format, Pool, ppBuffer, pSharedHandle) */
+            uint32_t obj = com_new(nm[6] == 'V' ? IF_VB : IF_IB, 64);
+            MR32(obj + R_W) = COM_A(1);
+            MR32(obj + R_FMT) = COM_A(3);
+            MR32(obj + R_REF) = 1;
             uint32_t pp = COM_A(5);
             if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
         } else if (!strcmp(nm, "CreateRenderTarget") || !strcmp(nm, "CreateDepthStencilSurface")) {
+            /* (this, Width, Height, Format, MultiSample, Quality, Lockable|Discard, ppSurface, pSharedHandle) */
             uint32_t pp = COM_A(7);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_SURF, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = surf_new(COM_A(1), COM_A(2), COM_A(3), 0, 0);
             r = 0;
         } else if (!strcmp(nm, "CreateStateBlock")) {
             uint32_t pp = COM_A(2);
@@ -324,120 +472,72 @@ int com_call(CPU *c, uint32_t magic) {
         } else {
             r = 0;
         }
-    } else if (iface == IF_TEX) {
-        if (!strcmp(nm, "GetSurfaceLevel")) {
-            uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_SURF, 64);
+    } else if (iface == IF_TEX || iface == IF_CUBETEX) {
+        /* The cube methods take a face before the level. */
+        uint32_t self = COM_A(0), cube = iface == IF_CUBETEX;
+        uint32_t levels = MR32(self + R_LEVELS);
+        uint32_t level = COM_A(1u + cube);
+        uint32_t index = (cube ? COM_A(1) * levels : 0) + level;
+        if (!strcmp(nm, "GetSurfaceLevel") || !strcmp(nm, "GetCubeMapSurface")) {
+            uint32_t pp = COM_A(2u + cube);
+            if (pp && mem_is_committed(pp)) MR32(pp) = tex_surface(self, index);
             r = 0;
         } else if (!strcmp(nm, "GetLevelDesc")) {
-            uint32_t pd = COM_A(2);
-            if (pd && mem_is_committed(pd)) {
-                mem_commit(pd, 32);
-                MR32(pd + 0) = 21; /* D3DFMT_A8R8G8B8 */
-                MR32(pd + 4) = 1;  /* D3DRTYPE_SURFACE */
-                MR32(pd + 8) = 0;  /* Usage */
-                MR32(pd + 12) = 0; /* D3DPOOL_DEFAULT */
-                MR32(pd + 16) = 0; /* D3DMULTISAMPLE_NONE */
-                MR32(pd + 20) = 0; /* Quality */
-                MR32(pd + 24) = 1; /* Width */
-                MR32(pd + 28) = 1; /* Height */
-            }
+            level = COM_A(1);
+            fill_surface_desc(COM_A(2), MR32(self + R_FMT), mip(MR32(self + R_W), level), mip(MR32(self + R_H), level), 0);
             r = 0;
+        } else if (!strcmp(nm, "GetLevelCount")) {
+            r = levels;
         } else if (!strcmp(nm, "LockRect")) {
-            uint32_t plr = COM_A(2);
-            if (plr && mem_is_committed(plr)) {
-                mem_commit(plr, 8);
-                uint32_t buf = com_alloc(1280 * 720 * 4);
-                MR32(plr + 0) = 1280 * 4;
-                MR32(plr + 4) = buf;
-            }
-            r = 0;
-        } else {
-            r = 0;
-        }
-    } else if (iface == IF_CUBETEX) {
-        if (!strcmp(nm, "GetCubeMapSurface")) {
-            uint32_t pp = COM_A(3);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_SURF, 64);
-            r = 0;
-        } else if (!strcmp(nm, "GetLevelDesc")) {
-            uint32_t pd = COM_A(2);
-            if (pd && mem_is_committed(pd)) {
-                mem_commit(pd, 32);
-                MR32(pd + 0) = 21; /* D3DFMT_A8R8G8B8 */
-                MR32(pd + 4) = 1;  /* D3DRTYPE_SURFACE */
-                MR32(pd + 8) = 0;  /* Usage */
-                MR32(pd + 12) = 0; /* D3DPOOL_DEFAULT */
-                MR32(pd + 16) = 0; /* D3DMULTISAMPLE_NONE */
-                MR32(pd + 20) = 0; /* Quality */
-                MR32(pd + 24) = 1; /* Width */
-                MR32(pd + 28) = 1; /* Height */
-            }
-            r = 0;
-        } else if (!strcmp(nm, "LockRect")) {
-            uint32_t plr = COM_A(2);
-            if (plr && mem_is_committed(plr)) {
-                mem_commit(plr, 8);
-                uint32_t buf = com_alloc(256 * 256 * 4);
-                MR32(plr + 0) = 256 * 4;
-                MR32(plr + 4) = buf;
-            }
-            r = 0;
+            /* (this, [Face,] Level, pLockedRect, pRect, Flags) */
+            uint32_t pitch = 0;
+            uint32_t data = tex_level(self, index, &pitch);
+            fill_locked_rect(COM_A(2u + cube), COM_A(3u + cube), MR32(self + R_FMT), data, pitch);
+            r = data ? 0 : 0x8876086Cu; /* D3DERR_INVALIDCALL */
         } else {
             r = 0;
         }
     } else if (iface == IF_SURF) {
+        uint32_t self = COM_A(0);
+        uint32_t w = MR32(self + R_W), h = MR32(self + R_H), fmt = MR32(self + R_FMT);
+        if (!w || !h) { w = 1280; h = 720; fmt = 22; }  /* a surface the device handed out: the back buffer */
         if (!strcmp(nm, "GetDesc")) {
-            uint32_t pd = COM_A(1);
-            if (pd && mem_is_committed(pd)) {
-                mem_commit(pd, 32);
-                MR32(pd + 0) = 22; /* D3DFMT_X8R8G8B8 */
-                MR32(pd + 4) = 1;  /* D3DRTYPE_SURFACE */
-                MR32(pd + 8) = 1;  /* D3DUSAGE_RENDERTARGET */
-                MR32(pd + 12) = 0; /* D3DPOOL_DEFAULT */
-                MR32(pd + 16) = 0; /* D3DMULTISAMPLE_NONE */
-                MR32(pd + 20) = 0; /* Quality */
-                MR32(pd + 24) = 1280; /* Width */
-                MR32(pd + 28) = 720;  /* Height */
-            }
+            fill_surface_desc(COM_A(1), fmt, w, h, MR32(self + R_PARENT) ? 0 : 1 /* D3DUSAGE_RENDERTARGET */);
             r = 0;
         } else if (!strcmp(nm, "LockRect")) {
-            uint32_t plr = COM_A(1);
-            if (plr && mem_is_committed(plr)) {
-                mem_commit(plr, 8);
-                uint32_t buf = com_alloc(1280 * 720 * 4);
-                MR32(plr + 0) = 1280 * 4;
-                MR32(plr + 4) = buf;
+            /* (this, pLockedRect, pRect, Flags) */
+            uint32_t pitch = 0, size = 0, data;
+            if (MR32(self + R_PARENT)) {
+                data = tex_level(MR32(self + R_PARENT), MR32(self + R_INDEX), &pitch);
+            } else {
+                level_layout(fmt, w, h, &pitch, &size);
+                if (!MR32(self + R_DATA)) MR32(self + R_DATA) = res_alloc(size);
+                data = MR32(self + R_DATA);
             }
-            r = 0;
+            fill_locked_rect(COM_A(1), COM_A(2), fmt, data, pitch);
+            r = data ? 0 : 0x8876086Cu;
         } else {
             r = 0;
         }
     } else if (iface == IF_VB || iface == IF_IB) {
+        uint32_t self = COM_A(0);
         if (!strcmp(nm, "Lock")) {
-            uint32_t this_obj = COM_A(0);
-            uint32_t offset = COM_A(1);
-            uint32_t ppb = COM_A(3);
-            uint32_t buf = MR32(this_obj + 4);
-            if (!buf) {
-                buf = com_alloc(0x40000);
-                MR32(this_obj + 4) = buf;
-            }
-            if (ppb && mem_is_committed(ppb)) {
-                MR32(ppb) = buf + offset;
-            }
-            r = 0;
-        } else if (!strcmp(nm, "Unlock")) {
-            r = 0;
+            /* (this, OffsetToLock, SizeToLock, ppbData, Flags) */
+            uint32_t offset = COM_A(1), ppb = COM_A(3);
+            if (!MR32(self + R_DATA)) MR32(self + R_DATA) = res_alloc(MR32(self + R_W));
+            uint32_t buf = MR32(self + R_DATA);
+            if (ppb && mem_is_committed(ppb)) MR32(ppb) = buf ? buf + offset : 0;
+            r = buf ? 0 : 0x8876086Cu;
         } else if (!strcmp(nm, "GetDesc")) {
             uint32_t pd = COM_A(1);
             if (pd && mem_is_committed(pd)) {
                 mem_commit(pd, 24);
-                MR32(pd + 0) = (iface == IF_IB) ? 101 : 0; /* D3DFMT_INDEX16 */
-                MR32(pd + 4) = (iface == IF_IB) ? 5 : 4;   /* Type: D3DRTYPE_INDEXBUFFER / VERTEXBUFFER */
+                MR32(pd + 0) = (iface == IF_IB) ? MR32(self + R_FMT) : 100; /* D3DFMT_INDEX16/32, D3DFMT_VERTEXDATA */
+                MR32(pd + 4) = (iface == IF_IB) ? 7 : 6;   /* D3DRTYPE_INDEXBUFFER / VERTEXBUFFER */
                 MR32(pd + 8) = 0;
-                MR32(pd + 12) = 0;
-                MR32(pd + 16) = MR32(COM_A(0) + 8);
+                MR32(pd + 12) = 1;                         /* D3DPOOL_MANAGED */
+                MR32(pd + 16) = MR32(self + R_W);
+                if (iface == IF_VB) MR32(pd + 20) = MR32(self + R_FMT);  /* FVF */
             }
             r = 0;
         } else {
