@@ -139,6 +139,12 @@ def main():
                     if exec_addr(tgt):
                         seeds.add(tgt)   # dispatched as a call, no longer inlined
                     cont += 1
+            # push ret; jmp dword [slot]  (the same call through a pointer, e.g. an import)
+            elif img[i] == 0x68 and img[i + 5] == 0xFF and img[i + 6] == 0x25:
+                ret = struct.unpack_from('<I', img, i + 1)[0]
+                if exec_addr(ret):
+                    seeds.add(ret)
+                    cont += 1
             i += 1
 
     # 2b. SecuROM computed call:  push R; <compute R from image data>;

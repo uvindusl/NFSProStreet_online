@@ -1982,6 +1982,19 @@ class Lifter:
                         body.append(f"    if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);")
                         body.append("    return;")
                         continue
+                    if (os.environ.get('PUSHRET','0')=='1' and o0.type==X86_OP_MEM and o0.size==4
+                            and not o0.mem.base and not o0.mem.index and not o0.mem.segment
+                            and k>0 and ins[k-1].mnemonic=='push' and ins[k-1].operands
+                            and ins[k-1].operands[0].type==X86_OP_IMM and ins[k-1].address+ins[k-1].size==i.address
+                            and self.in_text(ins[k-1].operands[0].imm & 0xffffffff)):
+                        # `push A; jmp dword [slot]`: the same call through a pointer, in
+                        # practice an import (0x19f4e92 calls memmove this way).  Without
+                        # the continuation the rest of the caller never runs.
+                        a_=ins[k-1].operands[0].imm & 0xffffffff
+                        body.append(f"    dispatch_indirect(c, MR32(0x{o0.mem.disp & 0xffffffff:x}u));")
+                        body.append(f"    if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);")
+                        body.append("    return;")
+                        continue
                     if o0.type==X86_OP_IMM and self.in_text(o0.imm):
                         body.append(f"    goto L_{o0.imm:08x};"); continue
                     if o0.type==X86_OP_IMM:
