@@ -1450,12 +1450,29 @@ class Lifter:
                         f" for(int _k=0;_k<16;_k++)"
                         f" if(c->xmm[{XM[o[1].reg]}].b[_k] & 0x80u) _r|=1u<<_k;"
                         f" {W(0,'_r')} }}"]
+        if m in ('psrldq', 'pslldq') and is_xm(0) and o[1].type == X86_OP_IMM:
+            # byte shift of the whole 128-bit register (the VP6 decoder's SSE2
+            # filters at 0x91e1ac use it; skipped, the video came out as garbage)
+            n_ = min(o[1].imm & 0xff, 16); di = XM[o[0].reg]
+            idx = f"_k+{n_}" if m == 'psrldq' else f"_k-{n_}"
+            ok = f"_k+{n_}<16" if m == 'psrldq' else f"_k>={n_}"
+            return [f"{{ uint8_t _t[16]; for(int _k=0;_k<16;_k++) _t[_k] = ({ok}) ? c->xmm[{di}].b[{idx}] : 0;"
+                    f" memcpy(&c->xmm[{di}], _t, 16); }}"]
+        if m in ('punpcklqdq', 'punpckhqdq') and is_xm(0):
+            di = XM[o[0].reg]
+            if m == 'punpcklqdq':
+                return [f"c->xmm[{di}].u64[1] = ({qwords(1, 0)});"]
+            return [f"{{ uint64_t _b=({qwords(1, 1)}); c->xmm[{di}].u64[0] = c->xmm[{di}].u64[1]; c->xmm[{di}].u64[1] = _b; }}"]
         if m == 'pshufd' and is_xm(0):
             imm = o[2].imm & 0xff
             sel = [(imm>>0)&3,(imm>>2)&3,(imm>>4)&3,(imm>>6)&3]
+            di = XM[o[0].reg]
+            if is_mem(1):
+                ea5 = self.ea(o[1].mem)
+                return [f"{{ uint32_t _t[4]; memcpy(_t, g_mem + (uint32_t){ea5}, 16); " +
+                        " ".join(f"c->xmm[{di}].u32[{k}]=_t[{sel[k]}];" for k in range(4)) + " }"]
             src = (f"c->xmm[{XM[o[1].reg]}]" if is_xm(1) else None)
             if src is None: raise Unsupported(m)
-            di = XM[o[0].reg]
             return [f"{{ uint32_t _t[4]; " +
                     " ".join(f"_t[{k}]={src}.u32[{sel[k]}];" for k in range(4)) +
                     " " + " ".join(f"c->xmm[{di}].u32[{k}]=_t[{k}];" for k in range(4)) + " }"]

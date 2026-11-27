@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/stat.h>
 
 #define COM_MAGIC 0xE0000000u
 #define COM_BASE  0x4C000000u
@@ -235,6 +236,69 @@ static uint32_t tex_level(uint32_t tex, uint32_t index, uint32_t *pitch) {
     level_layout(MR32(tex + R_FMT), mip(MR32(tex + R_W), level), mip(MR32(tex + R_H), level), pitch, &size);
     if (!MR32(tab + 4u * index)) MR32(tab + 4u * index) = res_alloc(size);
     return MR32(tab + 4u * index);
+}
+
+/* Debugging aid: PROSTREET_TEXDUMP=N writes the top level of every texture
+ * an effect binds during frame N to out/texdump/ as PPM (colour) plus PGM
+ * (alpha), so one can see what the game is showing before draws are rendered.
+ * The files are game data: they stay in the run directory. */
+static uint64_t g_frame_no;
+static void tex_dump(uint32_t tex) {
+    static long want = -2; static unsigned serial;
+    if (want == -2) { const char *e = getenv("PROSTREET_TEXDUMP"); want = e ? atol(e) : -1; }
+    if (want < 0 || (long)g_frame_no != want || !tex || !mem_is_committed(tex + R_DATA)) return;
+    uint32_t w = MR32(tex + R_W), h = MR32(tex + R_H), fmt = MR32(tex + R_FMT), pitch = 0;
+    if (!w || !h || w > 4096 || h > 4096) return;
+    uint32_t d = tex_level(tex, 0, &pitch);
+    if (!d) return;
+    uint8_t *rgb = malloc((size_t)w * h * 3), *al = malloc((size_t)w * h);
+    const uint8_t *src = g_mem + d;
+    int dxt = fmt == 0x31545844u ? 1 : fmt == 0x33545844u ? 3 : fmt == 0x35545844u ? 5 : 0;
+    for (uint32_t y = 0; y < h; y++) for (uint32_t x = 0; x < w; x++) {
+        uint8_t r = 0, g = 0, b = 0, a = 255;
+        if (dxt) {
+            const uint8_t *blk = src + ((size_t)(y / 4) * ((w + 3) / 4) + x / 4) * (dxt == 1 ? 8 : 16);
+            const uint8_t *cb = dxt == 1 ? blk : blk + 8;
+            unsigned c0 = cb[0] | cb[1] << 8, c1 = cb[2] | cb[3] << 8, k = (cb[4 + (y & 3)] >> ((x & 3) * 2)) & 3;
+            int p[4][3] = { { (c0 >> 11) * 255 / 31, ((c0 >> 5) & 63) * 255 / 63, (c0 & 31) * 255 / 31 },
+                            { (c1 >> 11) * 255 / 31, ((c1 >> 5) & 63) * 255 / 63, (c1 & 31) * 255 / 31 } };
+            for (int i = 0; i < 3; i++) {
+                if (c0 > c1 || dxt != 1) { p[2][i] = (2 * p[0][i] + p[1][i]) / 3; p[3][i] = (p[0][i] + 2 * p[1][i]) / 3; }
+                else { p[2][i] = (p[0][i] + p[1][i]) / 2; p[3][i] = 0; }
+            }
+            r = (uint8_t)p[k][0]; g = (uint8_t)p[k][1]; b = (uint8_t)p[k][2];
+            unsigned ai = (y & 3) * 4 + (x & 3);
+            if (dxt == 3) a = (uint8_t)(((blk[ai / 2] >> ((ai & 1) * 4)) & 15) * 17);
+            if (dxt == 5) {
+                unsigned a0 = blk[0], a1 = blk[1]; uint64_t bits = 0;
+                for (int i = 0; i < 6; i++) bits |= (uint64_t)blk[2 + i] << (8 * i);
+                unsigned c = (unsigned)(bits >> (3 * ai)) & 7;
+                a = (uint8_t)(c == 0 ? a0 : c == 1 ? a1 : a0 > a1 ? ((8 - c) * a0 + (c - 1) * a1) / 7
+                              : c == 6 ? 0 : c == 7 ? 255 : ((6 - c) * a0 + (c - 1) * a1) / 5);
+            }
+        } else {
+            const uint8_t *px = src + (size_t)y * pitch + (size_t)x * fmt_bytes(fmt);
+            switch (fmt) {
+            case 21: a = px[3]; /* fall through */        /* A8R8G8B8 */
+            case 22: b = px[0]; g = px[1]; r = px[2]; break;   /* X8R8G8B8 */
+            case 50: r = g = b = px[0]; break;            /* L8 */
+            case 28: r = g = b = 255; a = px[0]; break;   /* A8 */
+            case 51: r = g = b = px[0]; a = px[1]; break; /* A8L8 */
+            default: r = g = b = px[0]; break;
+            }
+        }
+        size_t i = (size_t)y * w + x;
+        rgb[3 * i] = r; rgb[3 * i + 1] = g; rgb[3 * i + 2] = b; al[i] = a;
+    }
+    char name[160];
+    mkdir("out/texdump", 0755);
+    snprintf(name, sizeof name, "out/texdump/f%ld_%03u_%08x_%ux%u_fmt%x.ppm", want, serial, tex, w, h, fmt);
+    FILE *f = fopen(name, "wb");
+    if (f) { fprintf(f, "P6\n%u %u\n255\n", w, h); fwrite(rgb, 3, (size_t)w * h, f); fclose(f); }
+    snprintf(name, sizeof name, "out/texdump/f%ld_%03u_%08x_alpha.pgm", want, serial++, tex);
+    f = fopen(name, "wb");
+    if (f) { fprintf(f, "P5\n%u %u\n255\n", w, h); fwrite(al, 1, (size_t)w * h, f); fclose(f); }
+    free(rgb); free(al);
 }
 
 static uint32_t surf_new(uint32_t w, uint32_t h, uint32_t fmt, uint32_t parent, uint32_t index) {
@@ -472,6 +536,7 @@ int com_call(CPU *c, uint32_t magic) {
             r = 0; /* D3D_OK */
         } else if (!strcmp(nm, "Present") || m == 17) {
             static uint64_t s_present_frames = 0;
+            g_frame_no++;
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
                 extern uint32_t gh_brk(void);
                 fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());
@@ -756,6 +821,7 @@ int com_call(CPU *c, uint32_t magic) {
             r = 0;
         }
     } else if (iface == IF_EFFECT) {
+        if (!strcmp(nm, "SetTexture")) tex_dump(COM_A(2));
         if (!strcmp(nm, "GetDesc") || m == 3) {
             uint32_t pd = COM_A(1);
             if (pd && mem_is_committed(pd)) {
