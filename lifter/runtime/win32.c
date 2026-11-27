@@ -2017,15 +2017,16 @@ int win32_call(CPU *c, uint32_t idx) {
     /* ---- qsort / bsearch --------------------------------------------- */
     } else if (str_eq(n, "qsort")) {
         uint32_t base = A(0), cnt = A(1), sz = A(2), cmp = A(3);
-        /* simple insertion sort, stable enough for boot.  The comparator is
-         * guest code, so the scratch element must be guest memory too. */
+        /* Ascending insertion sort (stable).  The comparator is guest code
+         * called as cmp(prev, elem), so the scratch element must be guest
+         * memory too; an element moves left while cmp(prev, elem) > 0. */
         uint32_t tmp = gh_alloc(sz ? sz : 1, 0, 16);
         for (uint32_t i = 1; i < cnt && tmp; i++) {
             memcpy(g_mem + tmp, g_mem + base + i * sz, sz);
             uint32_t j = i;
             while (j > 0) {
-                PUSH32(base + (j - 1) * sz);
                 PUSH32(tmp);
+                PUSH32(base + (j - 1) * sz);
                 PUSH32(SENTINEL);
                 dispatch_indirect(c, cmp);
                 while (c->eip != SENTINEL) { uint32_t t = c->eip; c->eip = 0; dispatch_indirect(c, t); }
@@ -2052,7 +2053,7 @@ int win32_call(CPU *c, uint32_t idx) {
             c->esp += 8;
             int32_t v = (int32_t)c->eax;
             if (v == 0) { r = base + mid * sz; break; }
-            if (v < 0) lo = mid + 1; else hi = mid;
+            if (v < 0) hi = mid; else lo = mid + 1;     /* cmp(key, elem) < 0: key is lower */
         }
 
     /* ---- getenv / filesystem find ------------------------------------ */
