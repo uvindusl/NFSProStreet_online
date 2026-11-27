@@ -11,8 +11,9 @@ Every claim is marked:
   `dlls/d3dx9_36/effect.c`, and consistent with the game data.
 - **Inferred**: a reading that fits the data but that nothing checks.
 
-Out of scope here: the expression (preshader) VM, parameter default values, and the shader
-bytecode itself.
+Out of scope here: the preshader VM and the shader bytecode itself. Parameter default values
+sit at `value_off` as `rows * cols * max(1, elements)` DWORDs (read by the runtime, not checked
+by `fx_dump.py`).
 
 ## Reproduce
 
@@ -176,9 +177,30 @@ Ops 8 and 73 are expressions only in `IDI_UCAP_FX` (3 passes each).
 Ops 169, 170 and 171 are expressions on 73 samplers each, so the HLE cannot apply those samplers
 correctly until the expression VM exists.
 
+## Expressions
+
+All 231 expression blobs have the same shape: a `CTAB` naming one parameter, an empty `CLIT`,
+and an `FXLC` block with one instruction, a one-component `mov` (opcode `0x10000001`) from
+that constant to the output. They are the compiled form of `MinFilter = <ciMinFilter>;` and
+similar, so the state's value is the parameter's first component. **Confirmed (data):**
+`lifter/runtime/d3dx_effect.c` reports any expression that is not of this shape when it loads
+an effect, and reports none for the 32 effects the game creates.
+
+Every shader blob has a `PRES` comment, but in 508 of the 591 it is the bare tag with no body.
+The other 83 carry a real preshader (308 to 532+ bytes), which is not decoded.
+
+## Runtime
+
+`lifter/runtime/d3dx_effect.c` implements `ID3DXEffect` on this format: parameters and their
+default values, techniques, passes, annotations, handles, and `Begin`/`BeginPass`/
+`CommitChanges`, which send render states, shaders, named shader constants (matched through
+each shader's `CTAB`), textures and sampler states to the effect's state manager (the game
+installs its own with `SetStateManager`) or to the device. The dumped image has an empty
+`.rsrc`, so `boot.c` maps that section from the original executable.
+
 ## Not decoded
 
-- The expression blobs (231) and the `PRES` preshaders inside the shader blobs.
+- The 83 real `PRES` preshaders inside the shader blobs (the constants they compute are not set).
 - Parameter default values, and the `flags` DWORD of a parameter.
 - The meaning of the `unknown` header count and of state `index` 256.
 - Resource `usage` 2, sampler arrays, and string or shader parameter objects: none occur in the

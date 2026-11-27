@@ -34,7 +34,7 @@ extern uint32_t com_new_shader(uint32_t bytecode, uint32_t size);
 #define H_MAGIC       0x48584644u          /* 'DFXH' */
 #define D3DERR_INVALIDCALL 0x8876086Cu
 enum { HK_PARAM = 1, HK_TECH, HK_PASS, HK_ANN };
-enum { ST_CONST = 0, ST_SHADER, ST_EXPR, ST_REF };
+enum { ST_CONST = 0, ST_SHADER, ST_EXPR, ST_REF, ST_PARAM };   /* ST_PARAM: the value of parameter `ref` */
 
 typedef struct {
     char name[64];
@@ -188,7 +188,7 @@ static void read_ctab(Fx *fx, FxShader *sh) {
         uint32_t len = tok >> 16, id = 0;
         if (i + 1 + len > n) break;
         if (len) memcpy(&id, b + 4 * (i + 1), 4);
-        if (id == 0x53455250u) { sh->has_pres = 1; fx->npres++; }       /* 'PRES' */
+        if (id == 0x53455250u && len > 1) { sh->has_pres = 1; fx->npres++; }   /* 'PRES' with a body */
         if (id == 0x42415443u && len >= 8) {                            /* 'CTAB' */
             const uint8_t *t = b + 4 * (i + 2);
             uint32_t tsz = (len - 1) * 4, cnt, info;
@@ -214,6 +214,35 @@ static void read_ctab(Fx *fx, FxShader *sh) {
         }
         i += 1 + len;
     }
+}
+
+/* A compiled expression (0x46580200 ...).  Every one in the game's effects is
+ * a single move of a named parameter into the state (`MinFilter = <ciMinFilter>`):
+ * a CTAB with one constant and an FXLC block with one `mov`.  Returns the
+ * parameter's index, or -1 for anything more than that. */
+static int expr_param(Fx *fx, uint32_t at, uint32_t n) {
+    int param = -1, single_mov = 0;
+    uint32_t nw = n / 4;
+    for (uint32_t i = 1; i < nw; ) {
+        uint32_t tok = dw(fx, at + 4 * i);
+        if ((tok & 0xFFFFu) != 0xFFFEu) break;
+        uint32_t len = tok >> 16, id = len ? dw(fx, at + 4 * (i + 1)) : 0;
+        if (i + 1 + len > nw) return -1;
+        uint32_t body = at + 4 * (i + 2);
+        if (id == 0x42415443u && len >= 8) {                  /* 'CTAB' */
+            uint32_t cnt = dw(fx, body + 12), info = dw(fx, body + 16);
+            if (cnt != 1 || info + 20 > (len - 1) * 4) return -1;
+            uint32_t nameo = dw(fx, body + info);
+            if (nameo >= (len - 1) * 4) return -1;
+            const char *nm = (const char *)fx->d + body + nameo;
+            for (uint32_t q = 0; q < fx->nparams; q++)
+                if (!strncmp(fx->params[q].name, nm, (len - 1) * 4 - nameo)) { param = (int)q; break; }
+        } else if (id == 0x434C5846u && len >= 3) {           /* 'FXLC': count, then instructions */
+            single_mov = dw(fx, body) == 1 && (dw(fx, body + 4) >> 20) == 0x100u;
+        }
+        i += 1 + len;
+    }
+    return single_mov ? param : -1;
 }
 
 static int fx_parse(Fx *fx, int fxi) {
@@ -287,7 +316,9 @@ static int fx_parse(Fx *fx, int fxi) {
             st->kind = ST_SHADER; st->sh = sh;
             if (sh->is_ps) ps->ps = sh; else ps->vs = sh;
         } else {
-            st->kind = ST_EXPR; fx->nexpr++;
+            st->ref = (usage == 0 && first == 0x46580200u) ? expr_param(fx, at, n) : -1;
+            if (st->ref >= 0 && fx->params[st->ref].val) st->kind = ST_PARAM;
+            else { st->kind = ST_EXPR; fx->nexpr++; }
         }
     }
     return fx->ok;
@@ -465,6 +496,18 @@ static float as_float(const FxParam *p, uint32_t v) {
     return p->type == 1 ? (v ? 1.0f : 0.0f) : (float)(int32_t)v;
 }
 
+/* The value of a state that is a constant or a parameter's value; 0 if neither. */
+static int state_value(Fx *fx, const FxState *st, uint32_t *v) {
+    if (st->kind == ST_CONST) { *v = st->val; return 1; }
+    if (st->kind == ST_PARAM) {
+        const FxParam *p = &fx->params[st->ref];
+        float f; memcpy(&f, &p->val[0], 4);
+        *v = p->type == 3 ? (uint32_t)(int32_t)f : p->val[0];
+        return 1;
+    }
+    return 0;
+}
+
 /* Send the shader's named constants (from the effect's parameters), and its
  * samplers' textures and states. */
 static void upload(CPU *c, Fx *fx, FxShader *sh) {
@@ -503,9 +546,9 @@ static void upload(CPU *c, Fx *fx, FxShader *sh) {
                         uint32_t a[2] = { stage, fx->params[st->ref].tex };
                         sm(c, fx, SM_TEX, 2, a);
                     }
-                } else if (st->kind == ST_CONST && st->op >= 165 && st->op <= 177) {
-                    uint32_t a[3] = { stage, st->op - 164u, st->val };
-                    sm(c, fx, SM_SAMP, 3, a);
+                } else if (st->op >= 165 && st->op <= 177) {
+                    uint32_t a[3] = { stage, st->op - 164u, 0 };
+                    if (state_value(fx, st, &a[2])) sm(c, fx, SM_SAMP, 3, a);
                 }
             }
         }
@@ -522,9 +565,9 @@ static void apply_pass(CPU *c, Fx *fx, FxPass *ps, int states) {
             } else if (st->kind == ST_CONST && (st->op == 146 || st->op == 147)) {
                 uint32_t a[1] = { 0 };                        /* `PixelShader = NULL` */
                 sm(c, fx, st->op == 147 ? SM_PS : SM_VS, 1, a);
-            } else if (st->kind == ST_CONST && rs_of(st->op) >= 0) {
-                uint32_t a[2] = { (uint32_t)rs_of(st->op), st->val };
-                sm(c, fx, SM_RS, 2, a);
+            } else if (rs_of(st->op) >= 0) {
+                uint32_t a[2] = { (uint32_t)rs_of(st->op), 0 };
+                if (state_value(fx, st, &a[1])) sm(c, fx, SM_RS, 2, a);
             }
         }
     }
