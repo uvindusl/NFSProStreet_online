@@ -193,6 +193,11 @@ def main():
             dst = name(ops[0].reg) if ops and ops[0].type == X.X86_OP_REG else None
             if mn in ('clc', 'stc'):
                 cf = int(mn == 'stc')
+            elif mn in ('pushfd', 'popfd', 'nop'):
+                pass
+            elif len(ops) >= 2 and dst and dst != REGNAMES[reg] and dst not in regs \
+                    and mn in ('and', 'or', 'shrd', 'shld', 'shl', 'shr', 'sar', 'test', 'cmp'):
+                pass                    # filler on a register the gadget does not use
             elif mn == 'dec' and ops[0].type == X.X86_OP_MEM:
                 pass
             elif mn == 'je':
@@ -253,6 +258,29 @@ def main():
                     comp += 1
                     break
     cont += comp
+
+    # 2c. SecuROM computed jump:  push R; <compute R>; xchg [esp],R; ret
+    #     (also `xchg [esp+4],R; popfd; ret`, and the swap as three xors).
+    #     = jmp T.  The lifter runs T as a tail call, so T must be a function.
+    cjmp = 0
+    ends = (re.compile(rb'\x87([\x04\x0c\x14\x1c\x2c\x34\x3c])\x24\xc3'),
+            re.compile(rb'\x87([\x44\x4c\x54\x5c\x6c\x74\x7c])\x24\x04\x9d\xc3'),
+            re.compile(rb'\x33([\x04\x0c\x14\x1c\x2c\x34\x3c])\x24\x31\1\x24\x33\1\x24\xc3'))
+    for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
+        for pat in ends:
+            for m in pat.finditer(img, lo - base, hi - base):
+                p0 = m.start()
+                reg = (m.group(1)[0] >> 3) & 7
+                for back in range(2, 48):
+                    st = p0 - back
+                    if img[st] != 0x50 + reg:
+                        continue
+                    val = gadget_value(st + 1, p0, reg)
+                    if val is not None and exec_addr(val):
+                        seeds.add(val)
+                        cjmp += 1
+                        break
+    cont += cjmp
 
     # 3. function pointers held in data tables
     rdata = ptrs_in(img, RDATA_LO, RDATA_HI)

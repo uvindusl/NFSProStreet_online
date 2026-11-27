@@ -830,6 +830,25 @@ class Lifter:
                             "  dispatch_indirect(c, _t);",
                             "  if (c->eip == _r) dispatch_indirect(c, _r); }",
                             "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM computed jump: `push R; <compute R>; xchg [esp],R; ret` puts a
+                # computed target where R was saved and "returns" to it, i.e. `jmp T`
+                # with R restored.  Variants: `xchg [esp+4],R; popfd; ret` (flags saved
+                # around the arithmetic) and the swap written as three xors.  A ret that
+                # directly follows such a swap is never a return: run T as a tail call,
+                # or the rest of the function is skipped and its frame stays on the
+                # stack (sub_00455100 jumps into its body through one at 0x430e02).
+                b3 = self.fetch(i.address - 3, 3)
+                b5 = self.fetch(i.address - 5, 5)
+                b9 = self.fetch(i.address - 9, 9)
+                swap = (len(b3) == 3 and b3[0] == 0x87 and (b3[1] & 0xC7) == 0x04 and b3[2] == 0x24) \
+                    or (len(b5) == 5 and b5[0] == 0x87 and (b5[1] & 0xC7) == 0x44 and b5[2:] == bytes([0x24, 0x04, 0x9D])) \
+                    or (len(b9) == 9 and b9[0] == 0x33 and (b9[1] & 0xC7) == 0x04 and b9[2] == 0x24
+                        and b9[3:6] == bytes([0x31, b9[1], 0x24]) and b9[6:] == b9[:3])
+                if swap:
+                    return ["POP32(c->eip);",
+                            "dispatch_indirect(c, c->eip);   /* computed jump */",
+                            "return;"]
             if _os.environ.get('RETEIP','1') == '0' and self.entry not in self.retpast:
                 return [f"c->esp += {4 + n}u; return;"]
             return [f"POP32(c->eip);" + (f" c->esp += {n}u;" if n else "") + " return;"]
