@@ -177,12 +177,17 @@ D3D9. It now uses the D3D9 formulas:
 
 ```c
 case O_CMP: for(int i=0;i<4;i++) d[i]= s[0][i]>=0.f ? s[1][i] : s[2][i];
+            DSTW(x,d); break;
 case O_LRP: for(int i=0;i<4;i++) d[i]=s[2][i]+s[0][i]*(s[1][i]-s[2][i]);
+            DSTW(x,d); break;
 ```
 
-**Verification:** `lifter/tools/cpu_shader_semantics_test.c` builds a synthetic
-vs_2_0 shader with c0 = (-1,1,-0.5,2), c1 = (11,12,13,14),
-c2 = (21,22,23,24) and checks
-`oT0(cmp) = (21,12,23,14)` and `oT1(lrp) = (31,12,28,4)`. Removing `O_CMP`
-makes the first check fail with all-zero output; swapping the `lrp` operands
-makes the second fail with `(1,22,8,34)`.
+**Verification:** `bash lifter/tools/cpu_shader_semantics_test.sh` builds a
+synthetic vs_2_0 shader with c0 = (-1,1,-0.5,2), c1 = (11,12,13,14),
+c2 = (21,22,23,24), c3 = (+0,-0,NaN,3) and checks
+`oT0(cmp) = (21,12,23,14)`, `oT1(lrp) = (31,12,28,4)`,
+`oT2(edges) = (11,12,23,14)` and `oT3(mask) = (21,0,0,0)`. The Node hook
+`web/test/cpu-semantics.test.mjs` also compiles deliberately broken copies:
+removing `O_CMP` makes `oT0` zero, and swapping the `lrp` operands gives
+`(1,22,8,34)`. This is CPU-semantics-only coverage, not a corpus or GPU
+differential.
