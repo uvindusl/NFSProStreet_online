@@ -1936,6 +1936,17 @@ class Lifter:
                     body.append(f"    guest_hook(c, 0x{i.address:x}u);")
                 if m=='jmp':
                     o0=i.operands[0]
+                    if (os.environ.get('PUSHRET','0')=='1' and o0.type==X86_OP_IMM and self.in_text(o0.imm)
+                            and k>0 and ins[k-1].mnemonic=='push' and ins[k-1].operands
+                            and ins[k-1].operands[0].type==X86_OP_IMM and ins[k-1].address+ins[k-1].size==i.address
+                            and self.in_text(ins[k-1].operands[0].imm & 0xffffffff)
+                            and (ins[k-1].operands[0].imm & 0xffffffff) != i.address+i.size):
+                        # `push A; jmp B`: a call to B written as a jump, continuing at A
+                        a_=ins[k-1].operands[0].imm & 0xffffffff
+                        body.append(f"    dispatch_indirect(c, 0x{o0.imm & 0xffffffff:x}u);")
+                        body.append(f"    if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);")
+                        body.append("    return;")
+                        continue
                     if o0.type==X86_OP_IMM and self.in_text(o0.imm):
                         body.append(f"    goto L_{o0.imm:08x};"); continue
                     if o0.type==X86_OP_IMM:

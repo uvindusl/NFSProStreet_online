@@ -382,61 +382,10 @@ static void sub_019f7630_impl(CPU *restrict c) {
     POP32(c->eip);
 }
 
-/* Object descriptor node constructor (0x004591a0) */
-void sub_004591a0(CPU *restrict c) {
-    uint32_t ret_addr;
-    POP32(ret_addr);
-    uint32_t esi = MR32(c->esp);      /* arg0: node pointer */
-    uint32_t ebp = MR32(c->esp + 4);  /* arg1: template_obj */
-    uint32_t ebx = MR32(c->esp + 8);  /* arg2: flags / count */
-    c->esp += 12;
-
-    /* Initialize inner circular list at node + 0x20 */
-    MR32(esi + 0x20) = esi + 0x20;
-    MR32(esi + 0x24) = esi + 0x20;
-
-    char s1_buf[256] = {0};
-    char s2_buf[256] = {0};
-    if (ebp && mem_is_committed(ebp)) {
-        if (mem_is_committed(ebp + 0x04)) {
-            strncpy(s1_buf, (const char*)(g_mem + ebp + 0x04), sizeof(s1_buf) - 1);
-        }
-        if (mem_is_committed(ebp + 0x20)) {
-            strncpy(s2_buf, (const char*)(g_mem + ebp + 0x20), sizeof(s2_buf) - 1);
-        }
-    }
-
-    uint32_t len1 = (uint32_t)strlen(s1_buf) + 1;
-    uint32_t p1 = gh_alloc(len1, 0, 1);
-    memcpy(g_mem + p1, s1_buf, len1);
-    MR32(esi + 0x08) = p1;
-
-    uint32_t len2 = (uint32_t)strlen(s2_buf) + 1;
-    uint32_t p2 = gh_alloc(len2, 0, 1);
-    memcpy(g_mem + p2, s2_buf, len2);
-    MR32(esi + 0x0c) = p2;
-
-    /* djb2 string hash: hash = hash * 33 + c */
-    uint32_t hash = 0xffffffff;
-    const uint8_t *s = (const uint8_t*)s1_buf;
-    while (*s) {
-        hash = (hash << 5) + hash + *s++;
-    }
-    MR32(esi + 0x10) = hash;
-    MR32(esi + 0x14) = ebp;
-    MR32(esi + 0x18) = ebx;
-    MR32(esi + 0x1c) = 0;
-
-    /* Insert into doubly-linked circular list at sentinel 0x00a9e18c */
-    uint32_t tail = MR32(0x00a9e190);
-    MR32(tail) = esi;
-    MR32(0x00a9e190) = esi;
-    MR32(esi + 0x04) = tail;
-    MR32(esi + 0x00) = 0x00a9e18c;
-
-    c->eax = esi;
-    c->eip = ret_addr;
-}
+/* Object descriptor node constructor (0x004591a0): lifted now that the boot
+ * seeds reach it (a SecuROM computed call targets it); the hand-written
+ * stand-in is gone. */
+void sub_004591a0(CPU *restrict c);
 
 static void sub_01a006ec_impl(CPU *restrict c) {
     c->eax = c->edi;

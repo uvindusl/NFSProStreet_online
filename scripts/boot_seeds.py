@@ -40,6 +40,7 @@ The image must be the runtime dump (`artifacts/nfs.exe.unpacked`): the retail
 exe still has the encrypted slots and points them elsewhere.
 """
 import os
+import re
 import struct
 import sys
 
@@ -108,39 +109,93 @@ def main():
                 target = struct.unpack_from('<I', img, i + 6)[0]
                 if exec_addr(ret) and exec_addr(target):
                     seeds.add(ret)
+                    seeds.add(target)   # now dispatched, no longer inlined
                     cont += 1
             # push ret; jmp target  (a call written as a jump: the callee's
             # ret comes back to `ret`, which the lifted caller must be able to run)
             elif img[i] == 0x68 and img[i + 5] in (0xE9, 0xEB):
                 ret = struct.unpack_from('<I', img, i + 1)[0]
+                if img[i + 5] == 0xE9:
+                    tgt = (base + i + 10 + struct.unpack_from('<i', img, i + 6)[0]) & 0xffffffff
+                else:
+                    tgt = (base + i + 7 + struct.unpack_from('<b', img, i + 6)[0]) & 0xffffffff
                 if exec_addr(ret):
                     seeds.add(ret)
+                    if exec_addr(tgt):
+                        seeds.add(tgt)   # dispatched as a call, no longer inlined
                     cont += 1
             i += 1
 
-    # 2b. SecuROM computed call: push eax; mov eax,[X]; not eax; xor eax,[Y];
-    #     xchg [esp],eax; add dword [esp+4],K; ret  -> continues at entry+K
-    pat = bytes([0x50, 0xA1])
+    # 2b. SecuROM computed call:  push R; mov R,[X]; (not R) (xor|add|sub R,[Y]|imm);
+    #     xchg [esp],R; add dword [esp+4],K; ret
+    #     = call T (T computed from image data) returning to entry+K.  Seed both.
+    import capstone
+    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_32)
+    md.detail = True
+    X = capstone.x86_const
+    comp = 0
     for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
         i = lo - base
         end = hi - base
         while True:
-            i = img.find(pat, i, end)
-            if i < 0:
+            m = re.compile(rb'\x87[\x04\x0c\x14\x1c\x2c\x34\x3c]\x24').search(img, i, end)
+            if not m:
                 break
-            k = None
-            if (img[i + 6:i + 8] == b'\xf7\xd0' and img[i + 8:i + 10] == b'\x33\x05'
-                    and img[i + 14:i + 17] == b'\x87\x04\x24'):
-                if img[i + 17:i + 21] == b'\x83\x44\x24\x04' and img[i + 22] == 0xC3:
-                    k = img[i + 21]
-                elif img[i + 17:i + 21] == b'\x81\x44\x24\x04' and img[i + 25] == 0xC3:
-                    k = struct.unpack_from('<I', img, i + 21)[0]
-            if k is not None:
-                r = base + i + k
-                if exec_addr(r):
-                    seeds.add(r)
-                    cont += 1
-            i += 1
+            p0 = m.start()
+            i = p0 + 1
+            reg = (img[p0 + 1] >> 3) & 7
+            if img[p0 + 3:p0 + 7] == b'\x83\x44\x24\x04' and img[p0 + 8] == 0xC3:
+                k = img[p0 + 7]
+            elif img[p0 + 3:p0 + 7] == b'\x81\x44\x24\x04' and img[p0 + 11] == 0xC3:
+                k = struct.unpack_from('<I', img, p0 + 7)[0]
+            else:
+                continue
+            for back in range(2, 48):
+                st = p0 - back
+                if img[st] != 0x50 + reg:
+                    continue
+                val = None
+                ok = True
+                pos = st + 1
+                while pos < p0 and ok:
+                    ins = next(md.disasm(img[pos:pos + 15], base + pos), None)
+                    if ins is None:
+                        ok = False
+                        break
+                    ops = ins.operands
+                    mn = ins.mnemonic
+
+                    def src(o):
+                        if o.type == X.X86_OP_IMM:
+                            return o.imm & 0xffffffff
+                        if o.type == X.X86_OP_MEM and o.mem.base == 0 and o.mem.index == 0:
+                            return rd32(o.mem.disp & 0xffffffff)
+                        return None
+                    if mn == 'mov' and len(ops) == 2 and ops[0].type == X.X86_OP_REG:
+                        val = src(ops[1])
+                    elif mn == 'not' and val is not None:
+                        val = ~val & 0xffffffff
+                    elif mn == 'neg' and val is not None:
+                        val = -val & 0xffffffff
+                    elif mn in ('xor', 'add', 'sub') and val is not None and len(ops) == 2:
+                        y = src(ops[1])
+                        if y is None:
+                            ok = False
+                        else:
+                            val = {'xor': val ^ y, 'add': val + y, 'sub': val - y}[mn] & 0xffffffff
+                    else:
+                        ok = False
+                    if val is None:
+                        ok = False
+                    pos += ins.size
+                if ok and pos == p0 and val is not None and exec_addr(val):
+                    seeds.add(val)
+                    r = base + st + k
+                    if exec_addr(r):
+                        seeds.add(r)
+                    comp += 1
+                    break
+    cont += comp
 
     # 3. function pointers held in data tables
     rdata = ptrs_in(img, RDATA_LO, RDATA_HI)
