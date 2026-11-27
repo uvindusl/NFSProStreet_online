@@ -387,10 +387,13 @@ void null_dead_heap_pointers(void) {
      *       keeps lazily created singletons here (0x00b345ac, 0x00b36f78, ...):
      *       with the dump's pointers the frontend got a device handle with no
      *       device behind it (sub_005a97f0).  Nulling the whole megabyte (465
-     *       words) was checked not to change anything else in the boot. */
+     *       words) was checked not to change anything else in the boot;
+     *   0x00a70000-0x00a80000  audio statics: the buffer object at 0x00a77dd4
+     *       still owned a block of the dumped heap, which sub_00500580 freed
+     *       (the allocator's bad-block assert in sub_00436130). */
     char ranges[512];
     const char *env = getenv("PROSTREET_NULL_STALE");
-    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000,0x00a70000-0x00a80000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
     const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
