@@ -403,7 +403,74 @@ void sub_004591a0(CPU *restrict c);
  * construct uninitialized child subtrees, allowing the engine to complete
  * loading GLOBAL\ATTRIBUTES.BIN (all 251 attributes) and proceed to subsequent
  * subsystems. */
+/* PROSTREET_ATTR_GUARD=1: main's workaround for the attribute-tree NULL child
+ * crash at 0x00531064 (stand-ins for sub_00530f60 and 0x00531064, a guard in
+ * the sub_005310e0 stand-in, and a hook on dispatches returning to
+ * 0x00531064).  Off by default: this branch loads the attribute database for
+ * real (dumped state repaired, lifted functions ahead of stand-ins), and with
+ * the hook on, its child-pointer rewrite corrupts live nodes (allocator fault
+ * in sub_00435390 at frame 1). */
+static int attr_guard_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("PROSTREET_ATTR_GUARD"); on = e && *e == '1'; }
+    return on;
+}
+
+/* Attribute tree NIL sentinel & child guard for sub_00530f60 / 0x00531064.
+ * When an attribute collection node has a NULL child pointer (MR32(esi+4) == 0),
+ * dereferencing MR16(edx+0x22) at 0x00531064 triggers a SIGSEGV at guest_va=0x00000022.
+ * This guard allocates a zeroed guest sentinel node so that child reads
+ * cleanly see 0 (NIL / leaf) and loop validation terminates without faulting. */
+static uint32_t s_nil_attr_sentinel = 0;
+
+static inline void guard_attr_tree_node(CPU *restrict c) {
+    uint32_t nodes[2] = { c->esi, c->ecx };
+    for (int i = 0; i < 2; i++) {
+        uint32_t n = nodes[i];
+        if (n && mem_is_committed(n + 4)) {
+            uint32_t child = MR32(n + 4);
+            if (!child || !mem_is_committed(child + 0x22)) {
+                if (!s_nil_attr_sentinel) {
+                    s_nil_attr_sentinel = gh_alloc(64, 1, 4);
+                    if (s_nil_attr_sentinel) {
+                        memset(g_mem + s_nil_attr_sentinel, 0, 64);
+                    }
+                }
+                if (s_nil_attr_sentinel) {
+                    MR32(n + 4) = s_nil_attr_sentinel;
+                }
+            }
+        }
+    }
+}
+
+/* sub_00530f60 is an attribute node initializer/formatter (__thiscall with
+ * this in ecx and 2 stack arguments = 8 bytes). At 0x00531064, when MR32(esi+4)
+ * is NULL, reading MR16(edx+0x22) triggers SIGSEGV at guest_va=0x00000022.
+ * This safe implementation guards against NULL child nodes and performs a
+ * clean completion, cleaning 8 bytes of arguments and returning this in eax. */
+static void sub_00530f60_impl(CPU *restrict c) {
+    guard_attr_tree_node(c);
+    POP32(c->eip);
+    c->esp += 8u;
+    c->eax = c->ecx ? c->ecx : (c->esi ? c->esi : 0);
+}
+
+/* Continuation point and crash site at 0x00531064 inside sub_00530f60.
+ * In original code at 0x00531064:
+ *   c->edx = MR32(c->esi + 4);
+ *   c->eax = MR16(c->edx + 0x22);
+ * When MR32(c->esi + 4) is NULL, dereferencing edx+0x22 causes SIGSEGV at
+ * guest_va=0x00000022. Guarding patches NULL child pointer with sentinel
+ * and cleanly finishes the loop with eax=0. */
+static void sub_00531064_impl(CPU *restrict c) {
+    guard_attr_tree_node(c);
+    c->edx = (c->esi && mem_is_committed(c->esi + 4)) ? MR32(c->esi + 4) : 0;
+    c->eax = (c->edx && mem_is_committed(c->edx + 0x22)) ? (uint32_t)MR16(c->edx + 0x22) : 0;
+}
+
 static void sub_005310e0_impl(CPU *restrict c) {
+    if (attr_guard_on()) guard_attr_tree_node(c);
     POP32(c->eip);
     c->esp += 20u;
     c->eax = 0;
@@ -496,6 +563,12 @@ void dispatch_init(void) {
             if (*slot) fprintf(stderr, "dispatch: PROSTREET_FORCE_OVERRIDE replaces the lifted %s\n", key);
             *slot = ovr[i].fn;
         }
+    }
+    if (attr_guard_on()) {
+        g_dtab[0x00530f60 - TEXT_BASE] = sub_00530f60_impl;
+        g_dtab[0x00531064 - TEXT_BASE] = sub_00531064_impl;
+        g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
+        fprintf(stderr, "dispatch: PROSTREET_ATTR_GUARD: attribute-tree stand-ins installed\n");
     }
 
     com_init();
@@ -1332,6 +1405,8 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         s_main_entry_logged = 1;
         fprintf(stderr, "main-entry: WinMain entered (entry 0x004afee0, indirect 0x%08x)\n", addr);
     }
+    if (attr_guard_on() && mem_is_committed(c->esp) && MR32(c->esp) == 0x00531064u)
+        guard_attr_tree_node(c);
     if (addr >= COM_MAGIC) {
         if (addr >= IMP_MAGIC) {
             uint32_t idx = IMP_INDEX(addr);

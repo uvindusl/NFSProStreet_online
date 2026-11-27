@@ -86,6 +86,7 @@ void sub_0052c6f0(CPU *c) { (void)c; }
 void sub_004e1480(CPU *c) { (void)c; }
 void sub_0052d5c0(CPU *c) { (void)c; }
 void sub_00435140(CPU *c) { (void)c; }
+void sub_004591a0(CPU *c) { (void)c; }
 
 /* Include actual runtime sources */
 #include "mem.c"
@@ -93,6 +94,9 @@ void sub_00435140(CPU *c) { (void)c; }
 #include "d3dx9_hle.c"
 #include "win32.c"
 #include "dispatch.c"
+#include "hdfont.c"
+#include "d3dx_effect.c"
+#include "swrast.c"
 
 /* Mock wndproc to verify DispatchMessageA callback */
 static uint32_t s_mock_wndproc_called = 0;
@@ -116,6 +120,8 @@ int main(void) {
 
     /* 1. Initialize guest memory, dispatch table, and COM bridge */
     mem_init();
+    /* Suite 3 checks the attribute-tree workaround, which is opt-in */
+    setenv("PROSTREET_ATTR_GUARD", "1", 1);
     dispatch_init();
     mem_commit(TEST_IAT_BASE, 0x1000u);
     win32_init();

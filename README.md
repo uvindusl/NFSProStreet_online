@@ -56,7 +56,7 @@ The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The r
 
 ### Known issues
 
-- **Secondary asset loading & game loop initialization.** With attribute tree validation (`sub_00530f60`/`sub_005310e0`) and the initial window message pump resolved, execution advances into secondary asset processing and engine scene initialization.
+- **Native boot reaches the main menu.** Intro movies, title screen, profile creation and saving, then the main menu with its 3D car render (checked offline with `PROSTREET_FRAMEDUMP`). The attribute database loads through the lifted code once the process dump's stale state is repaired; main's earlier attribute-tree stand-ins (`sub_00530f60`/`0x00531064`/`sub_005310e0`) are kept as an opt-in (`PROSTREET_ATTR_GUARD=1`). Not done: races, EA's AEMS audio modules (skipped), PRES preshaders, the web build of this work.
 - **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
 - **Shader coverage is still per-opcode.** `cmp` and `lrp` match D3D9 in one synthetic CPU-interpreter case (`bash lifter/tools/cpu_shader_semantics_test.sh`); there is no corpus-wide or GPU differential for them, and other opcodes have not all been exercised numerically.
 - **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.
