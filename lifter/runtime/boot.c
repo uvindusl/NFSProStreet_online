@@ -371,6 +371,13 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  * For a static object whose whole state is left over from the dumped process
  * (not just a pointer or two), the original bytes are the state the game's
  * own start-up expects.  Always restored:
+ *   0x00ab15ec-0x00ab15fc and the flag byte 0x00ab286e: the handles of the
+ *   loaded language files and "the frontend file is the one loaded".  With
+ *   the dump's values sub_00595140 skipped loading <LANGUAGE>_FRONTEND.BIN
+ *   and every menu label read "Missing string";
+ *   0x00abb510: the game-flow state, 3 ("in the frontend") in the dump.  The
+ *   boot-time language load then asked for the frontend file before the
+ *   streaming manager it needs exists (sub_00746130 walked a dead object);
  *   0x00a63d38-0x00a644b8 and its init-once flag 0x00acd8fc: the object the
  *       main loop services in sub_00704660.  With the dump's state it skipped
  *       its set-up and called a callback of the dumped process.
@@ -379,7 +386,7 @@ static void restore_original_ranges(void) {
     if (!g_orig_data) return;
     char ranges[512];
     const char *env = getenv("PROSTREET_RESTORE");
-    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900%s%s",
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514%s%s",
              (env && *env) ? "," : "", (env && *env) ? env : "");
     uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
     const char *p = ranges;

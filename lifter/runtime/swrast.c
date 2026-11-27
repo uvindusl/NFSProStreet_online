@@ -548,6 +548,9 @@ static void draw(uint32_t type, uint32_t nprims, const uint8_t *ib, int ib32, in
             fprintf(stderr, "    v%u pos %.3f %.3f %.3f %.3f  var0 %.3f %.3f %.3f %.3f  var2 %.3f %.3f %.3f %.3f\n", i,
                     vt[i].pos[0], vt[i].pos[1], vt[i].pos[2], vt[i].pos[3], vt[i].var[0][0], vt[i].var[0][1], vt[i].var[0][2], vt[i].var[0][3],
                     vt[i].var[2][0], vt[i].var[2][1], vt[i].var[2][2], vt[i].var[2][3]);
+        if (getenv("PROSTREET_FRAMEDUMP_VERTS"))
+            for (uint32_t i = 0; i < nv && i < 96; i++)
+                fprintf(stderr, "    vert %u xy %.4f %.4f uv %.5f %.5f\n", i, vt[i].raw[0], vt[i].raw[1], vt[i].var[2][0], vt[i].var[2][1]);
         for (int st = 0; st < 4; st++) { uint32_t w, h, fmt, pitch; com_tex_level0(tex[st], &w, &h, &fmt, &pitch);
             if (tex[st]) fprintf(stderr, "    stage %d: texture %08x %ux%u format %x, filter %u, address %u/%u\n", st, tex[st], w, h, fmt, samp[st][5], samp[st][1], samp[st][2]); }
         for (int r = 0; r < 6; r++) fprintf(stderr, "    c%d %.4f %.4f %.4f %.4f\n", r, vsc[r][0], vsc[r][1], vsc[r][2], vsc[r][3]);
