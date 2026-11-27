@@ -499,6 +499,22 @@ int main(int argc, char **argv) {
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
     win32_init();
 
+    /* Stale std::list head nodes from process dump (lists at 0x00ff2600 and
+     * 0x00ff260c: {alloc, head, size}).  The head nodes lived in the dumped
+     * process heap, which is not part of the image, so the first insert
+     * (sub_00507ed4 fills the second list with its 100 entries) linked through
+     * a null prev pointer.  Give each list a fresh empty head. */
+    if (mem_is_committed(0x00ff2600)) {
+        static const uint32_t lists[] = { 0x00ff2600, 0x00ff260c };
+        for (unsigned i = 0; i < sizeof lists / sizeof *lists; i++) {
+            uint32_t head = gh_alloc(0x20, 1, 16);
+            MR32(head) = head;
+            MR32(head + 4) = head;
+            MR32(lists[i] + 4) = head;
+            MR32(lists[i] + 8) = 0;
+        }
+    }
+
     /* Initialize DisplayDevice and RenderParams singletons */
     if (mem_is_committed(0x00ac6ed4)) {
         uint32_t dev = MR32(0x00ac6ed4);
