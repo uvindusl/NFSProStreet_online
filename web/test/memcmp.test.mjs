@@ -9,7 +9,8 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const WASI = fs.readdirSync(path.join(REPO, 'deps')).filter(d => d.startsWith('wasi-sdk-')).map(d => path.join(REPO, 'deps', d)).pop();
+const deps = path.join(REPO, 'deps');
+const WASI = fs.existsSync(deps) ? fs.readdirSync(deps).filter(d => d.startsWith('wasi-sdk-')).map(d => path.join(deps, d)).pop() : undefined;
 const CC = WASI && path.join(WASI, 'bin/clang');
 const OUT = path.join(REPO, 'out/web/test'); fs.mkdirSync(OUT, { recursive: true });
 

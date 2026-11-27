@@ -518,6 +518,21 @@ static const char *g_gamedir = "game";
 static char g_pathbuf[4][4096];
 static int g_pathi;
 
+static void path_join(char *dest, size_t dest_sz, const char *base, const char *comp) {
+    if (!dest || dest_sz == 0) return;
+    const char *safe_comp = comp ? comp : "";
+    if (!base || !*base) {
+        snprintf(dest, dest_sz, "%s", safe_comp);
+        return;
+    }
+    snprintf(dest, dest_sz, "%s/%s", base, safe_comp);
+}
+
+static void path_copy(char *dest, size_t dest_sz, const char *src) {
+    if (!dest || dest_sz == 0) return;
+    snprintf(dest, dest_sz, "%s", src ? src : "");
+}
+
 static void resolve_case(char *path) {
     if (access(path, F_OK) == 0) return;
     char resolved[4096];
@@ -543,21 +558,17 @@ static void resolve_case(char *path) {
         p = end ? end : (p + strlen(p));
 
         char candidate[4096];
-        if (resolved[0]) {
-            snprintf(candidate, sizeof(candidate), "%s/%s", resolved, comp);
-        } else {
-            snprintf(candidate, sizeof(candidate), "%s", comp);
-        }
+        path_join(candidate, sizeof(candidate), resolved, comp);
 
         struct stat st;
         if (stat(candidate, &st) == 0) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
             continue;
         }
 
         DIR *dir = opendir(resolved[0] ? resolved : ".");
         if (!dir) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
             continue;
         }
 
@@ -566,22 +577,18 @@ static void resolve_case(char *path) {
         while ((de = readdir(dir)) != NULL) {
             if (!strcasecmp(de->d_name, comp)) {
                 char next_resolved[4096];
-                if (resolved[0]) {
-                    snprintf(next_resolved, sizeof(next_resolved), "%s/%s", resolved, de->d_name);
-                } else {
-                    snprintf(next_resolved, sizeof(next_resolved), "%s", de->d_name);
-                }
-                snprintf(resolved, sizeof(resolved), "%s", next_resolved);
+                path_join(next_resolved, sizeof(next_resolved), resolved, de->d_name);
+                path_copy(resolved, sizeof(resolved), next_resolved);
                 found = 1;
                 break;
             }
         }
         closedir(dir);
         if (!found) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
         }
     }
-    snprintf(path, 4096, "%s", resolved);
+    path_copy(path, 4096, resolved);
 }
 
 static const char *xp(const char *p) {
@@ -1008,16 +1015,19 @@ static int g_wm_activated = 0;
 static uint64_t g_wm_dispatched = 0;
 static pthread_mutex_t g_wmq_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-static void wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
+static int wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
     pthread_mutex_lock(&g_wmq_mtx);
     int next = (g_wmq_tail + 1) % WMQ_CAP;
+    int ok = 0;
     if (next != g_wmq_head) {
         g_wmq[g_wmq_tail].msg = m;
         g_wmq[g_wmq_tail].wp = wp;
         g_wmq[g_wmq_tail].lp = lp;
         g_wmq_tail = next;
+        ok = 1;
     }
     pthread_mutex_unlock(&g_wmq_mtx);
+    return ok;
 }
 
 /* Scripted typing for unattended runs: PROSTREET_TEXT="9000:PLAYER" posts one
@@ -2253,7 +2263,7 @@ int win32_call(CPU *c, uint32_t idx) {
                     MR32(pm + 4) = m;
                     MR32(pm + 8) = wp;
                     MR32(pm + 12) = lp;
-                    MR32(pm + 16) = 0;
+                    MR32(pm + 16) = (uint32_t)real_ms();
                     MR32(pm + 20) = 0;
                     MR32(pm + 24) = 0;
                 }
@@ -2264,6 +2274,8 @@ int win32_call(CPU *c, uint32_t idx) {
                     memset(g_mem + pm, 0, 28);
                     MR32(pm + 0) = g_hwnd;
                 }
+                /* Yield to prevent tight-loop game thread freeze / background thread starvation */
+                sched_yield();
                 r = 0u;
             }
         }
@@ -2285,7 +2297,7 @@ int win32_call(CPU *c, uint32_t idx) {
                     MR32(pm + 4) = m;
                     MR32(pm + 8) = wp;
                     MR32(pm + 12) = lp;
-                    MR32(pm + 16) = 0;
+                    MR32(pm + 16) = (uint32_t)real_ms();
                     MR32(pm + 20) = 0;
                     MR32(pm + 24) = 0;
                 }
@@ -2311,16 +2323,57 @@ int win32_call(CPU *c, uint32_t idx) {
         if (wndproc && pm && mem_is_committed(pm) && mem_is_committed(pm + 27u)) {
             uint32_t args[4] = { MR32(pm), MR32(pm + 4), MR32(pm + 8), MR32(pm + 12) };
             if (args[1]) {
-                pthread_mutex_lock(&g_wmq_mtx);
-                g_wm_dispatched++;
-                pthread_mutex_unlock(&g_wmq_mtx);
-                r = call_guest(c, wndproc, 4, args);
+                static __thread int s_wndproc_depth = 0;
+                if (s_wndproc_depth < 8) {
+                    s_wndproc_depth++;
+                    pthread_mutex_lock(&g_wmq_mtx);
+                    g_wm_dispatched++;
+                    pthread_mutex_unlock(&g_wmq_mtx);
+                    r = call_guest(c, wndproc, 4, args);
+                    s_wndproc_depth--;
+                } else {
+                    fprintf(stderr, "  [window] DispatchMessageA: recursion depth limit reached (%d), dropping msg=0x%04x\n",
+                            s_wndproc_depth, args[1]);
+                    r = 0;
+                }
             }
         } else {
             r = 0;
         }
     } else if (str_eq(n, "TranslateMessage")) {
+        uint32_t pm = A(0);
         r = 0;
+        if (pm && mem_is_committed(pm) && mem_is_committed(pm + 27u)) {
+            uint32_t msg = MR32(pm + 4);
+            if (msg == 0x0100u || msg == 0x0101u || msg == 0x0104u || msg == 0x0105u) {
+                /* WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP return nonzero */
+                r = 1u;
+                if (msg == 0x0100u) {
+                    uint32_t vk = MR32(pm + 8);
+                    uint32_t lp = MR32(pm + 12);
+                    /* Only translate real character virtual keys: digits, letters, space, backspace, tab, enter, esc */
+                    if ((vk >= '0' && vk <= '9') || (vk >= 'A' && vk <= 'Z') ||
+                        vk == 0x20 || vk == 0x08 || vk == 0x09 || vk == 0x0D || vk == 0x1B) {
+                        wm_push(0x0102u /* WM_CHAR */, vk, lp);
+                    }
+                }
+            }
+        }
+    } else if (str_eq(n, "PostMessageA")) {
+        /* BOOL PostMessageA(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam) */
+        uint32_t hwnd = A(0);
+        uint32_t msg = A(1);
+        uint32_t wp = A(2);
+        uint32_t lp = A(3);
+        if (hwnd == 0 || hwnd == g_hwnd) {
+            r = wm_push(msg, wp, lp) ? 1u : 0u;
+        } else {
+            r = 0u;
+        }
+    } else if (str_eq(n, "ShowWindow") || str_eq(n, "UpdateWindow") || str_eq(n, "DestroyWindow")) {
+        r = 1u;
+    } else if (str_eq(n, "SetFocus") || str_eq(n, "SetForegroundWindow")) {
+        r = (A(0) == 0 || A(0) == g_hwnd) ? g_hwnd : 0u;
     } else if (str_eq(n, "RegisterClassExA") || str_eq(n, "RegisterClassA")) {
         uint32_t wc = A(0);
         uint32_t off = str_eq(n, "RegisterClassExA") ? 8u : 4u;

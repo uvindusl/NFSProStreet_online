@@ -30,6 +30,7 @@ canonical project status, see [`docs/milestones.md`](../docs/milestones.md).
 | `vertex-path-differential.md` | Vertex shader path differential |
 | `pixel-path-differential.md` | Pixel shader path differential |
 | `shader-residual-classes.md` | Residual shader opcode classes |
+| `metal-differential-results.md` | Shader differential on Apple Metal (M2 Pro) |
 | `class-d-analysis.md` | Class D (shader instruction) analysis |
 
 ## Shaders — 8-Wide ABI (Inter-Stage Widening)
