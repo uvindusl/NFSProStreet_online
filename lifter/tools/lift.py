@@ -709,8 +709,8 @@ class Lifter:
         self.cur_ip = i.address
         m=i.mnemonic; ops=i.operands; o=ops
         # Capstone folds the LOCK prefix into the mnemonic ("lock xadd"), but
-        # xadd/cmpxchg/add are already lifted.  Atomicity is dropped: the
-        # native port runs the guest on one thread (see docs/phase3-lifter.md).
+        # xadd/cmpxchg/add are already lifted.  lift() wraps the result in
+        # GUEST_LOCK()/GUEST_UNLOCK() to keep the sequence atomic.
         if m.startswith('lock '): m = m[5:]
         E=lambda k: self.rd(o[k]); W=lambda k,v: self.wr(o[k],v)
         bits = (o[0].size*8) if o else 32
@@ -2125,6 +2125,15 @@ class Lifter:
                 self.cur_fmask = self.fafter.get(i.address, F_ALL)
                 try:
                     lines = self.insn(i, targets)
+                    # LOCK-prefixed read-modify-write (and xchg with memory, which is
+                    # locked implicitly): the guest's interlocked refcounts and
+                    # spinlocks run on several host threads, so the sequence must not
+                    # interleave with another one.  One process-wide lock (cpu.h).
+                    # Not the stack-relative xchg of the SecuROM call idioms.
+                    if m.startswith('lock ') or (m == 'xchg' and any(
+                            x.type == X86_OP_MEM and x.mem.base != X86_REG_ESP for x in i.operands)):
+                        if not any(('return' in l or 'goto ' in l) for l in lines):
+                            lines = ["GUEST_LOCK();"] + lines + ["GUEST_UNLOCK();"]
                     if x87opt:
                         if m[:1]=='f' or X86_GRP_FPU in i.groups:
                             new_lines = xb.translate(lines)

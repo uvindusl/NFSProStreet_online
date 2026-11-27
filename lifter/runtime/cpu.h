@@ -98,6 +98,12 @@ uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn);
 #define MRF64(a) (*(double   *)(g_mem + (uint32_t)(a)))
 #endif
 
+/* One process-wide lock around the guest's LOCK-prefixed instructions (see
+ * lift.py).  A spinlock: the guarded sequences are a few host instructions. */
+extern volatile unsigned char g_guest_lock;
+#define GUEST_LOCK()   do { while (__atomic_test_and_set(&g_guest_lock, __ATOMIC_ACQUIRE)) { } } while (0)
+#define GUEST_UNLOCK() __atomic_clear(&g_guest_lock, __ATOMIC_RELEASE)
+
 enum { R_EAX=0,R_ECX,R_EDX,R_EBX,R_ESP,R_EBP,R_ESI,R_EDI };
 
 /* An indirect or out-of-range jmp at the end of a lifted function: control

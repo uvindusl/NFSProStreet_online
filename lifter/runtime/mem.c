@@ -23,6 +23,7 @@
 #endif
 
 uint8_t *g_mem = 0;
+volatile unsigned char g_guest_lock = 0;
 uint8_t g_cbits[1u << 16] = {0};   /* one bit per 16 KB page, 64 KB bitmap for 4 GB */
 __thread CPU *g_cur_cpu = 0;       /* thread-local: see rt.h */
 

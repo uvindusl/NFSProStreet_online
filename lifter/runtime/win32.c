@@ -265,6 +265,35 @@ typedef struct {
 static HEnt g_h[H_MAX];
 static pthread_mutex_t g_h_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+/* Critical sections.  The guest's CRITICAL_SECTION is only an address to us:
+ * each one gets a recursive host mutex the first time it is entered (many
+ * were initialised in the dumped process, so InitializeCriticalSection is not
+ * a reliable place to create it).  Without real locks the game's allocator
+ * and resource lists were corrupted by its loader threads. */
+enum { CS_MAX = 8192 };
+static struct { uint32_t va; pthread_mutex_t m; } g_cs[CS_MAX];
+static pthread_mutex_t g_cs_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t *cs_get(uint32_t va) {
+    pthread_mutex_t *r = NULL;
+    pthread_mutex_lock(&g_cs_mtx);
+    uint32_t i = (va >> 2) * 2654435761u % CS_MAX;
+    for (unsigned n = 0; n < CS_MAX; n++, i = (i + 1) % CS_MAX) {
+        if (g_cs[i].va == va) { r = &g_cs[i].m; break; }
+        if (!g_cs[i].va) {
+            pthread_mutexattr_t at;
+            pthread_mutexattr_init(&at);
+            pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
+            pthread_mutex_init(&g_cs[i].m, &at);
+            pthread_mutexattr_destroy(&at);
+            g_cs[i].va = va;
+            r = &g_cs[i].m;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_cs_mtx);
+    return r;
+}
+
 static uint32_t h_make(int kind) {
     pthread_mutex_lock(&g_h_mtx);
     for (int i = 0; i < H_MAX; i++) {
@@ -1803,6 +1832,22 @@ int win32_call(CPU *c, uint32_t idx) {
                 r = 0x102u;
             }
             pthread_mutex_unlock(&h->m);
+        } else if (h->kind == HK_MUTEX) {
+            /* owner in th, recursion depth in count */
+            pthread_t self = pthread_self();
+            pthread_mutex_lock(&h->m);
+            #define MTX_FREE (h->count <= 0 || pthread_equal(h->th, self))
+            if (ms == 0xFFFFFFFFu) { while (!MTX_FREE) pthread_cond_wait(&h->cv, &h->m); }
+            else if (ms != 0) {
+                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                while (!MTX_FREE) { if (pthread_cond_timedwait(&h->cv, &h->m, &ts) == ETIMEDOUT) break; }
+            }
+            if (MTX_FREE) { h->th = self; h->count = h->count <= 0 ? 1 : h->count + 1; r = 0; }
+            else r = 0x102u;
+            #undef MTX_FREE
+            pthread_mutex_unlock(&h->m);
         } else {
             r = 0;
         }
@@ -1820,8 +1865,19 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 1;
     } else if (str_eq(n, "CreateMutexA") || str_eq(n, "CreateMutexW")) {
         r = h_make(HK_MUTEX);
+        HEnt *h = h_get(r);
+        if (h && A(1)) { h->th = pthread_self(); h->count = 1; }   /* bInitialOwner */
     } else if (str_eq(n, "ReleaseMutex")) {
-        r = 1;
+        HEnt *h = h_get(A(0));
+        r = 0;
+        if (h && h->kind == HK_MUTEX) {
+            pthread_mutex_lock(&h->m);
+            if (h->count > 0 && pthread_equal(h->th, pthread_self())) {
+                if (--h->count == 0) pthread_cond_broadcast(&h->cv);
+                r = 1;
+            }
+            pthread_mutex_unlock(&h->m);
+        }
     } else if (str_eq(n, "CreateSemaphoreA")) {
         r = h_make(HK_SEM);
         HEnt *h = h_get(r);
@@ -1840,11 +1896,19 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 1;
     } else if (str_eq(n, "DuplicateHandle")) {
         r = 0;
-    } else if (str_eq(n, "InitializeCriticalSection") || str_eq(n, "DeleteCriticalSection") ||
-               str_eq(n, "EnterCriticalSection") || str_eq(n, "LeaveCriticalSection")) {
+    } else if (str_eq(n, "InitializeCriticalSection") || str_eq(n, "DeleteCriticalSection")) {
+        r = 0;
+    } else if (str_eq(n, "EnterCriticalSection")) {
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        if (m) pthread_mutex_lock(m);
+        r = 0;
+    } else if (str_eq(n, "LeaveCriticalSection")) {
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        if (m) pthread_mutex_unlock(m);     /* EPERM when not the owner: ignored */
         r = 0;
     } else if (str_eq(n, "TryEnterCriticalSection")) {
-        r = 1;
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        r = (!m || pthread_mutex_trylock(m) == 0) ? 1 : 0;
     } else if (str_eq(n, "CreateWaitableTimerA")) {
         r = h_make(HK_EVENT);
     } else if (str_eq(n, "SetWaitableTimer")) {
