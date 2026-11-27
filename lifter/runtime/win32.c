@@ -87,6 +87,9 @@ static uint32_t gh_guest_str(const char *s) {
 static uint32_t g_brk = HEAP_BASE;
 static pthread_mutex_t g_heap_mtx = PTHREAD_MUTEX_INITIALIZER;
 
+/* End of the part of the guest heap handed out so far. */
+uint32_t gh_brk(void) { return g_brk; }
+
 uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
     if (n == 0) n = 1;
     if (align < 16) align = 16;

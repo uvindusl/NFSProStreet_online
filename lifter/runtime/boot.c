@@ -348,10 +348,13 @@ void null_dead_heap_pointers(void) {
      *       says the frontend database is loaded (0x00abaf3c), so sub_006d53f0
      *       "unloads" frontend.bin/.vlt, which this run never registered, and
      *       erases the end marker of the file tree at 0x00a61138; the next
-     *       lookup then loops forever. */
+     *       lookup then loops forever;
+     *   0x00a59000-0x00a5a000  the static manager at 0x00a590e0 and its
+     *       neighbours: its item list still names heap nodes of the dumped
+     *       process (sub_0062c1c0 walked into a freed-memory fill pattern). */
     char ranges[512];
     const char *env = getenv("PROSTREET_NULL_STALE");
-    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
     const char *v = ranges;
     if (g_orig_data && v && *v) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
@@ -368,6 +371,8 @@ void null_dead_heap_pointers(void) {
                 uint32_t w = MR32(a);
                 if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
                 if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
+                /* memory this run's own boot code has allocated is not dead */
+                { extern uint32_t gh_brk(void); if (w >= 0x20000000u && w < gh_brk()) { kept++; continue; } }
                 int live = 0;
                 for (uint32_t k = 0; k < 64u && !live; k += 4)
                     live = mem_is_committed(w + k) && MR32(w + k) != 0;
