@@ -383,6 +383,13 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  *   for a longer range than the cached one).  The dump's scale was for a
  *   10 MHz counter and this runtime's is 1 MHz, so game time ran ten times
  *   too slowly: the intro video showed three frames a second;
+ *   0x00b4197c and 0x00b41dac-0x00b41dc8: the sound core's "initialised"
+ *   flag, its service voice and the head of its tick list.  With the flag set
+ *   sub_008ebd80 never created the Snd9Service voice that pumps every audio
+ *   stream, so the movie's audio queue filled up and the intro video stopped
+ *   at frame 200; with the flag alone reset, the init linked its static tick
+ *   node (0x00b3cd74) into the dump's list a second time and sub_008d4e00
+ *   looped for ever;
  *   0x00a63d38-0x00a644b8 and its init-once flag 0x00acd8fc: the object the
  *       main loop services in sub_00704660.  With the dump's state it skipped
  *       its set-up and called a callback of the dumped process.
@@ -391,7 +398,7 @@ static void restore_original_ranges(void) {
     if (!g_orig_data) return;
     char ranges[512];
     const char *env = getenv("PROSTREET_RESTORE");
-    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec%s%s",
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8%s%s",
              (env && *env) ? "," : "", (env && *env) ? env : "");
     uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
     const char *p = ranges;
