@@ -517,6 +517,8 @@ int vs_run(const VSProg *p, const VSConst *k, const float v[16][4], VSOut *o){
                     DSTW(x,d); break;
         case O_CND: for(int i=0;i<4;i++) d[i]= s[0][i]>0.5f ? s[1][i] : s[2][i];
                     DSTW(x,d); break;
+        case O_CMP: for(int i=0;i<4;i++) d[i]= s[0][i]>=0.f ? s[1][i] : s[2][i];
+                    DSTW(x,d); break;
         case O_M4x4: case O_M4x3: case O_M3x4: case O_M3x3: case O_M3x2: {
             int rows = (x->op==O_M4x4||x->op==O_M3x4) ? 4 :
                        (x->op==O_M4x3||x->op==O_M3x3) ? 3 : 2;

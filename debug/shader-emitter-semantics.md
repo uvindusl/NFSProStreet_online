@@ -167,28 +167,22 @@ WGSL `select(accept, reject, condition)`: if condition component is non-zero →
 
 All other audited opcodes (O_CMP, O_LRP, O_SGE, O_SLT, O_FRC, O_SINCOS, O_LIT, O_DP2ADD, O_MOVA, O_TEXKILL, O_DSX, O_DSY) match D3D9 semantics.
 
-## REAL BUG: vs_run CPU interpreter LRP
+## RESOLVED: CPU vs_run interpreter CMP and LRP
 
-**File:** `web/runtime/web/runtime/vsemu.c` line 468 (identical mirror `lifter/tools/web/vsemu.c` line 468).
+**File:** `web/runtime/web/runtime/vsemu.c`.
 
-**Current code:**
+The CPU interpreter used to have no `O_CMP` case (so `cmp` left the destination
+untouched) and computed `lrp` as `s1 + s0*(s2-s1)`, swapping src1/src2 versus
+D3D9. It now uses the D3D9 formulas:
+
 ```c
-case O_LRP: for(int i=0;i<4;i++) d[i]=s[1][i]+s[0][i]*(s[2][i]-s[1][i]); DSTW(x,d); break;
+case O_CMP: for(int i=0;i<4;i++) d[i]= s[0][i]>=0.f ? s[1][i] : s[2][i];
+case O_LRP: for(int i=0;i<4;i++) d[i]=s[2][i]+s[0][i]*(s[1][i]-s[2][i]);
 ```
 
-This computes `s1 + s0*(s2-s1)` = `mix(s1, s2, s0)`, which swaps source registers 1 and 2 versus D3D9's `lrp` semantics:
-- D3D9: `dst = src0 * (src1 - src2) + src2`
-- Current code: `dst = src1 + src0 * (src2 - src1)` = `mix(s1, s2, s0)`
-
-**Correct formula:** `dst = src2 + src0 * (src1 - src2)` = `mix(s2, s1, s0)`
-
-**Fixed code:**
-```c
-case O_LRP: for(int i=0;i<4;i++) d[i]=s[2][i]+s[0][i]*(s[1][i]-s[2][i]); DSTW(x,d); break;
-```
-
-**Reachability:** This CPU interpreter path is called from `web/runtime/web/runtime/com.c` line 1874 (CPU vertex fallback), and its output feeds the shadercheck reference vectors. Any vertex shader using `lrp` that falls back to the CPU path will compute incorrect results.
-
-**Note:** The MSL emitters at lines 978 and 1357 of `vsemu.c` already emit `mix(s2b, s1, s0)` which is correct (`mix(src2, src1, src0)` = D3D9 lrp). Only the CPU `vs_run` interpreter is buggy.
-
-**Read-only audit:** No modifications were made to runtime files in this section — this is a documentation of an existing defect.
+**Verification:** `lifter/tools/cpu_shader_semantics_test.c` builds a synthetic
+vs_2_0 shader with c0 = (-1,1,-0.5,2), c1 = (11,12,13,14),
+c2 = (21,22,23,24) and checks
+`oT0(cmp) = (21,12,23,14)` and `oT1(lrp) = (31,12,28,4)`. Removing `O_CMP`
+makes the first check fail with all-zero output; swapping the `lrp` operands
+makes the second fail with `(1,22,8,34)`.
