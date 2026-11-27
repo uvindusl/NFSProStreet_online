@@ -1488,11 +1488,27 @@ int win32_call(CPU *c, uint32_t idx) {
         char *p = getcwd((char *)(g_mem + A(0)), (size_t)A(1));
         r = p ? A(0) : 0;
     } else if (str_eq(n, "_fullpath")) {
-        const char *p = xp(gs(A(0)));
-        char *rp = realpath(p, 0);
-        snprintf((char *)(g_mem + A(1)), (size_t)A(2), "%s", rp ? rp : p);
-        free(rp);
-        r = A(1);
+        /* char *_fullpath(char *absPath, const char *relPath, size_t max):
+         * absPath is the output.  The result stays a guest (Windows) path:
+         * a relative one gets "C:" + the working directory in front, which
+         * xp() maps back to the same host file.  absPath NULL (malloc'd
+         * result) is not supported. */
+        const char *rel = gs(A(1));
+        char out[1024];
+        if ((isalpha((unsigned char)rel[0]) && rel[1] == ':') || rel[0] == '\\' || rel[0] == '/') {
+            snprintf(out, sizeof out, "%s", rel);
+        } else {
+            char cwd[512];
+            if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "/");
+            snprintf(out, sizeof out, "C:%s\\%s", cwd, rel);
+        }
+        for (char *q = out; *q; q++) if (*q == '/') *q = '\\';
+        if (A(0) && strlen(out) < A(2)) {
+            snprintf((char *)(g_mem + A(0)), (size_t)A(2), "%s", out);
+            r = A(0);
+        } else {
+            r = 0;
+        }
     } else if (str_eq(n, "_getdrive")) {
         r = 3;   /* C: */
     } else if (str_eq(n, "_getdiskfree")) {
@@ -1743,6 +1759,21 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "GetCurrentDirectoryA")) {
         snprintf((char *)(g_mem + A(1)), A(0), "%s", g_gamedir);
         r = (uint32_t)strlen(g_gamedir);
+    } else if (str_eq(n, "SHGetFolderPathA")) {
+        /* (hwnd, csidl, token, flags, path[MAX_PATH]).  The game asks for
+         * CSIDL_PERSONAL | CSIDL_FLAG_CREATE (0x8005) to find its save folder;
+         * every folder maps to "savedata" in the working directory (beside
+         * the game directory), so saves never land in the game's own files.
+         * Absolute ("C:" + cwd, which xp() maps back): EA's path canonicaliser
+         * (sub_0089f1e7) mangles a relative "game\\..\\savedata" into
+         * an unterminated "game/" and overruns the caller's buffer. */
+        char dir[512], cwd[400];
+        if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "/tmp");
+        snprintf(dir, sizeof dir, "C:%s\\savedata", cwd);
+        for (char *q = dir; *q; q++) if (*q == '/') *q = '\\';
+        if (A(4)) snprintf((char *)(g_mem + A(4)), 260, "%s", dir);
+        mkdir(xp(dir), 0755);
+        r = 0;                              /* S_OK */
     } else if (str_eq(n, "GetSystemDirectoryA")) {
         snprintf((char *)(g_mem + A(0)), A(1), "C:\\WINDOWS\\SYSTEM32");
         r = 19;
