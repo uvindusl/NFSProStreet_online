@@ -1232,6 +1232,33 @@ void guest_backtrace(CPU *c, int maxn) {
     }
 }
 
+/* Code the game loads into its heap at run time and calls: EA's AEMS audio
+ * modules ("AEMS Module Instance", sub_00900e50 / sub_008b9360) are
+ * relocatable x86 carried in the sound data, so nothing lifted exists for
+ * them.  Until they are lifted or interpreted, a call into the heap returns
+ * at once with eax = 0 (the module does nothing: no sound from it), reported
+ * once per target.  PROSTREET_FOREIGN=stop keeps the old stop.  Targets in
+ * the image or in uncommitted memory still stop: those mean a lost state. */
+static int foreign_code_call(CPU *c, uint32_t addr) {
+    extern uint32_t gh_brk(void);
+    static int mode = -1;
+    if (mode < 0) { const char *e = getenv("PROSTREET_FOREIGN"); mode = !(e && !strcmp(e, "stop")); }
+    if (!mode || addr < 0x20000000u || addr >= gh_brk() || !mem_is_committed(addr)) return 0;
+    enum { MAXT = 64 };
+    static uint32_t seen[MAXT]; static unsigned nseen; static unsigned long calls;
+    calls++;
+    unsigned i;
+    for (i = 0; i < nseen && seen[i] != addr; i++) ;
+    if (i == nseen && nseen < MAXT) {
+        seen[nseen++] = addr;
+        fprintf(stderr, "foreign code: call to heap code at %#x from %#x skipped (eax=0); %u targets, %lu calls so far\n",
+                addr, mem_is_committed(c->esp) ? MR32(c->esp) : 0, nseen, calls);
+    }
+    c->eax = 0;
+    POP32(c->eip);
+    return 1;
+}
+
 static void unresolved(CPU *c, uint32_t addr) {
     g_stat_indirect_miss++;
     uint32_t ret = mem_is_committed(c->esp) ? MR32(c->esp) : 0;
@@ -1481,6 +1508,7 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         c->esp += 4u;
         return;
     }
+    if (foreign_code_call(c, addr)) return;
     unresolved(c, addr);
 }
 
