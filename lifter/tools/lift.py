@@ -503,7 +503,10 @@ class Lifter:
     # anything else still takes the dispatcher, so the semantics do not change.
     # instructions that may sit between the cmp and the ja, and before the jmp:
     # they write no flags, and the check below makes sure not the index either
-    _JT_PASS = frozenset(('mov', 'movzx', 'movsx', 'push', 'pop', 'lea', 'nop'))
+    # (the SSE moves too: 0x634c4c is `cmp eax,4; movss [..],xmm0 x4; ja; jmp [eax*4+table]`)
+    _JT_PASS = frozenset(('mov', 'movzx', 'movsx', 'push', 'pop', 'lea', 'nop',
+                          'movss', 'movsd', 'movaps', 'movups', 'movd', 'movq', 'movdqa', 'movdqu',
+                          'movlps', 'movhps'))
     def _jt_writes(self, i, fam):
         """does i write any part of the register family fam ('eax', ...)?"""
         try: return any((R32.get(r) or R16.get(r) or R8L.get(r) or R8H.get(r)) == fam for r in i.regs_access()[1])
