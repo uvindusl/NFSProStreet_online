@@ -326,14 +326,14 @@ def main():
                     comp += 1
                     break
     # 2b'''. Return fix-up followed by a plain jump:
-    #     add dword [esp],K; jmp T
+    #     add dword [esp],K; (nop); jmp T
     #     entered by `push A; jmp A` (or `push A; push A; ret`), so it calls T
     #     and returns to A+K.  0x19f8404 calls the trigger handler 0x10f8d70
     #     this way and returns to 0x19f8410; without that seed the continuation
     #     was skipped as junk and sub_004dc190 returned with its frame leaked
     #     (the race-loading thread then read a garbage tree).
     for lo, hi in ((TEXT_LO, TEXT_HI), (DIA_LO, DIA_HI)):
-        for m in re.compile(rb'(?:\x83\x04\x24(.)|\x81\x04\x24(....))\xe9(....)', re.S).finditer(img, lo - base, hi - base):
+        for m in re.compile(rb'(?:\x83\x04\x24(.)|\x81\x04\x24(....))\x90*\xe9(....)', re.S).finditer(img, lo - base, hi - base):
             st = m.start()
             entry = struct.pack('<I', base + st)
             if img.find(b'\x68' + entry, max(0, st - 64), st) < 0:
