@@ -1279,6 +1279,18 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
      * slips through, emulate the return the call site expects instead of
      * stopping, so the caller's own ret does not pop a stale address. */
     if (addr >= 0x10ea000 && addr < 0x1aa8000) {
+        /* A lifted function wins over the hand-written continuations below.
+         * Those date from before the lifter ran SecuROM's push/jmp and
+         * computed calls; once the real continuation is lifted, a stand-in
+         * that adjusts esp by hand unbalances the caller (0x01a00a8b and
+         * 0x01a00b6c left 0x2c bytes behind sub_004c5e00, which tripped the
+         * stack-cookie check in sub_005daeb0). */
+        guest_fn_t lifted = diabolus_lookup(addr);
+        if (lifted) {
+            g_stat_indirect_ok++;
+            lifted(c);
+            return;
+        }
         if (addr == 0x019ff0edu) {
             if (MR32(0x00a9dee8u) == 1) {
                 uint32_t eax = MR32(0x00a9def0u);
@@ -1311,12 +1323,6 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
             { uint32_t _t; POP32(_t); c->ebx = _t; }
             POP32(c->eip);
             c->esp += 0x14u;
-            return;
-        }
-        guest_fn_t f = diabolus_lookup(addr);
-        if (f) {
-            g_stat_indirect_ok++;
-            f(c);
             return;
         }
         g_stat_indirect_ok++;
