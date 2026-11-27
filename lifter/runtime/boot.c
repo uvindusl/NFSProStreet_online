@@ -770,9 +770,10 @@ int main(int argc, char **argv) {
      * pointer into the dumped heap, about 6,700 words of .data, was tried and
      * breaks the boot long before the window opens: much of that state is
      * relied on.)
-     *   0x00ab27dc  object whose vtable+0x74 sub_00597140 calls */
+     *   0x00ab27dc  object whose vtable+0x74 sub_00597140 calls
+     *   0x00a83bcc  geometry of the static model at 0x00a83bc0 (sub_004be090) */
     {
-        static const uint32_t dead[] = { 0x00ab27dcu };
+        static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu };
         for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
             if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
     }
@@ -782,13 +783,14 @@ int main(int argc, char **argv) {
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
     win32_init();
 
-    /* Stale std::list head nodes from process dump (lists at 0x00ff2600 and
-     * 0x00ff260c: {alloc, head, size}).  The head nodes lived in the dumped
-     * process heap, which is not part of the image, so the first insert
-     * (sub_00507ed4 fills the second list with its 100 entries) linked through
-     * a null prev pointer.  Give each list a fresh empty head. */
+    /* Stale std::list head nodes from process dump (four lists in a row,
+     * {alloc, head, size} at 0x00ff25e8, 0x00ff25f4, 0x00ff2600, 0x00ff260c).
+     * The head nodes lived in the dumped process heap, which is not part of
+     * the image, so the first insert linked through a null prev pointer
+     * (sub_00507ed4 fills the last list with its 100 entries; sub_004a34e0
+     * uses the first one each frame).  Give each list a fresh empty head. */
     if (mem_is_committed(0x00ff2600)) {
-        static const uint32_t lists[] = { 0x00ff2600, 0x00ff260c };
+        static const uint32_t lists[] = { 0x00ff25e8, 0x00ff25f4, 0x00ff2600, 0x00ff260c };
         for (unsigned i = 0; i < sizeof lists / sizeof *lists; i++) {
             uint32_t head = gh_alloc(0x20, 1, 16);
             MR32(head) = head;
