@@ -11,6 +11,7 @@
 
 extern uint32_t com_direct3dcreate9(void);
 extern uint32_t com_directinput8create(uint32_t ppvOut);
+extern uint32_t com_directsoundcreate(uint32_t ppDS);
 
 #include <ctype.h>
 #include <dirent.h>
@@ -2161,6 +2162,9 @@ int win32_call(CPU *c, uint32_t idx) {
         uint32_t ppvOut = A(2);
         r = com_directinput8create(ppvOut);
         /* Fall through to finish label */
+    } else if (str_eq(e->dll, "DSOUND.dll") && str_eq(n, "#1")) {
+        /* DirectSoundCreate(lpcGuid, ppDS, pUnkOuter) */
+        r = com_directsoundcreate(A(1));
     } else if (strncmp(n, "D3DX", 4) == 0) {
         if (str_eq(n, "D3DXMatrixMultiply")) {
             uint32_t a0 = A(0), a1 = A(1), a2 = A(2);

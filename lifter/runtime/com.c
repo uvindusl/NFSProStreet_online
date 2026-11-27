@@ -133,6 +133,13 @@ uint32_t com_directinput8create(uint32_t ppvOut) {
     return 0; /* DI_OK */
 }
 
+uint32_t com_directsoundcreate(uint32_t ppDS) {
+    uint32_t ds = com_new(IF_DS, 64);
+    if (ppDS && mem_is_committed(ppDS)) MR32(ppDS) = ds;
+    fprintf(stderr, "com: IDirectSound created 0x%08x\n", ds);
+    return 0; /* DS_OK */
+}
+
 #define COM_A(i) MR32(c->esp + 4u * (uint32_t)(i))
 
 int com_call(CPU *c, uint32_t magic) {
@@ -460,6 +467,84 @@ int com_call(CPU *c, uint32_t magic) {
         } else {
             r = 0;
         }
+    } else if (iface == IF_DS) {
+        /* No audio output yet: buffers are plain guest memory that is never played. */
+        if (!strcmp(nm, "CreateSoundBuffer")) {
+            uint32_t desc = COM_A(1), pp = COM_A(2);
+            /* DSBUFFERDESC: dwSize, dwFlags, dwBufferBytes, dwReserved, lpwfxFormat */
+            uint32_t len = (desc && mem_is_committed(desc)) ? MR32(desc + 8) : 0;
+            if (len == 0) len = 0x10000;     /* the primary buffer has no size of its own */
+            uint32_t obj = com_new(IF_DSBUF, 64);
+            MR32(obj + 4) = com_alloc(len);
+            MR32(obj + 8) = len;
+            if (pp && mem_is_committed(pp)) MR32(pp) = obj;
+            r = 0;
+        } else if (!strcmp(nm, "GetCaps")) {
+            /* DSCAPS: keep the caller's dwSize; a software device with no hardware
+             * mixing.  The game takes its usable sample rates from the secondary
+             * range (sub_008cbeb0), so a zero range leaves it with no rate at all. */
+            uint32_t p = COM_A(1);
+            if (p && mem_is_committed(p)) {
+                uint32_t sz = MR32(p);
+                if (sz >= 4 && sz <= 0x60) memset(g_mem + p + 4, 0, sz - 4);
+                if (sz >= 0x14) {
+                    MR32(p + 0x04) = 0x00000F1Fu; /* primary+secondary mono/stereo 8/16 bit, continuous rate */
+                    MR32(p + 0x08) = 100;         /* dwMinSecondarySampleRate */
+                    MR32(p + 0x0C) = 200000;      /* dwMaxSecondarySampleRate */
+                    MR32(p + 0x10) = 1;           /* dwPrimaryBuffers */
+                }
+            }
+            r = 0;
+        } else if (!strcmp(nm, "GetSpeakerConfig")) {
+            uint32_t p = COM_A(1);
+            if (p && mem_is_committed(p)) MR32(p) = 4; /* DSSPEAKER_STEREO */
+            r = 0;
+        } else if (!strcmp(nm, "DuplicateSoundBuffer")) {
+            uint32_t src = COM_A(1), pp = COM_A(2);
+            uint32_t obj = com_new(IF_DSBUF, 64);
+            if (src && mem_is_committed(src)) { MR32(obj + 4) = MR32(src + 4); MR32(obj + 8) = MR32(src + 8); }
+            if (pp && mem_is_committed(pp)) MR32(pp) = obj;
+            r = 0;
+        } else {
+            r = 0;
+        }
+    } else if (iface == IF_DSBUF) {
+        uint32_t self = COM_A(0);
+        uint32_t buf = MR32(self + 4), len = MR32(self + 8);
+        if (!strcmp(nm, "Lock")) {
+            /* Lock(this, offset, bytes, ppv1, pcb1, ppv2, pcb2, flags) */
+            uint32_t off = COM_A(1), n = COM_A(2), flags = COM_A(7);
+            if (flags & 2u) { off = 0; n = len; }      /* DSBLOCK_ENTIREBUFFER */
+            if (len && off >= len) off %= len;
+            if (n > len - off) n = len - off;          /* no wrap: the tail is not handed out */
+            uint32_t p1 = COM_A(3), c1 = COM_A(4), p2 = COM_A(5), c2 = COM_A(6);
+            if (p1 && mem_is_committed(p1)) MR32(p1) = buf + off;
+            if (c1 && mem_is_committed(c1)) MR32(c1) = n;
+            if (p2 && mem_is_committed(p2)) MR32(p2) = 0;
+            if (c2 && mem_is_committed(c2)) MR32(c2) = 0;
+            r = 0;
+        } else if (!strcmp(nm, "GetCurrentPosition")) {
+            uint32_t pp = COM_A(1), pw = COM_A(2);
+            if (pp && mem_is_committed(pp)) MR32(pp) = 0;
+            if (pw && mem_is_committed(pw)) MR32(pw) = 0;
+            r = 0;
+        } else if (!strcmp(nm, "GetCaps")) {
+            /* DSBCAPS: dwSize, dwFlags, dwBufferBytes, dwUnlockTransferRate, dwPlayCpuOverhead */
+            uint32_t p = COM_A(1);
+            if (p && mem_is_committed(p)) { MR32(p + 4) = 0; MR32(p + 8) = len; MR32(p + 12) = 0; MR32(p + 16) = 0; }
+            r = 0;
+        } else if (!strcmp(nm, "GetStatus") || !strcmp(nm, "GetVolume") ||
+                   !strcmp(nm, "GetPan") || !strcmp(nm, "GetFrequency")) {
+            uint32_t p = COM_A(1);
+            if (p && mem_is_committed(p)) MR32(p) = 0;
+            r = 0;
+        } else if (!strcmp(nm, "GetFormat")) {
+            uint32_t pn = COM_A(3);
+            if (pn && mem_is_committed(pn)) MR32(pn) = 0;
+            r = 0;
+        } else {
+            r = 0;
+        }
     } else if (iface == IF_EFFECT) {
         if (!strcmp(nm, "GetDesc") || m == 3) {
             uint32_t pd = COM_A(1);
@@ -515,6 +600,21 @@ int com_call(CPU *c, uint32_t magic) {
         }
     } else {
         r = 0;
+    }
+
+    /* PROSTREET_COMTRACE=1 logs every COM method call with its result;
+     * PROSTREET_COMTRACE=<substring> only the interfaces whose name contains it. */
+    static int s_trace = -1;
+    static const char *s_filter;
+    if (s_trace < 0) {
+        s_filter = getenv("PROSTREET_COMTRACE");
+        s_trace = s_filter != 0;
+        if (s_trace && !strcmp(s_filter, "1")) s_filter = "";
+    }
+    if (s_trace && strstr(g_if[iface].name, s_filter)) {
+        fprintf(stderr, "  [COM] %s::%s(this=%08x", g_if[iface].name, nm, COM_A(0));
+        for (int i = 1; i < nargs && i < 6; i++) fprintf(stderr, ", %08x", COM_A(i));
+        fprintf(stderr, ") = %08x  ret=%08x\n", r, c->eip);
     }
 
     c->eax = r;
