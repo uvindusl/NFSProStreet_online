@@ -880,7 +880,9 @@ int main(int argc, char **argv) {
      *   0x00bfbcac  node pool behind sub_004313f0, created on first use when null
      *   0x00aba54c  instance count of the input system (1 in the dump): its
      *               constructor sub_006c7d90 skips the set-up when it is not 0
-     *   0x00b34598  input device manager returned by sub_0089bfcd when not null */
+     *   0x00b34598  input device manager returned by sub_0089bfcd when not null
+     *   0x00ad07bc  singleton returned by the factory sub_00742d40 (found by
+     *               name hash from sub_004cfd30) and 0x00acfa6c, its use count */
     /* The current language (0x00a54ee8) is English in the dump, so the game's
      * LoadLanguage(English) (sub_005c3730) returns without loading anything
      * and every string lookup fails.  The original executable has -1 there. */
@@ -896,7 +898,7 @@ int main(int argc, char **argv) {
     if (mem_is_committed(0x00ab0f91)) MR8(0x00ab0f91) = 0;
     {
         static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
-                                         0x00aba54cu, 0x00b34598u };
+                                         0x00aba54cu, 0x00b34598u, 0x00ad07bcu, 0x00acfa6cu };
         for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
             if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
     }
