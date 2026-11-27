@@ -149,6 +149,7 @@ static void overlay_original_headers(void) {
  * null_dead_heap_pointers() has run. */
 static uint8_t *g_orig_data;
 static uint32_t g_orig_lo, g_orig_size;
+static uint32_t g_arena_base, g_arena_used;
 
 /* Relink the list headed at `a` to the nodes that are static objects in
  * [lo,hi).  Returns 0 if the list was intact (or empty), 1 if it is now
@@ -240,6 +241,8 @@ static void repair_stale_lists(void) {
         }
     }
     g_orig_data = orig; g_orig_lo = lo; g_orig_size = size;
+    /* the arena mark as the dump left it, before any boot code allocates */
+    if (mem_is_committed(0x00abb178)) { g_arena_base = MR32(0x00abb170); g_arena_used = MR32(0x00abb178); }
 
     /* Heads that a static constructor links to themselves are zero in the
      * original executable, so the scan above cannot see them.  Code can: a
@@ -428,6 +431,32 @@ void null_dead_heap_pointers(void) {
             fprintf(stderr, "boot: %08x-%08x: %u dead heap pointers nulled, %u kept\n",
                     r0, r1, nulled, kept);
         }
+    }
+    /* The game's Fastmem pool (0x00abb060) still describes the dumped
+     * process's arena: base at +0x110, bytes handed out at +0x118.  The pool
+     * goes on allocating above that mark, so everything below it is an object
+     * of the dumped process that no longer exists.  A word of .data that is
+     * zero in the original and points there is dead wherever it is.
+     * Off by default (PROSTREET_NULL_ARENA=1 turns it on): it nulls 130 words
+     * and the boot then stops early in sub_0063a340, so some of those dead
+     * objects are still relied on.  0x00ac6ec0-0x00ac6ed0 is left alone:
+     * boot code builds the display device at the dumped address it holds. */
+    if (g_orig_data && getenv("PROSTREET_NULL_ARENA") && mem_is_committed(0x00abb178)) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        uint32_t base = g_arena_base, used = g_arena_used;
+        unsigned nulled = 0;
+        if (base >= 0x01aa8000u && used && used < 0x01000000u) {
+            for (uint32_t a = lo; a + 4u <= hi; a += 4) {
+                if (a >= 0x00ac6ec0u && a < 0x00ac6ed0u) continue;
+                uint32_t w = MR32(a);
+                if (w < base || w >= base + used) continue;
+                if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
+                MR32(a) = 0;
+                nulled++;
+            }
+        }
+        fprintf(stderr, "boot: %u pointers into the dead part of the Fastmem arena [%08x,%08x) nulled\n",
+                nulled, base, base + used);
     }
     free(g_orig_data);
     g_orig_data = NULL;
