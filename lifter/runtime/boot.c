@@ -215,6 +215,46 @@ static void repair_stale_lists(void) {
                     "%u relinked to their static nodes\n", heads, emptied + relinked, emptied, relinked);
 }
 
+/* Drop the elements of inline pointer vectors that point into the dumped heap.
+ *
+ * The game's fixed-capacity vector is {vtable, begin, capacity, count} with
+ * `begin` pointing at the storage that follows it.  The dump has 79 of them in
+ * .data, and some still list objects of the dumped process (render-target
+ * registrations, views): sub_004c91d0 walks the one at 0x00ace440 and faulted
+ * calling through a dead object.  Nothing has been allocated yet when this
+ * runs, so a heap-range element can only be stale.  A vector is touched only
+ * if every element is a pointer (into the image, or stale); vectors of other
+ * element types are left alone. */
+static void repair_stale_vectors(void) {
+    const uint32_t rdata_lo = 0x00967000u, data_lo = 0x00a4a000u, data_hi = 0x00a4a000u + 0x005c54dcu;
+    const uint32_t image_hi = 0x01aa8000u;
+    if (!mem_is_committed(data_lo) || !mem_is_committed(data_hi - 1)) return;
+    unsigned vectors = 0, fixed = 0, dropped = 0;
+    for (uint32_t a = data_lo; a + 16u <= data_hi; a += 4) {
+        uint32_t vt = MR32(a), begin = MR32(a + 4), cap = MR32(a + 8), count = MR32(a + 12);
+        if (vt < rdata_lo || vt >= data_lo || begin != a + 16u || !cap || cap > 4096u ||
+            count > cap || begin + 4u * cap > data_hi) continue;
+        vectors++;
+        unsigned stale = 0, other = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t e = MR32(begin + 4u * i);
+            if (e >= 0x00400000u && e < image_hi) continue;
+            if (e >= image_hi && e < 0x40000000u && !(e & 3u)) stale++; else other++;
+        }
+        if (!stale || other) continue;
+        uint32_t keep = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t e = MR32(begin + 4u * i);
+            if (e < image_hi) MR32(begin + 4u * keep++) = e;
+        }
+        for (uint32_t i = keep; i < count; i++) MR32(begin + 4u * i) = 0;
+        MR32(a + 12) = keep;
+        fixed++; dropped += stale;
+    }
+    fprintf(stderr, "boot: %u inline vectors in .data, %u listed objects of the dumped heap (%u entries dropped)\n",
+            vectors, fixed, dropped);
+}
+
 static int hex_digit(int c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return 10 + c - 'a';
@@ -345,6 +385,7 @@ int main(int argc, char **argv) {
     overlay_clean_data(pe, argc, argv);
     overlay_original_headers();
     repair_stale_lists();
+    repair_stale_vectors();
     apply_zero_env();
 
     /* Initialize Pool descriptor circular sentinels to clean empty state */
