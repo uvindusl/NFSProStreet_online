@@ -842,6 +842,18 @@ class Lifter:
                                 f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
                                 "return;"]
             if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # `push A; push dword [slot]; ret`: the same obfuscated call with the
+                # target read from a pointer, in practice an import (0x17c2299 calls
+                # memmove this way).  Run the popped target, then A.
+                pm = self.fetch(i.address - 11, 12)
+                if len(pm) == 12 and pm[0] == 0x68 and pm[5] == 0xFF and pm[6] == 0x35 and pm[11] == 0xC3:
+                    a_ = int.from_bytes(pm[1:5], 'little')
+                    if self.in_text(a_):
+                        return ["POP32(c->eip);",
+                                "dispatch_indirect(c, c->eip);",
+                                f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
+                                "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
                 # SecuROM computed call: `... xchg [esp],eax; add dword [esp+4], K; ret`
                 # pops a computed target T and leaves R (= entry + K) on the stack top,
                 # i.e. `call T` returning to R.  Run T, then R (seeded by boot_seeds.py).
