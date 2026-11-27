@@ -510,17 +510,33 @@ class Lifter:
         except Exception: return True
 
     def _jt_bound(self, ins):
-        """(reg, n, the block the bound holds in) for a block ending in 'cmp r32, n; [...]; ja/jbe'"""
+        """(reg, n, the block the bound holds in) for a block ending in 'cmp r32, n; [...]; ja/jbe'.
+        n may also sit in a register loaded earlier in the block, 'mov r2, n; ...; cmp r32, r2'
+        (the CRT's printf state machine at 0x43273b does that)."""
         j = ins[-1]
         if j.mnemonic not in ('ja', 'jbe') or j.operands[0].type != X86_OP_IMM: return None
         between = []
-        for k in reversed(ins[:-1]):
+        for pos in range(len(ins) - 2, -1, -1):
+            k = ins[pos]
             if k.mnemonic == 'cmp':
                 o = k.operands
-                if len(o) != 2 or o[0].type != X86_OP_REG or o[0].reg not in R32 or o[1].type != X86_OP_IMM: return None
+                if len(o) != 2 or o[0].type != X86_OP_REG or o[0].reg not in R32: return None
                 if any(self._jt_writes(x, R32[o[0].reg]) for x in between): return None
+                if o[1].type == X86_OP_IMM:
+                    n = o[1].imm & 0xffffffff
+                elif o[1].type == X86_OP_REG and o[1].reg in R32:
+                    n = None
+                    for e in reversed(ins[:pos]):       # the last write to the bound register
+                        eo = e.operands
+                        if e.mnemonic == 'mov' and len(eo) == 2 and eo[0].type == X86_OP_REG \
+                           and eo[0].reg == o[1].reg and eo[1].type == X86_OP_IMM:
+                            n = eo[1].imm & 0xffffffff; break
+                        if self._jt_writes(e, R32[o[1].reg]): break
+                    if n is None: return None
+                else:
+                    return None
                 held = j.address + j.size if j.mnemonic == 'ja' else j.operands[0].imm
-                return o[0].reg, o[1].imm & 0xffffffff, held
+                return o[0].reg, n, held
             if k.mnemonic not in self._JT_PASS: return None
             between.append(k)
         return None
