@@ -458,6 +458,54 @@ void null_dead_heap_pointers(void) {
         fprintf(stderr, "boot: %u pointers into the dead part of the Fastmem arena [%08x,%08x) nulled\n",
                 nulled, base, base + used);
     }
+    /* Lazily created singletons.  The game creates many objects on first use:
+     *     cmp dword [X], 0 ; jne skip ; ... ; mov [X], eax
+     *     mov eax, [X] ; test eax, eax ; jne skip ; ... ; mov [X], eax
+     * In the dump X already holds the dumped process's object, so the creator
+     * never runs and the first user walks dead memory (the slot pool at
+     * 0x00aeb850 made by sub_0075feb0 was the case that showed it:
+     * sub_0077baa0 got no slot and sub_004a64a0 wrote through null).  Find
+     * every X guarded like that in the code and null it when the original
+     * executable has 0 there and the dump has a pointer outside the image, so
+     * the game's own creator runs again.  PROSTREET_KEEP_LAZY=1 skips this;
+     * PROSTREET_LAZY_LOG=1 lists the addresses. */
+    if (g_orig_data && !getenv("PROSTREET_KEEP_LAZY")) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        int verbose = getenv("PROSTREET_LAZY_LOG") != NULL;
+        unsigned nulled = 0;
+        extern uint32_t gh_brk(void);
+        for (uint32_t pc = 0x00401000u; pc + 16u < lo; pc++) {
+            if (!(pc & 0xfffu) && !mem_is_committed(pc)) { pc += 0xfffu; continue; }
+            const uint8_t *b = g_mem + pc;
+            uint32_t x, after;
+            if (b[0] == 0x83 && b[1] == 0x3d && b[6] == 0x00) { memcpy(&x, b + 2, 4); after = pc + 7; }
+            else if (b[0] == 0xa1 && b[5] == 0x85 && b[6] == 0xc0) { memcpy(&x, b + 1, 4); after = pc + 7; }
+            else if (b[0] == 0x8b && (b[1] & 0xc7) == 0x05 && b[6] == 0x85 &&
+                     b[7] == (uint8_t)(0xc0 | (b[1] & 0x38) | ((b[1] >> 3) & 7))) { memcpy(&x, b + 2, 4); after = pc + 8; }
+            else continue;
+            if (x < lo || x + 4u > hi || (x & 3u)) continue;
+            uint8_t j = g_mem[after];
+            if (j != 0x75 && !(j == 0x0f && g_mem[after + 1] == 0x85)) continue;
+            uint32_t w = MR32(x);
+            if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
+            if (*(uint32_t *)(g_orig_data + (x - lo)) != 0) continue;
+            if (w >= 0x20000000u && w < gh_brk()) continue;
+            int stored = 0;
+            for (uint32_t q = after; q < after + 0x100u && q + 6u < lo && !stored; q++) {
+                const uint8_t *c = g_mem + q;
+                uint32_t y;
+                if (c[0] == 0xa3) memcpy(&y, c + 1, 4);
+                else if (c[0] == 0x89 && (c[1] & 0xc7) == 0x05) memcpy(&y, c + 2, 4);
+                else continue;
+                stored = (y == x);
+            }
+            if (!stored) continue;
+            if (verbose) fprintf(stderr, "boot: lazy singleton %08x (was %08x, guard at %08x)\n", x, w, pc);
+            MR32(x) = 0;
+            nulled++;
+        }
+        fprintf(stderr, "boot: %u lazily created singletons reset\n", nulled);
+    }
     free(g_orig_data);
     g_orig_data = NULL;
 }
@@ -774,10 +822,13 @@ int main(int argc, char **argv) {
     if (mem_is_committed(0x00bfbea4)) MR32(0x00bfbea4) = 0;
     if (mem_is_committed(0x00a7a474)) MR32(0x00a7a474) = 0;
 
-    /* Stale streaming manager state from process dump */
+    /* Stale streaming manager state from process dump.  0x00a84990 is the
+     * head of the manager's loaded-section list ({X, X} in the original
+     * executable): it must stay an empty list, not null, or the first section
+     * linked into it writes through a null prev pointer (sub_007902e0). */
     if (mem_is_committed(0x00a84938)) {
-        MR32(0x00a84990) = 0;
-        MR32(0x00a84994) = 0;
+        MR32(0x00a84990) = 0x00a84990;
+        MR32(0x00a84994) = 0x00a84990;
         MR32(0x00a84998) = 0;
         MR32(0x00a8499c) = 0;
         MR32(0x00a849a0) = 0;
