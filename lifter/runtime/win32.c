@@ -447,28 +447,17 @@ static int g_pathi;
 
 static void path_join(char *dest, size_t dest_sz, const char *base, const char *comp) {
     if (!dest || dest_sz == 0) return;
+    const char *safe_comp = comp ? comp : "";
     if (!base || !*base) {
-        snprintf(dest, dest_sz, "%s", comp ? comp : "");
+        snprintf(dest, dest_sz, "%s", safe_comp);
         return;
     }
-    size_t blen = strlen(base);
-    size_t clen = comp ? strlen(comp) : 0;
-    if (blen + 1 + clen < dest_sz) {
-        memcpy(dest, base, blen);
-        dest[blen] = '/';
-        memcpy(dest + blen + 1, comp, clen);
-        dest[blen + 1 + clen] = '\0';
-    } else {
-        snprintf(dest, dest_sz, "%.*s/%.*s", (int)(dest_sz / 2), base, (int)(dest_sz / 2), comp ? comp : "");
-    }
+    snprintf(dest, dest_sz, "%s/%s", base, safe_comp);
 }
 
 static void path_copy(char *dest, size_t dest_sz, const char *src) {
     if (!dest || dest_sz == 0) return;
-    size_t slen = src ? strlen(src) : 0;
-    if (slen >= dest_sz) slen = dest_sz - 1;
-    if (slen > 0) memcpy(dest, src, slen);
-    dest[slen] = '\0';
+    snprintf(dest, dest_sz, "%s", src ? src : "");
 }
 
 static void resolve_case(char *path) {
