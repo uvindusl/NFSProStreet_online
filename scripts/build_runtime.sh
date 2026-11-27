@@ -59,7 +59,7 @@ compile_one "$GEN/fntab.c" "$OBJ/fntab.o" $CFLAGS -I "$ROOT/lifter/runtime" -I "
 
 echo "== runtime =="
 export DEPS="$ROOT/lifter/runtime/rt.h $ROOT/lifter/runtime/cpu.h"
-for src in mem hdfont autotest dispatch win32 impargs boot d3d9_hle d3dx9_hle d3dx_effect swrast com; do
+for src in mem hdfont gamefixes autotest dispatch win32 impargs boot d3d9_hle d3dx9_hle d3dx_effect swrast com; do
     compile_one "$ROOT/lifter/runtime/$src.c" "$OBJ/rt_$src.o" $RTFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"
 done
 

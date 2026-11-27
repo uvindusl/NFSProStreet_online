@@ -380,7 +380,9 @@ void watch_report_change(uint32_t culprit_ip, uint32_t oldv, uint32_t newv) {
 #endif
 
 int hdfont_hook(CPU *c, uint32_t ip);
+int gamefix_hook(CPU *c, uint32_t ip);
 
 void guest_hook(CPU *c, uint32_t ip) {
     if (hdfont_hook(c, ip)) return;
+    if (gamefix_hook(c, ip)) return;
 }
