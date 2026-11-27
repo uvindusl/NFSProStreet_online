@@ -1591,11 +1591,17 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "SystemTimeToFileTime")) {
         r = 1;
     } else if (str_eq(n, "QueryPerformanceCounter")) {
-        uint64_t v = real_us();
+        /* 100 ns ticks at 10 MHz, what Windows reports and what the dumped
+         * process saw: the dump caches more than one calibration made from
+         * this frequency (the movie player kept running ten times too slowly
+         * with a 1 MHz counter after the game timer's own scale was reset). */
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t v = (uint64_t)ts.tv_sec * 10000000ull + (uint64_t)ts.tv_nsec / 100ull;
         if (A(0)) { MR32(A(0)) = (uint32_t)v; MR32(A(0) + 4) = (uint32_t)(v >> 32); }
         r = 1;
     } else if (str_eq(n, "QueryPerformanceFrequency")) {
-        if (A(0)) { MR32(A(0)) = 1000000u; MR32(A(0) + 4) = 0; }
+        if (A(0)) { MR32(A(0)) = 10000000u; MR32(A(0) + 4) = 0; }
         r = 1;
     } else if (str_eq(n, "Sleep") || str_eq(n, "SleepEx")) {
         uint32_t ms = A(0);
@@ -2290,6 +2296,23 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     } else if (str_eq(n, "GetDesktopWindow")) {
         r = 0x00B00000u;
+    } else if (str_eq(n, "GetKeyboardLayout")) {
+        r = 0x04090409u;                                 /* US English */
+    } else if (str_eq(n, "GetKeyState")) {
+        r = 0;                                           /* no modifier or lock is down */
+    } else if (str_eq(n, "MapVirtualKeyA") || str_eq(n, "MapVirtualKeyExA")) {
+        /* The game turns each DirectInput scan code into a virtual key
+         * (sub_0089c843) before it reacts to it; without this a pressed key was
+         * dropped.  Type 1 = scan code to virtual key, US layout, set 1. */
+        static const uint8_t vk[0x59] = {
+            0, 0x1b, '1','2','3','4','5','6','7','8','9','0', 0xbd, 0xbb, 0x08, 0x09,
+            'Q','W','E','R','T','Y','U','I','O','P', 0xdb, 0xdd, 0x0d, 0x11, 'A','S',
+            'D','F','G','H','J','K','L', 0xba, 0xde, 0xc0, 0x10, 0xdc, 'Z','X','C','V',
+            'B','N','M', 0xbc, 0xbe, 0xbf, 0x10, 0x6a, 0x12, 0x20, 0x14, 0x70, 0x71, 0x72, 0x73, 0x74,
+            0x75, 0x76, 0x77, 0x78, 0x79, 0x90, 0x91, 0x24, 0x26, 0x21, 0x6d, 0x25, 0x0c, 0x27, 0x6b, 0x23,
+            0x28, 0x22, 0x2d, 0x2e, 0, 0, 0, 0x7a, 0x7b };
+        uint32_t code = A(0) & 0xffu;
+        r = (A(1) == 1 || A(1) == 3) && code < sizeof vk ? vk[code] : 0;
     } else if (str_eq(n, "GetActiveWindow") || str_eq(n, "GetForegroundWindow")) {
         r = g_hwnd ? g_hwnd : 0x00B00001u;
     } else if (str_eq(n, "Direct3DCreate9")) {
