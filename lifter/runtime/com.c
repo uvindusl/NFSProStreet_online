@@ -619,6 +619,7 @@ int com_call(CPU *c, uint32_t magic) {
             g_frame_no++;
             { extern void sw_frame(long); sw_frame((long)g_frame_no); }
             { extern void win32_text_tick(unsigned long); win32_text_tick((unsigned long)g_frame_no); }
+            { extern void autotest_tick(long); autotest_tick((long)g_frame_no); }
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
                 extern uint32_t gh_brk(void);
                 fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());
@@ -810,6 +811,12 @@ int com_call(CPU *c, uint32_t magic) {
                 static uint32_t seen_sz[4];
                 for (int k = 0; k < 4 && seen_sz[k] != sz; k++)
                     if (!seen_sz[k]) { seen_sz[k] = sz; fprintf(stderr, "dinput: GetDeviceState(%u bytes) into %#x from %#x first read at frame %lu\n", sz, p, c->eip, (unsigned long)g_frame_no); break; }
+                {   /* autotest.c's current key (PROSTREET_SCRIPT) */
+                    extern int g_script_key;
+                    int k = g_script_key;
+                    if (k >= 0 && sz == 256 && k < 256) MR8(p + k) = 0x80;
+                    else if (k >= 256 && (sz == 16 || sz == 20) && k - 256 < (int)sz - 12) MR8(p + 12 + (k - 256)) = 0x80;
+                }
                 for (int i = 0; i < nkeys; i++) {
                     if ((long)g_frame_no < keys[i].frame || (long)g_frame_no >= keys[i].frame + keys[i].len) continue;
                     if (sz == 256 && keys[i].key < 256)

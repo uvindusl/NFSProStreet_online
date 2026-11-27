@@ -1030,6 +1030,9 @@ static int wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
     return ok;
 }
 
+/* autotest.c types through this */
+void win32_post_char(uint32_t ch) { wm_push(0x0102u, ch, 1u); }
+
 /* Scripted typing for unattended runs: PROSTREET_TEXT="9000:PLAYER" posts one
  * WM_CHAR per character, every 4 frames from frame 9000 (the frontend's text
  * boxes take characters from the window procedure, FEKeyboardInput::NotifyChar).

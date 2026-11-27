@@ -97,6 +97,7 @@ void sub_004591a0(CPU *c) { (void)c; }
 #include "hdfont.c"
 #include "d3dx_effect.c"
 #include "swrast.c"
+#include "autotest.c"
 
 /* Mock wndproc to verify DispatchMessageA callback */
 static uint32_t s_mock_wndproc_called = 0;

@@ -586,6 +586,9 @@ static void write_ppm(const char *name, uint32_t surf) {
 
 void sw_frame(long frame) { g_frame = frame; }
 
+/* autotest.c's "dump" step: render frame f (needs PROSTREET_FRAMEDUMP set, so state is tracked) */
+void sw_request_dump(long f) { if (sw_enabled()) g_want = f; }
+
 void sw_dev_call(CPU *c, const char *nm) {
     int live = g_frame == g_want;
     if (!strcmp(nm, "SetRenderState")) { if (A(1) < 256) rs[A(1)] = A(2); }
