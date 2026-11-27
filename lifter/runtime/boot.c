@@ -220,12 +220,24 @@ static void repair_stale_lists(void) {
     }
     fclose(f);
     uint32_t hi = lo + size;
-    unsigned heads = 0, emptied = 0, relinked = 0;
+    unsigned heads = 0, emptied = 0, relinked = 0, trees = 0;
     for (uint32_t a = lo; a + 8u <= hi; a += 4) {
         if (*(uint32_t *)(orig + (a - lo)) != a || *(uint32_t *)(orig + (a - lo) + 4) != a) continue;
         heads++;
         int r = relink_list(a, lo, hi);
         if (r == 1) emptied++; else if (r == 2) relinked++;
+        /* A red-black tree anchor looks the same when empty, {right, left} =
+         * {X, X}, and is followed by the root, the colour and the node count,
+         * all zero.  If the list part had to be emptied and the root still
+         * points into the dumped heap, clear those too: inserting into the
+         * tree at 0x00a6aef8 walked its dead root (sub_0090e2c0). */
+        if (r == 1 && a + 20u <= hi && !memcmp(orig + (a - lo) + 8, "\0\0\0\0\0\0\0\0\0\0\0\0", 12)) {
+            uint32_t root = MR32(a + 8);
+            if (root >= 0x01aa8000u && root < 0x40000000u && !(root & 3u)) {
+                MR32(a + 8) = 0; MR32(a + 12) = 0; MR32(a + 16) = 0;
+                trees++;
+            }
+        }
     }
     g_orig_data = orig; g_orig_lo = lo; g_orig_size = size;
 
@@ -270,7 +282,8 @@ static void repair_stale_lists(void) {
     }
 #undef STALE
     fprintf(stderr, "boot: %u list heads in .data, %u pointed into the dumped heap: %u emptied, "
-                    "%u relinked to their static nodes\n", heads + heads2, emptied + relinked, emptied, relinked);
+                    "%u relinked to their static nodes; %u were tree anchors with a dead root\n",
+            heads + heads2, emptied + relinked, emptied, relinked, trees);
 }
 
 /* Drop the elements of inline pointer vectors that point into the dumped heap.
