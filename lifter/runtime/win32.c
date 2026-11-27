@@ -445,6 +445,21 @@ static const char *g_gamedir = "game";
 static char g_pathbuf[4][4096];
 static int g_pathi;
 
+static void path_join(char *dest, size_t dest_sz, const char *base, const char *comp) {
+    if (!dest || dest_sz == 0) return;
+    const char *safe_comp = comp ? comp : "";
+    if (!base || !*base) {
+        snprintf(dest, dest_sz, "%s", safe_comp);
+        return;
+    }
+    snprintf(dest, dest_sz, "%s/%s", base, safe_comp);
+}
+
+static void path_copy(char *dest, size_t dest_sz, const char *src) {
+    if (!dest || dest_sz == 0) return;
+    snprintf(dest, dest_sz, "%s", src ? src : "");
+}
+
 static void resolve_case(char *path) {
     if (access(path, F_OK) == 0) return;
     char resolved[4096];
@@ -470,21 +485,17 @@ static void resolve_case(char *path) {
         p = end ? end : (p + strlen(p));
 
         char candidate[4096];
-        if (resolved[0]) {
-            snprintf(candidate, sizeof(candidate), "%s/%s", resolved, comp);
-        } else {
-            snprintf(candidate, sizeof(candidate), "%s", comp);
-        }
+        path_join(candidate, sizeof(candidate), resolved, comp);
 
         struct stat st;
         if (stat(candidate, &st) == 0) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
             continue;
         }
 
         DIR *dir = opendir(resolved[0] ? resolved : ".");
         if (!dir) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
             continue;
         }
 
@@ -493,22 +504,18 @@ static void resolve_case(char *path) {
         while ((de = readdir(dir)) != NULL) {
             if (!strcasecmp(de->d_name, comp)) {
                 char next_resolved[4096];
-                if (resolved[0]) {
-                    snprintf(next_resolved, sizeof(next_resolved), "%s/%s", resolved, de->d_name);
-                } else {
-                    snprintf(next_resolved, sizeof(next_resolved), "%s", de->d_name);
-                }
-                snprintf(resolved, sizeof(resolved), "%s", next_resolved);
+                path_join(next_resolved, sizeof(next_resolved), resolved, de->d_name);
+                path_copy(resolved, sizeof(resolved), next_resolved);
                 found = 1;
                 break;
             }
         }
         closedir(dir);
         if (!found) {
-            snprintf(resolved, sizeof(resolved), "%s", candidate);
+            path_copy(resolved, sizeof(resolved), candidate);
         }
     }
-    snprintf(path, 4096, "%s", resolved);
+    path_copy(path, 4096, resolved);
 }
 
 static const char *xp(const char *p) {
