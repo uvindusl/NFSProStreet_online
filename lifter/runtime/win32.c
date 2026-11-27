@@ -1812,9 +1812,14 @@ int win32_call(CPU *c, uint32_t idx) {
         if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "/tmp");
         snprintf(dir, sizeof dir, "C:%s\\savedata", cwd);
         for (char *q = dir; *q; q++) if (*q == '/') *q = '\\';
-        if (A(4)) snprintf((char *)(g_mem + A(4)), 260, "%s", dir);
-        mkdir(xp(dir), 0755);
-        r = 0;                              /* S_OK */
+        size_t dl = strlen(dir);
+        if (dl >= 260) {
+            r = 0x80004005u;                /* E_FAIL: does not fit MAX_PATH */
+        } else {
+            if (A(4)) memcpy(g_mem + A(4), dir, dl + 1);
+            mkdir(xp(dir), 0755);
+            r = 0;                          /* S_OK */
+        }
     } else if (str_eq(n, "GetSystemDirectoryA")) {
         snprintf((char *)(g_mem + A(0)), A(1), "C:\\WINDOWS\\SYSTEM32");
         r = 19;

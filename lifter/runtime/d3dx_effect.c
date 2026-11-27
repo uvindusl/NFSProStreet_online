@@ -32,7 +32,9 @@ extern uint32_t com_new_shader(uint32_t bytecode, uint32_t size);
 
 #define FX_MAGIC      0xFEFF0901u
 #define H_MAGIC       0x48584644u          /* 'DFXH' */
+#ifndef D3DERR_INVALIDCALL
 #define D3DERR_INVALIDCALL 0x8876086Cu
+#endif
 enum { HK_PARAM = 1, HK_TECH, HK_PASS, HK_ANN };
 enum { ST_CONST = 0, ST_SHADER, ST_EXPR, ST_REF, ST_PARAM };   /* ST_PARAM: the value of parameter `ref` */
 
@@ -340,7 +342,11 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
     uint32_t want_id = 0;
     if (name_va >= 0x10000u && mem_is_committed(name_va)) snprintf(want, sizeof want, "%s", (const char *)g_mem + name_va);
     else want_id = name_va;
-    snprintf(label, nlabel, "%s", want[0] ? want : "(id)");
+    {   /* a label for logs: cut to fit */
+        const char *src = want[0] ? want : "(id)";
+        size_t k = strnlen(src, nlabel - 1);
+        memcpy(label, src, k); label[k] = 0;
+    }
     for (int level = 0; level < 3; level++) {
         uint32_t n = MR16(dir + 12) + MR16(dir + 14), next = 0;
         for (uint32_t i = 0; i < n && !next; i++) {
@@ -383,7 +389,7 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
  * first field after the vtable is the effect's index + 1).  Returns 1 if the
  * effect was read. */
 int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool) {
-    char label[64]; uint32_t size = 0;
+    char label[sizeof g_fx[0].name]; uint32_t size = 0;
     const uint8_t *res = find_rcdata(name_va, &size, label, sizeof label);
     pthread_mutex_lock(&g_fx_lock);
     int fxi = g_nfx < FX_MAX ? g_nfx++ : -1;

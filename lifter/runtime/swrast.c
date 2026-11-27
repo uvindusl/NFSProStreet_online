@@ -297,8 +297,11 @@ static int sh_run(const Sh *s, M *m) {
             case 32: for (int i = 0; i < 4; i++) o[i] = powf(fabsf(a[i]), b[i]); break;
             case 33: o[0] = a[1] * b[2] - a[2] * b[1]; o[1] = a[2] * b[0] - a[0] * b[2]; o[2] = a[0] * b[1] - a[1] * b[0]; break;
             case 35: for (int i = 0; i < 4; i++) o[i] = fabsf(a[i]); break;
-            case 36: d = a[0] * a[0] + a[1] * a[1] + a[2] * a[2]; d = d > 0 ? 1.0f / sqrtf(d) : 0;
-                     for (int i = 0; i < 4; i++) o[i] = a[i] * d; break;
+            case 36:
+                d = a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+                d = d > 0 ? 1.0f / sqrtf(d) : 0;
+                for (int i = 0; i < 4; i++) o[i] = a[i] * d;
+                break;
             case 37: o[0] = cosf(a[0]); o[1] = sinf(a[0]); break;
             case 88: for (int i = 0; i < 4; i++) o[i] = a[i] >= 0 ? b[i] : c[i]; break;
             case 90: d = a[0] * b[0] + a[1] * b[1] + c[0]; o[0] = o[1] = o[2] = o[3] = d; break;
