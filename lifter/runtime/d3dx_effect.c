@@ -81,6 +81,7 @@ typedef struct {
 
 typedef struct {
     char name[48];
+    uint32_t pool;                          /* the ID3DXEffectPool it was created with */
     uint8_t *d; uint32_t len, cur;
     uint32_t nparams, ntechs;
     FxParam *params; FxTech *techs;
@@ -381,7 +382,7 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
 /* Called by D3DXCreateEffectFromResourceA.  Fills the COM object `obj` (its
  * first field after the vtable is the effect's index + 1).  Returns 1 if the
  * effect was read. */
-int fx_create(uint32_t obj, uint32_t name_va) {
+int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool) {
     char label[64]; uint32_t size = 0;
     const uint8_t *res = find_rcdata(name_va, &size, label, sizeof label);
     pthread_mutex_lock(&g_fx_lock);
@@ -402,6 +403,29 @@ int fx_create(uint32_t obj, uint32_t name_va) {
     }
     fx->scratch = gh_alloc(256 * 16, 1, 16);
     MR32(obj + 4) = (uint32_t)fxi + 1u;
+    /* Effects created with the same ID3DXEffectPool share the value of every
+     * parameter declared `shared` (D3DX_PARAMETER_SHARED) with the same name.
+     * The game relies on it: it sets WorldViewProj on whichever effect it has
+     * at hand (the movie quad's, just before the 2D batch is flushed) and
+     * draws with another.  Numeric values only; a shared texture is not. */
+    fx->pool = pool;
+    unsigned nshared = 0;
+    pthread_mutex_lock(&g_fx_lock);
+    for (uint32_t i = 0; pool && i < fx->nparams; i++) {
+        FxParam *q = &fx->params[i];
+        if (!(q->flags & 1u) || !q->val || !q->name) continue;
+        for (int o = 0; o < fxi; o++) {
+            Fx *of = &g_fx[o];
+            if (of->pool != pool) continue;
+            FxParam *m = 0;
+            for (uint32_t j = 0; j < of->nparams; j++)
+                if ((of->params[j].flags & 1u) && of->params[j].val && of->params[j].name &&
+                    of->params[j].n == q->n && !strcmp(of->params[j].name, q->name)) { m = &of->params[j]; break; }
+            if (m) { free(q->val); q->val = m->val; nshared++; break; }
+        }
+    }
+    pthread_mutex_unlock(&g_fx_lock);
+    if (nshared) fprintf(stderr, "d3dx: effect %s: %u parameters shared through pool %08x\n", label, nshared, pool);
     fprintf(stderr, "d3dx: effect %s: %u parameters, %u techniques; not evaluated: %u expression states, %u preshaders\n",
             label, fx->nparams, fx->ntechs, fx->nexpr, fx->npres);
     return 1;
