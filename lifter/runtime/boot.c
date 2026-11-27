@@ -787,6 +787,10 @@ int main(int argc, char **argv) {
      * LoadLanguage(English) (sub_005c3730) returns without loading anything
      * and every string lookup fails.  The original executable has -1 there. */
     if (mem_is_committed(0x00a54ee8)) MR32(0x00a54ee8) = 0xffffffffu;
+    /* "Built once" flag of the table that sub_0056a670 fills through
+     * sub_0055ff80: set in the dump, so the table at +0x38 of the new object
+     * stayed empty and sub_0050b920 read through its null pointer. */
+    if (mem_is_committed(0x00ab0f91)) MR8(0x00ab0f91) = 0;
     {
         static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
                                          0x00aba54cu, 0x00b34598u };
