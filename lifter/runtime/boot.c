@@ -429,12 +429,17 @@ static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
  *       array and its count): all pointers into the dumped heap and arena.
  *       The first race load freed the buffer and the allocator asserted on a
  *       block it never handed out (sub_00436130).
+ *   0x00bfbec4-0x00bfbef0: the tables chunk handlers register (count at
+ *       0x00bfbec4, arrays 0x00bfbec8[], counts 0x00bfbed8[]; added at
+ *       0x458f0a, removed at 0x458f54) and the pair after them.  The dead-
+ *       pointer pass nulls the dumped arrays but leaves their counts, so the
+ *       race's renderer searched a NULL table (sub_00458e80).
  * More ranges for experiments: PROSTREET_RESTORE="0xLO-0xHI[,...]". */
 static void restore_original_ranges(void) {
     if (!g_orig_data) return;
     char ranges[512];
     const char *env = getenv("PROSTREET_RESTORE");
-    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950,0x0100e0b0-0x0100e440,0x00ae3320-0x00ae3350%s%s",
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950,0x0100e0b0-0x0100e440,0x00ae3320-0x00ae3350,0x00bfbec4-0x00bfbef0%s%s",
              (env && *env) ? "," : "", (env && *env) ? env : "");
     uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
     const char *p = ranges;
