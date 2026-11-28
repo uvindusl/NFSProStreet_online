@@ -1418,7 +1418,62 @@ void rt_watch_check(CPU *c, const char *what, uint32_t detail) {
 }
 
 static int foreign_code_call(CPU *c, uint32_t addr);
+/* PROSTREET_CANARY=ADDR:VALUE (debugging): once the guest word at ADDR
+ * holds VALUE, every dispatch checks it, and the first time it differs the
+ * last dispatch targets of this thread are reported: the writer ran between
+ * the last two. */
+static void canary_check(CPU *c, uint32_t addr) {
+    enum { NT = 16, NL = 16 };
+    static int on = -1; static uint32_t ca, cv; static int armed, fired;
+    static uint32_t ring[NT][NL], ring_esp[NT]; static unsigned ring_n[NT], nthreads;
+    static __thread int slot = -1;
+    if (on < 0) {
+        const char *e = getenv("PROSTREET_CANARY"); char *p;
+        on = 0;
+        if (e) { ca = (uint32_t)strtoul(e, &p, 16); if (*p == ':') { cv = (uint32_t)strtoul(p + 1, NULL, 16); on = 1; } }
+    }
+    if (!on || fired) return;
+    if (slot < 0) slot = (int)__atomic_fetch_add(&nthreads, 1, __ATOMIC_RELAXED);
+    if (slot < NT) { ring[slot][ring_n[slot]++ % NL] = addr; ring_esp[slot] = c->esp; }
+    if (!mem_is_committed(ca)) return;
+    uint32_t v = MR32(ca);
+    if (!armed) { armed = v == cv; return; }
+    if (v == cv || __atomic_exchange_n(&fired, 1, __ATOMIC_RELAXED)) return;
+    fprintf(stderr, "\n[canary] [%08x] %08x -> %08x, seen by the thread with esp %08x; last dispatches per thread, oldest first:\n",
+            ca, cv, v, c->esp);
+    for (unsigned t = 0; t < nthreads && t < NT; t++) {
+        fprintf(stderr, "    esp %08x:", ring_esp[t]);
+        for (unsigned k = 0; k < NL; k++) fprintf(stderr, " %08x", ring[t][(ring_n[t] + k) % NL]);
+        fprintf(stderr, "\n");
+    }
+}
+
+#ifndef __wasm__
+/* Objects built with -DPROSTREET_MEMCHK route every guest access here (see
+ * cpu.h).  With PROSTREET_MEMCHK_WATCH=ADDR, a change of the word at ADDR
+ * right after this thread's previous access touched it names that access's
+ * lifted function as the writer (the first 20 changes are reported). */
+uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn) {
+    static int on = -1; static uint32_t wa, lastv; static unsigned nrep;
+    static __thread const char *pfn; static __thread uint32_t pa, pn;
+    if (on < 0) { const char *e = getenv("PROSTREET_MEMCHK_WATCH"); wa = e ? (uint32_t)strtoul(e, NULL, 16) : 0; on = wa != 0; if (on) lastv = *(uint32_t *)(g_mem + wa); }
+    if (on) {
+        uint32_t v = *(uint32_t *)(g_mem + wa);
+        if (v != lastv) {
+            if (pfn && pa < wa + 4 && pa + pn > wa && nrep < 20) {
+                nrep++;
+                fprintf(stderr, "[memchk] [%08x] %08x -> %08x written by %s (access %08x, %u bytes)\n", wa, lastv, v, pfn, pa, pn);
+            }
+            lastv = v;
+        }
+    }
+    pfn = fn; pa = a; pn = n;
+    return g_mem + a;
+}
+#endif
+
 void dispatch_indirect(CPU *c, uint32_t addr) {
+    canary_check(c, addr);
     rt_watch_check(c, "dispatch of", addr);
     static int s_main_entry_logged = 0;
     if (!s_main_entry_logged && (addr == 0x016beea2u || addr == 0x004afee0u)) {

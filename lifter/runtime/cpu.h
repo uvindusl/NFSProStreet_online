@@ -82,6 +82,17 @@ uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn);
 #define MR64(a)  (*(gm_u64  *)guest_memchk((uint32_t)(a), 8, __func__))
 #define MRF32(a) (*(gm_f32  *)guest_memchk((uint32_t)(a), 4, __func__))
 #define MRF64(a) (*(gm_f64  *)guest_memchk((uint32_t)(a), 8, __func__))
+#elif defined(PROSTREET_MEMCHK)
+/* native debug build of selected objects (build_runtime.sh AEMS_CFLAGS /
+ * MEMCHK_CFLAGS): PROSTREET_MEMCHK_WATCH=ADDR names the lifted function
+ * that changes the guest word at ADDR (dispatch.c guest_memchk) */
+uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn);
+#define MR8(a)   (*(uint8_t  *)guest_memchk((uint32_t)(a), 1, __func__))
+#define MR16(a)  (*(uint16_t *)guest_memchk((uint32_t)(a), 2, __func__))
+#define MR32(a)  (*(uint32_t *)guest_memchk((uint32_t)(a), 4, __func__))
+#define MR64(a)  (*(uint64_t *)guest_memchk((uint32_t)(a), 8, __func__))
+#define MRF32(a) (*(float    *)guest_memchk((uint32_t)(a), 4, __func__))
+#define MRF64(a) (*(double   *)guest_memchk((uint32_t)(a), 8, __func__))
 #elif defined(__wasm__)
 #define MR8(a)   (*(uint8_t *)(GMEM_ + (uint32_t)(a)))
 #define MR16(a)  (*(gm_u16  *)(GMEM_ + (uint32_t)(a)))
