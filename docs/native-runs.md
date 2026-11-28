@@ -94,6 +94,6 @@ A few rounds of run and lift cover what a script reaches; the Race Day script lo
 
 ## Known limits
 
-- **No sound from EA's AEMS modules.** They are x86 code loaded from the sound data at run time. Calls into them are skipped and logged.
+- **Audio is mixed but not played, and the voice chains stay off.** The AEMS banks run as lifted code (see above) and the mixer writes sound into its DirectSound buffers (`PROSTREET_WAVDUMP=1`), but nothing plays it. EA's voice chains (`sub_008b2cb0`) are still replaced by a stand-in: with `PROSTREET_AUDIO_VOICES=1` a race faults a few frames in, because the process routine `sub_008c86d0` writes up to 256 frames of floats into an instance sized 0x68 bytes in the chain table (whose size words carry the allocator's `0xaa` fill in their upper half) and runs over the next chain. Not solved yet.
 - **No display window.** Frames are checked offline.
 - **The process dump carries the dumped session's state.** Each crash so far has been a stale static, a SecuROM call shape the lifter did not know, or a Windows stand-in. `boot.c` documents every range it resets and why.

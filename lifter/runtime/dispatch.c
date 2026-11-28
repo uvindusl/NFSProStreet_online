@@ -1462,7 +1462,13 @@ uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn) {
         if (v != lastv) {
             if (pfn && pa < wa + 4 && pa + pn > wa && nrep < 20) {
                 nrep++;
-                fprintf(stderr, "[memchk] [%08x] %08x -> %08x written by %s (access %08x, %u bytes)\n", wa, lastv, v, pfn, pa, pn);
+                fprintf(stderr, "[memchk] [%08x] %08x -> %08x written by %s (access %08x, %u bytes)", wa, lastv, v, pfn, pa, pn);
+                extern __thread CPU *g_cur_cpu;
+                CPU *cc = g_cur_cpu;
+                if (cc && mem_is_committed(cc->ebp + 0x10))
+                    fprintf(stderr, " ebp=%08x args %08x %08x esp=%08x", cc->ebp, *(uint32_t *)(g_mem + cc->ebp + 8),
+                            *(uint32_t *)(g_mem + cc->ebp + 12), cc->esp);
+                fprintf(stderr, "\n");
             }
             lastv = v;
         }
