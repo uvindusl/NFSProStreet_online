@@ -386,3 +386,6 @@ void guest_hook(CPU *c, uint32_t ip) {
     if (hdfont_hook(c, ip)) return;
     if (gamefix_hook(c, ip)) return;
 }
+
+int gamefix_hook_ret(CPU *c, uint32_t ip);
+int guest_hook_ret(CPU *c, uint32_t ip) { return gamefix_hook_ret(c, ip); }

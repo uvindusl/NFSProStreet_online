@@ -597,6 +597,7 @@ static inline double f80_load(const uint8_t *p){
 }
 #define WCHK(ip) watch_check(ip)
 void guest_hook(CPU *c, uint32_t ip);
+int  guest_hook_ret(CPU *c, uint32_t ip);   /* HOOKRET sites: nonzero = the hook returned from the function */
 
 void mem_init(void);
 void mem_commit(uint32_t addr, uint32_t size);

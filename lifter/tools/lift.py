@@ -392,6 +392,7 @@ class Lifter:
     def __init__(self, pe_path, comments=True, trap=False, hooks=None, watch=False):
         self.comments=comments; self.trap=trap; self.traps=0; self.trap_kinds=collections.Counter()
         self.hooks=set(hooks or ()); self.watch=watch
+        self.hookret=set()   # sites where guest_hook_ret may return from the function (genall.py, HOOKRET)
         self.cov=False
         pe = pefile.PE(pe_path); self.IB = pe.OPTIONAL_HEADER.ImageBase
         self.secs=[]
@@ -2064,6 +2065,13 @@ class Lifter:
                     body.append(f"    WCHK(0x{i.address:x}u);")
                 if self.comments:
                     body.append(f"    /* {i.address:08x}  {i.mnemonic} {i.op_str} */")
+                if i.address in self.hookret:
+                    # the hook may finish the function itself (a stand-in for
+                    # this one call path): it returns nonzero after popping
+                    # the return address, and the lifted body returns
+                    if x87opt and xb.active:
+                        body += ["    "+l for l in xb.close()]
+                    body.append(f"    if (guest_hook_ret(c, 0x{i.address:x}u)) return;")
                 if i.address in self.hooks:
                     # a hook reads and may change ST(0) (widescreen FOV) or
                     # other x87 state: the open X87OPT region is written back

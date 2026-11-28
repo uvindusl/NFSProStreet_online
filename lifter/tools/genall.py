@@ -191,6 +191,8 @@ def _init(inl=None):
     watch = os.environ.get('WATCH','') == '1'
     cov   = os.environ.get('COVERAGE','') == '1'
     _L = Lifter(EXE, comments=os.environ.get('COMMENTS','') == '1', trap=True, hooks=hooks, watch=watch)
+    # HOOKRET sites: the hook may complete the function's return (native runtime only)
+    _L.hookret = set(int(x,16) for x in os.environ.get('HOOKRET','').replace('0x','').split(',') if x.strip())
     _L.cov = cov
 
 def _inlprobe(a):
