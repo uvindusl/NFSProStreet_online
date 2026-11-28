@@ -3,17 +3,6 @@
 Working notes from debug sessions. These are raw investigation logs — for the
 canonical project status, see [`docs/milestones.md`](../docs/milestones.md).
 
-## Boot & Runtime
-
-| File | Topic |
-|---|---|
-| `ctor13-dispatch-analysis.md` | Static constructor 13 — the current boot blocker |
-| `pool-allocator-fix.md` | Pool allocator crash fix |
-| `pool-allocator-finalize.md` | Pool allocator finalisation |
-| `prostreet-tls-fault.md` | Thread-local storage fault analysis |
-| `prostreet-tls-latent.md` | Latent TLS issues |
-| `96726c-writer-trace.md` | Writer trace at address 0x96726c |
-
 ## Shaders — Pipeline & Validation
 
 | File | Topic |
@@ -67,5 +56,4 @@ canonical project status, see [`docs/milestones.md`](../docs/milestones.md).
 | `prostreet-texture-gap.md` | Texture implementation gap |
 | `prostreet-texture-runtime-fix.md` | Texture runtime fix |
 | `tracked-asset-audit.md` | Tracked asset audit |
-| `untracked-notes-inventory.md` | Inventory of untracked notes |
 | `vs_3_0-output-mapping-gap.md` | vs_3_0 output register mapping gap |
