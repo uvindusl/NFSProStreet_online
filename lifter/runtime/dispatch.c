@@ -1316,7 +1316,14 @@ static int foreign_code_call(CPU *c, uint32_t addr) {
     extern uint32_t gh_brk(void);
     static int mode = -1;
     if (mode < 0) { const char *e = getenv("PROSTREET_FOREIGN"); mode = !(e && !strcmp(e, "stop")); }
-    if (!mode || addr < 0x20000000u || addr >= gh_brk() || !mem_is_committed(addr)) return 0;
+    if (!mode) return 0;
+    uint32_t ret = mem_is_committed(c->esp) ? MR32(c->esp) : 0;
+    /* EA's audio engine (code 0x008a0000-0x00920000) also calls the skipped
+     * modules' entries from its voice tables (sub_008b2cb0); with no module
+     * code those entries are garbage.  Skip such a call too: it only touches
+     * sound, and anything else still stops below. */
+    int audio = ret >= 0x008a0000u && ret < 0x00920000u && !mem_is_committed(addr);
+    if (!audio && (addr < 0x20000000u || addr >= gh_brk() || !mem_is_committed(addr))) return 0;
     enum { MAXT = 64 };
     static uint32_t seen[MAXT]; static unsigned nseen; static unsigned long calls;
     calls++;
@@ -1324,8 +1331,8 @@ static int foreign_code_call(CPU *c, uint32_t addr) {
     for (i = 0; i < nseen && seen[i] != addr; i++) ;
     if (i == nseen && nseen < MAXT) {
         seen[nseen++] = addr;
-        fprintf(stderr, "foreign code: call to heap code at %#x from %#x skipped (eax=0); %u targets, %lu calls so far\n",
-                addr, mem_is_committed(c->esp) ? MR32(c->esp) : 0, nseen, calls);
+        fprintf(stderr, "foreign code: call to %s at %#x from %#x skipped (eax=0); %u targets, %lu calls so far\n",
+                audio ? "an unbuilt audio module entry" : "heap code", addr, ret, nseen, calls);
     }
     c->eax = 0;
     POP32(c->eip);
@@ -1398,6 +1405,7 @@ void rt_watch_check(CPU *c, const char *what, uint32_t detail) {
     pthread_mutex_unlock(&lock);
 }
 
+static int foreign_code_call(CPU *c, uint32_t addr);
 void dispatch_indirect(CPU *c, uint32_t addr) {
     rt_watch_check(c, "dispatch of", addr);
     static int s_main_entry_logged = 0;
@@ -1414,7 +1422,11 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
                 rtlog(RT_IMPORT, idx, mem_is_committed(c->esp) ? MR32(c->esp) : 0, 0);
                 if (win32_call(c, idx) < 0) g_guest_exited = 1;
             } else {
-                fprintf(stderr, "\n*** bad import index %u (addr %08x)\n", idx, addr);
+                /* garbage in the import range: an unbuilt audio module entry
+                 * is skipped like the others (foreign_code_call) */
+                if (foreign_code_call(c, addr)) return;
+                fprintf(stderr, "\n*** bad import index %u (addr %08x, return %08x)\n", idx, addr,
+                        mem_is_committed(c->esp) ? MR32(c->esp) : 0);
                 exit(3);
             }
             return;

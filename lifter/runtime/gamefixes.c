@@ -10,6 +10,9 @@
 #ifndef HOOK_SITE
 #define HOOK_SITE(va) (va##u)
 #endif
+#ifndef HOOK_RETURN_SITE
+#define HOOK_RETURN_SITE(va) (va##u)
+#endif
 
 static int fixes_on(void) {
     static int on = -1;
@@ -76,6 +79,32 @@ int gamefix_hook(CPU *c, uint32_t ip) {
             fprintf(stderr, "\n");
         }
         return 1;
+    }
+    return 0;
+}
+
+/* Sites where the hook may finish the function (HOOK_RETURN_SITE; the lifted
+ * code returns when this returns nonzero, after the hook popped the return
+ * address and set eax). */
+int gamefix_hook_ret(CPU *c, uint32_t ip) {
+    switch (ip) {
+    /* EA's audio engine runs each voice's AEMS module chain here
+     * (sub_008b2cb0, thiscall, 3 stack arguments; returns 1 to go on with the
+     * voice's second stage, sub_008b5cf0).  The modules are x86 the game
+     * loads into its heap and this runtime does not run yet
+     * (foreign_code_call), so the chain tables hold garbage once a race
+     * starts its engine sounds.  Until the modules are lifted the voice
+     * produces nothing: return 0 at once.  PROSTREET_AUDIO_VOICES=1 runs the
+     * real code. */
+    case HOOK_RETURN_SITE(0x008b2cb0): {
+        static int run = -1;
+        if (run < 0) { const char *e = getenv("PROSTREET_AUDIO_VOICES"); run = e && *e == '1'; }
+        if (run) return 0;
+        POP32(c->eip);
+        c->esp += 0xc;
+        c->eax = 0;
+        return 1;
+    }
     }
     return 0;
 }
