@@ -82,9 +82,12 @@ static uint32_t gh_guest_str(const char *s) {
 
 #define HEAP_BASE 0x20000000u
 #define HEAP_END  0x48000000u
+#define HEAP2_BASE 0x50000000u     /* second region, used once the first is full */
+#define HEAP2_END  0x6ff00000u
 #define HEAP_MAGIC 0x48454150u
 
 static uint32_t g_brk = HEAP_BASE;
+static uint32_t g_brk2 = HEAP2_BASE;
 static pthread_mutex_t g_heap_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /* End of the part of the guest heap handed out so far. */
@@ -131,9 +134,27 @@ uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
     }
     p = (g_brk + 15u) & ~15u;
     if (p + 16u + total > HEAP_END || p + 16u + total < p) {
-        fprintf(stderr, "heap: exhausted at %08x (asked %u)\n", g_brk, n);
+        /* A race asks for more than the first region holds (a 36.8 MB block
+         * with ~600 MB in use).  Go on in the second region, between the COM
+         * objects (COM_MAX 0x50000000, com.c) and the thread stacks
+         * (0x70000000 up). */
+        uint32_t q = (g_brk2 + 15u) & ~15u;
+        if (q + 16u + total > HEAP2_END || q + 16u + total < q) {
+            fprintf(stderr, "heap: exhausted at %08x and %08x (asked %u)\n", g_brk, g_brk2, n);
+            pthread_mutex_unlock(&g_heap_mtx);
+            return 0;
+        }
+        static int said;
+        if (!said++) fprintf(stderr, "heap: first region full at %08x, continuing at %08x\n", g_brk, q);
+        g_brk2 = q + 16u + total;
+        mem_commit(q, 16u + total);
+        MR32(q) = HEAP_MAGIC;
+        MR32(q + 4) = n;
+        MR32(q + 8) = total;
+        MR32(q + 12) = 0;
+        if (zero) memset(g_mem + q + 16u, 0, n);
         pthread_mutex_unlock(&g_heap_mtx);
-        return 0;
+        return q + 16u;
     }
     g_brk = p + 16u + total;
     mem_commit(p, 16u + total);
@@ -149,7 +170,8 @@ uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
 
 void gh_free(uint32_t p) {
     if (!p) return;
-    if (p < HEAP_BASE + 16u || p >= HEAP_END || !mem_is_committed(p - 16u) || MR32(p - 16u) != HEAP_MAGIC) {
+    int in1 = p >= HEAP_BASE + 16u && p < HEAP_END, in2 = p >= HEAP2_BASE + 16u && p < HEAP2_END;
+    if ((!in1 && !in2) || !mem_is_committed(p - 16u) || MR32(p - 16u) != HEAP_MAGIC) {
         fprintf(stderr, "heap: free of a bad pointer %08x\n", p);
         return;
     }
