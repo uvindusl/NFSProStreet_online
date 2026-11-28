@@ -2252,6 +2252,15 @@ int win32_call(CPU *c, uint32_t idx) {
     /* ---- getenv / filesystem find ------------------------------------ */
     } else if (str_eq(n, "getenv")) {
         r = 0;
+    } else if (str_eq(n, "_setjmp3")) {
+        /* sub_006e0650 (a protected call: the error jump chain at +0x50, Lua's
+         * luaD_rawrunprotected shape) sets a jump buffer and runs a function.
+         * The first return of setjmp is 0, which is all a run without errors
+         * needs.  A real longjmp back into lifted code is not supported. */
+        r = 0;
+    } else if (str_eq(n, "longjmp")) {
+        fprintf(stderr, "\n*** longjmp(%#x, %d) from %#x: a protected call raised an error; not supported\n", A(0), (int)A(1), c->eip);
+        guest_exit(255);
     } else if (str_eq(n, "_findfirst64i32")) {
         /* intptr_t _findfirst64i32(const char *spec, struct _finddata64i32_t *)
          * (the memcard code lists the save folders with it) */
