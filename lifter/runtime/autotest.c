@@ -10,6 +10,7 @@
  *   flow=6[:T]               until the game-flow state (0x00abb510) is 6
  *                            (3 in the frontend, 6 racing)
  *   key=28[:H]               hold DirectInput scan code 28 for H frames
+ *                            (key=200+205:H holds up to three together)
  *                            (default 6), then wait as long again
  *   tap=28:FeMainMenu.fng[:T] tap scan code 28 every 60 frames until that
  *                            package has control (a dialog that ignores
@@ -38,9 +39,10 @@ extern void sw_request_dump(long frame);
 extern void win32_post_char(uint32_t ch);
 
 int g_script_key = -1;                  /* read by DirectInput GetDeviceState (com.c) */
+int g_script_key2 = -1, g_script_key3 = -1;   /* more keys held with it (key=200+205) */
 
 enum { S_WAIT, S_FLOW, S_KEY, S_TEXT, S_FRAMES, S_DUMP, S_DIALOG, S_TAP };
-typedef struct { int op; long a, b; char s[64]; } Step;
+typedef struct { int op; long a, b, b2, b3; char s[64]; } Step;
 static Step g_step[64];
 static int g_nsteps = -1, g_cur;
 static long g_since;                    /* frame the current step started */
@@ -78,10 +80,14 @@ static void parse(void) {
         char *opt = val ? strchr(val, ':') : NULL;
         if (opt) *opt++ = 0;
         Step *s = &g_step[g_nsteps];
-        memset(s, 0, sizeof *s);
+        memset(s, 0, sizeof *s); s->b2 = s->b3 = -1;
         if (!strcmp(tok, "wait") && val)        { s->op = S_WAIT; snprintf(s->s, sizeof s->s, "%s", val); s->a = opt ? atol(opt) : 3000; }
         else if (!strcmp(tok, "flow") && val)   { s->op = S_FLOW; s->b = atol(val); s->a = opt ? atol(opt) : 6000; }
-        else if (!strcmp(tok, "key") && val)    { s->op = S_KEY; s->b = atol(val); s->a = opt ? atol(opt) : 6; }
+        else if (!strcmp(tok, "key") && val)    {
+            s->op = S_KEY; s->b2 = s->b3 = -1;
+            char *p2 = strchr(val, '+'); if (p2) { *p2++ = 0; char *p3 = strchr(p2, '+'); if (p3) { *p3++ = 0; s->b3 = atol(p3); } s->b2 = atol(p2); }
+            s->b = atol(val); s->a = opt ? atol(opt) : 6;
+        }
         else if (!strcmp(tok, "text") && val)   { s->op = S_TEXT; snprintf(s->s, sizeof s->s, "%s", val); }
         else if (!strcmp(tok, "frames") && val) { s->op = S_FRAMES; s->a = atol(val); }
         else if (!strcmp(tok, "dump"))          { s->op = S_DUMP; }
@@ -130,8 +136,9 @@ void autotest_tick(long frame) {
         break;
     }
     case S_KEY:
-        if (el == 0) { g_script_key = (int)s->b; fprintf(stderr, "script: frame %ld: key %ld\n", frame, s->b); }
-        if (el == s->a) g_script_key = -1;
+        if (el == 0) { g_script_key = (int)s->b; g_script_key2 = (int)s->b2; g_script_key3 = (int)s->b3;
+                       fprintf(stderr, "script: frame %ld: key %ld%s\n", frame, s->b, s->b2 >= 0 ? " (+more)" : ""); }
+        if (el == s->a) g_script_key = g_script_key2 = g_script_key3 = -1;
         if (el >= 2 * s->a) done = 1;
         break;
     case S_TEXT:

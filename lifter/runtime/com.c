@@ -816,10 +816,13 @@ int com_call(CPU *c, uint32_t magic) {
                 for (int k = 0; k < 4 && seen_sz[k] != sz; k++)
                     if (!seen_sz[k]) { seen_sz[k] = sz; fprintf(stderr, "dinput: GetDeviceState(%u bytes) into %#x from %#x first read at frame %lu\n", sz, p, c->eip, (unsigned long)g_frame_no); break; }
                 {   /* autotest.c's current key (PROSTREET_SCRIPT) */
-                    extern int g_script_key;
-                    int k = g_script_key;
-                    if (k >= 0 && sz == 256 && k < 256) MR8(p + k) = 0x80;
-                    else if (k >= 256 && (sz == 16 || sz == 20) && k - 256 < (int)sz - 12) MR8(p + 12 + (k - 256)) = 0x80;
+                    extern int g_script_key, g_script_key2, g_script_key3;
+                    int ks[3] = { g_script_key, g_script_key2, g_script_key3 };
+                    for (int i = 0; i < 3; i++) {
+                        int k = ks[i];
+                        if (k >= 0 && sz == 256 && k < 256) MR8(p + k) = 0x80;
+                        else if (k >= 256 && (sz == 16 || sz == 20) && k - 256 < (int)sz - 12) MR8(p + 12 + (k - 256)) = 0x80;
+                    }
                 }
                 for (int i = 0; i < nkeys; i++) {
                     if ((long)g_frame_no < keys[i].frame || (long)g_frame_no >= keys[i].frame + keys[i].len) continue;
