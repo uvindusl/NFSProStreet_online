@@ -7,76 +7,78 @@
 ## Where We Are Now
 
 ```
-x86 → C lift ✅  47,514 functions lifted
+x86 → C lift ✅  55,175 functions lifted
 Runtime build ✅  compiles clean with -Werror (STRICT=1)
 Imports bound ✅  371/371 across 15 DLLs
 Shader pipeline ✅  591/591 D3D9 → WGSL, all validate
-D3D9 HLE ✅  device + buffers + draw + textures (test-level)
+D3D9 HLE ✅  device + buffers + draw + textures + offline software rasterizer (swrast)
+D3DX Effects ✅  all 34 effects parsed, preshaders (PRES) executed, parameter binding
 WebGPU triangle ✅  renders in Chrome
 Web build ✅  compiles to 57 MB .wasm
 CRT start-up ✅  completes (unpacked image post-load state)
 main() ✅  WinMain entered & running (0x004afee0)
 D3D9 / DisplayDevice ✅  initialized (pDev=0x4c0001f0, 0x032a5fc0)
-Asset Loading ✅  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB, 251 attributes validated)
-Attribute tree validation ✅  sub_005310e0 override in g_dtab
+Asset Loading ✅  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed, car geometries/textures loaded
+Dump-state repair ✅  zeroing fallback & list head table support retail/repack installs
 Window message pump ✅  PeekMessageA/GetMessageA/DispatchMessageA host pump implemented
-D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented
+D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle ticking
+Native game flow ✅  scripted run: profile creation, main menu, Race Day event, into the race
+Offline frame render ✅  swrast renders 3D frames to .ppm files (e.g. out/frame_300_rt*.ppm)
 
-Current front 🟡  sub_004c91d0 / secondary asset processing
-Game systems 🟡  input, menus, a race run natively (scripted); audio not started
+Current front 🟡  Live window display (SDL2/Vulkan) & AEMS audio modules
+Game systems 🟡  headless input, menus and racing working; live display & audio not started
 ```
 
 ---
 
-## Phase 1 — Fix the Boot & Window Pump (Native Linux)
+## Phase 1 — Fix the Boot & Window Pump (Native Linux) ✅ COMPLETED
 
-**Goal:** `./out/prostreet` runs past CRT init, enters `WinMain`, loads base assets, creates a host window and begins frame pumping.
+**Goal:** `./out/prostreet` runs past CRT init, enters `WinMain`, loads base assets, and begins frame pumping.
 
 ### 1.1 CRT Startup & Constructor Initialization ✅ DONE
-
-In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime startup state (`0x100f4c4`) is loaded in its post-load initialized state (`2`). `_WinMainCRTStartup` completes cleanly without crashing on constructor 13. (Clean on-disk `.data` overlay remains available as an opt-in switch via `PROSTREET_CLEAN_IMAGE`).
+In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime startup state (`0x100f4c4`) is loaded in its post-load initialized state (`2`). `_WinMainCRTStartup` completes cleanly without crashing.
 
 ### 1.2 Reach `WinMain()` ✅ DONE
+`WinMain` entered at `0x004afee0`. Background worker threads active; EA filesystem initialized.
 
-- [x] Ensure `_WinMainCRTStartup` → `WinMain` control flow completes
-- [x] Verify `GetCommandLineA` / `GetModuleHandleA` return valid pointers
-- [x] Added `main-entry` log line in `lifter/runtime/dispatch.c` (`main-entry: WinMain entered (entry 0x004afee0, indirect 0x016beea2)`)
-- [x] Background worker threads spawned and active (`sub_00905610`, `sub_008976e4`)
-- [x] EA file system initialized, `GLOBAL\GLOBALA.BUN` mounted, `GLOBAL\ATTRIBUTES.BIN` parsed
+### 1.3 Attribute Tree & Asset Loading ✅ DONE
+All 251 attributes complete validation cleanly. Secondary asset archives (`L6R_FE.BUN`, `FRONTDLC.BUN`, `STREAML6R_FE.BUN`) and car packages (`CARS/LANCEREVOX`, `CARS/MUSTANGGT`) mount cleanly.
 
-### 1.3 Attribute Tree & Asset Loading (RESOLVED)
-
-| Task | File(s) | Details |
-|---|---|---|
-| Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c` | Registered `sub_005310e0_impl` safe override in `g_dtab` to cleanly complete collection iteration. All 251 attributes complete validation cleanly. |
-| Verify secondary asset chunks | `scripts/run_boot.sh` | Confirm remaining BUN files (`BOOT.BUN`, `IN_GAME.BUN`) mount cleanly |
-
-### 1.4 Window Message Pump & D3D9 Present (IN PROGRESS)
-
-| Task | File(s) | Details |
-|---|---|---|
-| Implement `CreateWindowExA` & window handle | `lifter/runtime/win32.c` | Return valid HWND, enqueues startup window messages (`WM_SHOWWINDOW`, `WM_ACTIVATEAPP`, `WM_ACTIVATE`, `WM_SETFOCUS`, `WM_PAINT`) |
-| Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall, dispatch to guest wndproc with re-entry guard |
-| Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/com.c` | `BeginScene`, `EndScene`, `Present`, `Clear`, `Reset`, and `TestCooperativeLevel` implemented |
-
-**Done when:** `./out/prostreet` loads assets, opens a window, and ticks the main loop through `Present()`.
+### 1.4 Window Message Pump & D3D9 Present ✅ DONE
+`CreateWindowExA` and message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) implemented. D3D9 device scene lifecycle (`BeginScene`, `EndScene`, `Present`) ticks continuously past thousands of frames.
 
 ---
 
-## Phase 2 — First Rendered Frame (Native Linux)
+## Phase 2 — Rendering & D3DX Effects (Native Linux) 🟡 IN PROGRESS
 
-**Goal:** A single frame of the game renders to a window on Linux.
+**Goal:** Game effects are evaluated and rendered on Linux.
 
-### 2.1 D3DX Effect System
+### 2.1 D3DX Effect System ✅ DONE
+- [x] All 34 ProStreet compiled effects parse to completion (`lifter/runtime/d3dx_effect.c`).
+- [x] Preshader interpreter (PRES) implemented and verified against Wine D3DX9 specs.
+- [x] Effect parameter-to-register bindings, techniques, and passes active.
+- [x] D3DX math functions implemented and covered by unit tests.
 
-| Task | File(s) | Details |
+### 2.2 Offline Software Rasterizer ✅ DONE
+- [x] Software rasterizer (`lifter/runtime/swrast.c`) renders 3D draw calls offline.
+- [x] Frames dumped to `.ppm` files via `PROSTREET_FRAMEDUMP=<frame>`.
+
+### 2.3 Live Display Window (CURRENT FRONT)
+- [ ] Connect `d3d9_hle.c` / `win32.c` `Present()` to a live desktop window (SDL2, Vulkan, or X11/OpenGL) rather than headless/offline PPM rendering.
+
+---
+
+## Phase 3 — Game Systems & Interactivity (Native Linux) 🟡 IN PROGRESS
+
+**Goal:** The game is fully playable with screen, gamepad, and audio.
+
+| System | State | Details |
 |---|---|---|
-| Port `D3DXCreateEffectFromResourceA` from reference | `lifter/runtime/d3dx_hle.c` (new) | Create effect stub object, return fake pointer; reference: `reference/nfsu2-web/runtime/d3dx_hle.c` |
-| Port `D3DXCreateEffectPool` | `lifter/runtime/d3dx_hle.c` | Minimal stub |
-| Implement `ID3DXEffect::BeginPass` / `CommitChanges` | `lifter/runtime/d3dx_hle.c` | The core render path — sets shader constants, binds textures |
-| Implement D3DX math: `D3DXMatrixMultiply`, `D3DXMatrixTranspose`, `D3DXMatrixInverse`, `D3DXMatrixMultiplyTranspose`, `D3DXVec3Transform`, `D3DXVec4Transform` | `lifter/runtime/d3dx_hle.c` | Pure C matrix/vector math — straightforward |
-
-### 2.2 Rendering Pipeline
+| **Scripted Input** | ✅ Working | DirectInput scripted inputs (`PROSTREET_SCRIPT`) drive menus, car steering, acceleration |
+| **Interactive Input** | 🟡 Next | Wire real physical keyboard and gamepad (evdev / SDL_GameController) |
+| **Menus & Flow** | ✅ Working | Title screen, profile creation dialog, main menu, Race Day event selection |
+| **Race Engine** | ✅ Working | Transitions to game flow 6 (racing), car physics simulation active |
+| **Audio** | ❌ Not started | EA's proprietary AEMS modules in sound data need lifting or HLE replacement |
 
 | Task | File(s) | Details |
 |---|---|---|
