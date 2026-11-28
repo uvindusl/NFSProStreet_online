@@ -622,7 +622,11 @@ int com_call(CPU *c, uint32_t magic) {
             { extern void autotest_tick(long); autotest_tick((long)g_frame_no); }
             if (++s_present_frames <= 10 || (s_present_frames % 300) == 0) {
                 extern uint32_t gh_brk(void);
-                fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x\n", (unsigned long long)s_present_frames, gh_brk());
+                static struct timespec t0; struct timespec tn;
+                clock_gettime(CLOCK_MONOTONIC, &tn);
+                if (!t0.tv_sec) t0 = tn;
+                fprintf(stderr, "  [D3D9] Present (frame %llu)  heap top %08x  t=%.1fs\n", (unsigned long long)s_present_frames, gh_brk(),
+                        (double)(tn.tv_sec - t0.tv_sec) + (tn.tv_nsec - t0.tv_nsec) / 1e9);
             }
             /* Pace the game at the display rate: nothing blocks in Present here, and
              * unthrottled it ran some 1,200 frames a second.  PROSTREET_NOVSYNC=1

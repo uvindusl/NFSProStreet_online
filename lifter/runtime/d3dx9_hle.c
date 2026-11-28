@@ -6,10 +6,13 @@
 #include <math.h>
 #include <stdarg.h>
 
-/* ===== Logging ===== */
-static int g_d3dx9_log_enabled = 1;
+/* ===== Logging =====
+ * One line per D3DX math call: about 80 million lines (7 GB) in a race run,
+ * which slowed the game down a lot.  Off unless PROSTREET_D3DX_LOG=1. */
+static int g_d3dx9_log_enabled = -1;
 
 void d3dx9_log(const char* format, ...) {
+    if (g_d3dx9_log_enabled < 0) { const char *e = getenv("PROSTREET_D3DX_LOG"); g_d3dx9_log_enabled = e && *e == '1'; }
     if (!g_d3dx9_log_enabled) return;
     va_list args;
     va_start(args, format);
