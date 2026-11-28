@@ -10,9 +10,9 @@
  * ID3DXEffectStateManager on every effect, so those go to the manager when
  * there is one and to the device otherwise.
  *
- * Not done yet: the expression VM.  States given by a compiled expression and
- * the preshaders (PRES) inside the shaders are skipped, so constants a
- * preshader computes are not set.  The counts are printed when an effect is
+ * Not done yet: the expression VM for states given by a compiled expression.
+ * The preshaders (PRES) inside the shaders run when constants are uploaded
+ * (upload_pres).  The counts are printed when an effect is
  * created.
  *
  * Handles are guest addresses of small records, so the game can store and
@@ -44,10 +44,21 @@ typedef struct {
     int param;                              /* index of the effect parameter of that name, or -1 */
 } FxConst;
 
+/* A preshader (the 'PRES' comment of a shader): its own constant table
+ * (inputs, bound to effect parameters by name), literals and instructions.
+ * Its outputs are the shader's float constant registers. */
+typedef struct {
+    int nin; FxConst *in;                   /* inputs (CTAB) */
+    int nlit; float *lit;                   /* CLIT, as floats */
+    int ncode; uint32_t *code;              /* FXLC instructions (after the count) */
+    int nins;
+} FxPres;
+
 typedef struct {
     uint32_t bytecode, size, obj;           /* guest copy of the bytecode; device shader object */
     int is_ps, nconst, has_pres;
     FxConst *consts;
+    FxPres *pres;
 } FxShader;
 
 typedef struct {
@@ -182,6 +193,67 @@ static FxParam *read_annotations(Fx *fx, uint32_t n, int fxi) {
 
 /* The constant table (CTAB comment) of a shader: which registers its named
  * constants and samplers live in. */
+/* Parse a constant table (the bytes after the 'CTAB' fourcc, tsz long). */
+static FxConst *parse_ctab(Fx *fx, const uint8_t *t, uint32_t tsz, int *nout) {
+    uint32_t cnt, info;
+    *nout = 0;
+    if (tsz < 20) return NULL;
+    memcpy(&cnt, t + 12, 4); memcpy(&info, t + 16, 4);
+    if (cnt > 256 || info + 20 * (uint64_t)cnt > tsz) return NULL;
+    FxConst *cs = calloc(cnt ? cnt : 1, sizeof(FxConst));
+    for (uint32_t k = 0; k < cnt; k++) {
+        const uint8_t *ci = t + info + 20 * k;
+        FxConst *c = &cs[*nout];
+        uint32_t nameo, typeo;
+        memcpy(&nameo, ci, 4); memcpy(&c->regset, ci + 4, 2); memcpy(&c->reg, ci + 6, 2);
+        memcpy(&c->count, ci + 8, 2); memcpy(&typeo, ci + 12, 4);
+        if (nameo >= tsz || typeo + 12 > tsz) continue;
+        snprintf(c->name, sizeof c->name, "%.*s", (int)(tsz - nameo), (const char *)t + nameo);
+        memcpy(&c->cls, t + typeo, 2); memcpy(&c->type, t + typeo + 2, 2);
+        memcpy(&c->rows, t + typeo + 4, 2); memcpy(&c->cols, t + typeo + 6, 2);
+        memcpy(&c->elements, t + typeo + 8, 2);
+        c->param = -1;
+        for (uint32_t q = 0; q < fx->nparams; q++)
+            if (!strcmp(fx->params[q].name, c->name)) { c->param = (int)q; break; }
+        (*nout)++;
+    }
+    return cs;
+}
+
+/* The 'PRES' comment body (after its fourcc): a version token, then comments
+ * CTAB (inputs), CLIT (count, doubles), FXLC (count, instructions), PRSI,
+ * ending with 0x0000FFFF. */
+static FxPres *parse_pres(Fx *fx, const uint8_t *p, uint32_t ndw) {
+    FxPres *pr = calloc(1, sizeof *pr);
+    for (uint32_t i = 1; i < ndw; ) {                     /* [0] is the version token */
+        uint32_t tok; memcpy(&tok, p + 4 * i, 4);
+        if (tok == 0x0000FFFFu || (tok & 0xFFFFu) != 0xFFFEu) break;
+        uint32_t len = tok >> 16, id = 0;
+        if (!len || i + 1 + len > ndw) break;
+        memcpy(&id, p + 4 * (i + 1), 4);
+        const uint8_t *body = p + 4 * (i + 2);
+        uint32_t bdw = len - 1;
+        if (id == 0x42415443u) {                           /* CTAB */
+            pr->in = parse_ctab(fx, body, bdw * 4, &pr->nin);
+        } else if (id == 0x54494C43u && bdw >= 1) {        /* CLIT */
+            uint32_t cnt; memcpy(&cnt, body, 4);
+            if (cnt && 1 + 2 * (uint64_t)cnt <= bdw) {
+                pr->lit = malloc(cnt * sizeof(float)); pr->nlit = (int)cnt;
+                for (uint32_t k = 0; k < cnt; k++) { double d; memcpy(&d, body + 4 + 8 * k, 8); pr->lit[k] = (float)d; }
+            }
+        } else if (id == 0x434C5846u && bdw >= 1) {        /* FXLC */
+            uint32_t cnt; memcpy(&cnt, body, 4);
+            pr->nins = (int)cnt;
+            pr->ncode = (int)(bdw - 1);
+            pr->code = malloc((size_t)pr->ncode * 4 + 4);
+            memcpy(pr->code, body + 4, (size_t)pr->ncode * 4);
+        }
+        i += 1 + len;
+    }
+    if (!pr->code) { free(pr->in); free(pr->lit); free(pr); return NULL; }
+    return pr;
+}
+
 static void read_ctab(Fx *fx, FxShader *sh) {
     const uint8_t *b = g_mem + sh->bytecode;
     uint32_t n = sh->size / 4;
@@ -191,33 +263,20 @@ static void read_ctab(Fx *fx, FxShader *sh) {
         uint32_t len = tok >> 16, id = 0;
         if (i + 1 + len > n) break;
         if (len) memcpy(&id, b + 4 * (i + 1), 4);
-        if (id == 0x53455250u && len > 1) { sh->has_pres = 1; fx->npres++; }   /* 'PRES' with a body */
+        if (id == 0x53455250u && len > 1) {                    /* 'PRES' with a body */
+            sh->has_pres = 1; fx->npres++;
+            sh->pres = parse_pres(fx, b + 4 * (i + 2), len - 1);
+        }
         if (id == 0x42415443u && len >= 8) {                            /* 'CTAB' */
             const uint8_t *t = b + 4 * (i + 2);
-            uint32_t tsz = (len - 1) * 4, cnt, info;
-            memcpy(&cnt, t + 12, 4); memcpy(&info, t + 16, 4);
-            if (cnt > 256 || info + 20 * (uint64_t)cnt > tsz) break;
-            sh->consts = calloc(cnt ? cnt : 1, sizeof(FxConst));
-            for (uint32_t k = 0; k < cnt; k++) {
-                const uint8_t *ci = t + info + 20 * k;
-                FxConst *c = &sh->consts[sh->nconst];
-                uint32_t nameo, typeo;
-                memcpy(&nameo, ci, 4); memcpy(&c->regset, ci + 4, 2); memcpy(&c->reg, ci + 6, 2);
-                memcpy(&c->count, ci + 8, 2); memcpy(&typeo, ci + 12, 4);
-                if (nameo >= tsz || typeo + 12 > tsz) continue;
-                snprintf(c->name, sizeof c->name, "%.*s", (int)(tsz - nameo), (const char *)t + nameo);
-                memcpy(&c->cls, t + typeo, 2); memcpy(&c->type, t + typeo + 2, 2);
-                memcpy(&c->rows, t + typeo + 4, 2); memcpy(&c->cols, t + typeo + 6, 2);
-                memcpy(&c->elements, t + typeo + 8, 2);
-                c->param = -1;
-                for (uint32_t q = 0; q < fx->nparams; q++)
-                    if (!strcmp(fx->params[q].name, c->name)) { c->param = (int)q; break; }
-                sh->nconst++;
-            }
+            uint32_t tsz = (len - 1) * 4;
+            sh->consts = parse_ctab(fx, t, tsz, &sh->nconst);
+            if (!sh->consts) break;
         }
         i += 1 + len;
     }
 }
+
 
 /* A compiled expression (0x46580200 ...).  Every one in the game's effects is
  * a single move of a named parameter into the state (`MinFilter = <ciMinFilter>`):
@@ -432,7 +491,7 @@ int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool) {
     }
     pthread_mutex_unlock(&g_fx_lock);
     if (nshared) fprintf(stderr, "d3dx: effect %s: %u parameters shared through pool %08x\n", label, nshared, pool);
-    fprintf(stderr, "d3dx: effect %s: %u parameters, %u techniques; not evaluated: %u expression states, %u preshaders\n",
+    fprintf(stderr, "d3dx: effect %s: %u parameters, %u techniques; %u expression states not evaluated, %u preshaders\n",
             label, fx->nparams, fx->ntechs, fx->nexpr, fx->npres);
     return 1;
 }
@@ -540,6 +599,168 @@ static int state_value(Fx *fx, const FxState *st, uint32_t *v) {
 
 /* Send the shader's named constants (from the effect's parameters), and its
  * samplers' textures and states. */
+/* A parameter's value as k->count float4 registers (out has room for them). */
+static void param_regs(const FxConst *k, const FxParam *p, float *out) {
+    memset(out, 0, (size_t)k->count * 16);
+    uint32_t per = p->rows * p->cols, ne = p->elements ? p->elements : 1, reg = 0;
+    for (uint32_t e = 0; e < ne && reg < k->count; e++) {
+        const uint32_t *v = p->val + e * per;
+        if (p->cls == 2 && k->cls == 3) {             /* matrix, one register per column */
+            for (uint32_t col = 0; col < p->cols && col < (k->cols ? k->cols : 4u) && reg < k->count; col++, reg++)
+                for (uint32_t row = 0; row < p->rows && row < 4; row++)
+                    out[reg * 4 + row] = as_float(p, v[row * p->cols + col]);
+        } else if (p->cls == 2) {                     /* matrix, one register per row */
+            for (uint32_t row = 0; row < p->rows && row < (k->rows ? k->rows : 4u) && reg < k->count; row++, reg++)
+                for (uint32_t col = 0; col < p->cols && col < 4; col++)
+                    out[reg * 4 + col] = as_float(p, v[row * p->cols + col]);
+        } else {
+            for (uint32_t q = 0; q < per && q < 4; q++) out[reg * 4 + q] = as_float(p, v[q]);
+            reg++;
+        }
+    }
+}
+
+/* ---- preshader VM ----------------------------------------------------------
+ * The FXLC format as Wine's d3dx9 (preshader.c) reads it.  An instruction is
+ * a code DWORD (opcode in bits 20-30, bit 31 = first input is a scalar,
+ * component count in bits 0-15), the input count, then each input and the
+ * output: a relative-addressing flag (0, or 1 followed by the index
+ * register's table and offset), the table and the component offset.  Tables:
+ * 1 literals, 2 inputs, 4 outputs (the shader's float constants), 7 temps. */
+enum { PR_REGS = 256 * 4 };
+typedef struct { float in[PR_REGS], tmp[PR_REGS], out[PR_REGS]; uint8_t written[256]; } PresRegs;
+
+static float *pres_slot(FxPres *pr, PresRegs *r, uint32_t table, uint32_t off) {
+    static float zero;
+    switch (table) {
+    case 1: if (off < (uint32_t)pr->nlit) return &pr->lit[off]; break;
+    case 2: if (off < PR_REGS) return &r->in[off]; break;
+    case 4: if (off < PR_REGS) { r->written[off / 4] = 1; return &r->out[off]; } break;
+    case 7: if (off < PR_REGS) return &r->tmp[off]; break;
+    }
+    zero = 0; return &zero;
+}
+
+/* parse one argument at code[*pc]: returns its table/offset (index applied) */
+static int pres_arg(FxPres *pr, PresRegs *r, int *pc, uint32_t *table, uint32_t *off) {
+    uint32_t *c = pr->code; int n = pr->ncode, i = *pc;
+    if (i + 3 > n) return 0;
+    int32_t idx = 0;
+    if (c[i] == 1) {
+        if (i + 5 > n) return 0;
+        idx = (int32_t)lrintf(*pres_slot(pr, r, c[i + 1], c[i + 2])) * 4;
+        i += 2;
+    }
+    *table = c[i + 1]; *off = c[i + 2] + (uint32_t)idx;
+    *pc = i + 3;
+    return 1;
+}
+
+static float pres_op(uint32_t op, const float *a) {
+    switch (op) {
+    case 0x100: return a[0];
+    case 0x101: return -a[0];
+    case 0x103: return a[0] == 0 ? INFINITY : 1.0f / a[0];
+    case 0x104: return a[0] - floorf(a[0]);
+    case 0x105: return exp2f(a[0]);
+    case 0x106: return log2f(fabsf(a[0]));
+    case 0x107: return a[0] == 0 ? INFINITY : 1.0f / sqrtf(fabsf(a[0]));
+    case 0x108: return sinf(a[0]);
+    case 0x109: return cosf(a[0]);
+    case 0x10a: return asinf(a[0]);
+    case 0x10b: return acosf(a[0]);
+    case 0x10c: return atanf(a[0]);
+    case 0x200: case 0xa00: return a[0] < a[1] ? a[0] : a[1];
+    case 0x201: case 0xa01: return a[0] > a[1] ? a[0] : a[1];
+    case 0x202: case 0xa02: return a[0] < a[1] ? 1.0f : 0.0f;
+    case 0x203: case 0xa03: return a[0] >= a[1] ? 1.0f : 0.0f;
+    case 0x204: case 0xa04: return a[0] + a[1];
+    case 0x205: case 0xa05: return a[0] * a[1];
+    case 0x206: case 0xa06: return atan2f(a[0], a[1]);
+    case 0x208: case 0xa08: return a[1] == 0 ? INFINITY : a[0] / a[1];
+    case 0x300: return a[0] >= 0 ? a[1] : a[2];
+    case 0x301: return a[0] != 0 ? a[1] : a[2];
+    }
+    return 0;
+}
+
+static int pres_inputs(uint32_t op) {
+    switch (op >> 8) {
+    case 0x1: return 1;
+    case 0x2: case 0xa: return 2;
+    case 0x3: return 3;
+    case 0x5: return op == 0x502 ? 1 : 2;
+    case 0xd: return op == 0xd00 ? 6 : 8;
+    }
+    return -1;
+}
+
+/* Run the preshader; returns 0 (and logs once) on code it does not know. */
+static int pres_run(FxPres *pr, PresRegs *r) {
+    static int warned;
+    int pc = 0;
+    for (int ins = 0; ins < pr->nins && pc + 2 <= pr->ncode; ins++) {
+        uint32_t code = pr->code[pc], nargs = pr->code[pc + 1];
+        uint32_t op = (code & 0x7ff00000u) >> 20, ncomp = code & 0xFFFFu;
+        int scalar = (code & 0x80000000u) != 0, nin = pres_inputs(op);
+        pc += 2;
+        if (nin < 0 || nargs != (uint32_t)nin || nin > 8 || ncomp > 4) {
+            if (!warned++) fprintf(stderr, "d3dx: preshader opcode %#x (%u args, %u comps) not handled\n", op, nargs, ncomp);
+            return 0;
+        }
+        uint32_t tb[9], of[9];
+        for (int a = 0; a <= nin; a++)
+            if (!pres_arg(pr, r, &pc, &tb[a], &of[a])) return 0;
+        if (op == 0x500) {                                  /* dot over all components */
+            float sum = 0;
+            for (uint32_t k = 0; k < ncomp; k++)
+                sum += *pres_slot(pr, r, tb[0], of[0] + (scalar ? 0 : k)) * *pres_slot(pr, r, tb[1], of[1] + k);
+            *pres_slot(pr, r, tb[nin], of[nin]) = sum;
+        } else if (op == 0xd00 || op == 0xd01) {            /* dotswiz6 / dotswiz8 */
+            int pairs = nin / 2; float sum = 0;
+            for (int q = 0; q < pairs; q++) sum += *pres_slot(pr, r, tb[q], of[q]) * *pres_slot(pr, r, tb[q + pairs], of[q + pairs]);
+            *pres_slot(pr, r, tb[nin], of[nin]) = sum;
+        } else if (op == 0x502) {                           /* noise: not used for anything visible */
+            for (uint32_t k = 0; k < ncomp; k++) *pres_slot(pr, r, tb[1], of[1] + k) = 0;
+        } else {
+            float res[4];
+            for (uint32_t k = 0; k < ncomp; k++) {
+                float a[3];
+                for (int q = 0; q < nin; q++) a[q] = *pres_slot(pr, r, tb[q], of[q] + ((scalar && q == 0) ? 0 : k));
+                res[k] = pres_op(op, a);
+            }
+            for (uint32_t k = 0; k < ncomp; k++) *pres_slot(pr, r, tb[nin], of[nin] + k) = res[k];
+        }
+    }
+    return 1;
+}
+
+/* Run a shader's preshader on the current parameter values and upload every
+ * float constant register it wrote. */
+static void upload_pres(CPU *c, Fx *fx, FxShader *sh) {
+    FxPres *pr = sh->pres;
+    if (!pr) return;
+    PresRegs *r = calloc(1, sizeof *r);
+    for (int i = 0; i < pr->nin; i++) {
+        FxConst *k = &pr->in[i];
+        if (k->param < 0 || k->regset != 2 || !k->count || k->reg + k->count > 256) continue;
+        FxParam *p = &fx->params[k->param];
+        if (p->val) param_regs(k, p, r->in + k->reg * 4);
+    }
+    if (pres_run(pr, r)) {
+        for (uint32_t reg = 0; reg < 256; ) {
+            if (!r->written[reg]) { reg++; continue; }
+            uint32_t end = reg;
+            while (end < 256 && r->written[end]) end++;
+            memcpy(g_mem + fx->scratch, r->out + reg * 4, (end - reg) * 16);
+            uint32_t a[3] = { reg, fx->scratch, end - reg };
+            sm(c, fx, sh->is_ps ? SM_PSF : SM_VSF, 3, a);
+            reg = end;
+        }
+    }
+    free(r);
+}
+
 static void upload(CPU *c, Fx *fx, FxShader *sh) {
     if (!sh) return;
     for (int i = 0; i < sh->nconst; i++) {
@@ -547,24 +768,7 @@ static void upload(CPU *c, Fx *fx, FxShader *sh) {
         if (k->param < 0) continue;
         FxParam *p = &fx->params[k->param];
         if (k->regset == 2 && p->val && k->count && k->count <= 256) {
-            float *out = (float *)(g_mem + fx->scratch);
-            memset(out, 0, (size_t)k->count * 16);
-            uint32_t per = p->rows * p->cols, ne = p->elements ? p->elements : 1, reg = 0;
-            for (uint32_t e = 0; e < ne && reg < k->count; e++) {
-                const uint32_t *v = p->val + e * per;
-                if (p->cls == 2 && k->cls == 3) {             /* matrix, one register per column */
-                    for (uint32_t col = 0; col < p->cols && col < (k->cols ? k->cols : 4u) && reg < k->count; col++, reg++)
-                        for (uint32_t row = 0; row < p->rows && row < 4; row++)
-                            out[reg * 4 + row] = as_float(p, v[row * p->cols + col]);
-                } else if (p->cls == 2) {                     /* matrix, one register per row */
-                    for (uint32_t row = 0; row < p->rows && row < (k->rows ? k->rows : 4u) && reg < k->count; row++, reg++)
-                        for (uint32_t col = 0; col < p->cols && col < 4; col++)
-                            out[reg * 4 + col] = as_float(p, v[row * p->cols + col]);
-                } else {
-                    for (uint32_t q = 0; q < per && q < 4; q++) out[reg * 4 + q] = as_float(p, v[q]);
-                    reg++;
-                }
-            }
+            param_regs(k, p, (float *)(g_mem + fx->scratch));
             uint32_t a[3] = { k->reg, fx->scratch, k->count };
             sm(c, fx, sh->is_ps ? SM_PSF : SM_VSF, 3, a);
         } else if (k->regset == 3 && p->states) {
@@ -583,6 +787,7 @@ static void upload(CPU *c, Fx *fx, FxShader *sh) {
             }
         }
     }
+    upload_pres(c, fx, sh);
 }
 
 static void apply_pass(CPU *c, Fx *fx, FxPass *ps, int states) {
