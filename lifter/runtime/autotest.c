@@ -81,6 +81,13 @@ static void parse(void) {
         if (len >= sizeof tok) len = sizeof tok - 1;
         memcpy(tok, e, len); tok[len] = 0;
         e = end ? end + 1 : "";
+        /* a script copied from the docs may be wrapped over lines: drop the
+         * spaces and newlines around each step */
+        char *t0 = tok;
+        while (*t0 == ' ' || *t0 == '\t' || *t0 == '\n' || *t0 == '\r') t0++;
+        for (size_t k = strlen(t0); k && (t0[k - 1] == ' ' || t0[k - 1] == '\t' || t0[k - 1] == '\n' || t0[k - 1] == '\r'); k--) t0[k - 1] = 0;
+        if (!*t0) continue;
+        if (t0 != tok) memmove(tok, t0, strlen(t0) + 1);
         char *val = strchr(tok, '=');
         if (val) *val++ = 0;
         char *opt = val ? strchr(val, ':') : NULL;

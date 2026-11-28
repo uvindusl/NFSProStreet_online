@@ -181,6 +181,7 @@ static void read_value(Fx *fx, FxParam *p, uint32_t toff, uint32_t voff) {
         if (!per || per > 16 || ne > 4096) { fx->ok = 0; return; }
         p->n = per * ne;
         p->val = calloc(p->n, 4);
+        if (!p->val) { fx->ok = 0; return; }
         for (uint32_t i = 0; i < p->n; i++) p->val[i] = dw(fx, 8 + voff + 4 * i);
     } else if (p->cls == 4 && p->type >= 10 && p->type <= 14) {     /* sampler { nstates, states } */
         uint32_t o = 8 + voff;
@@ -250,15 +251,16 @@ static FxPres *parse_pres(Fx *fx, const uint8_t *p, uint32_t ndw) {
         } else if (id == 0x54494C43u && bdw >= 1) {        /* CLIT */
             uint32_t cnt; memcpy(&cnt, body, 4);
             if (cnt && 1 + 2 * (uint64_t)cnt <= bdw) {
-                pr->lit = malloc(cnt * sizeof(float)); pr->nlit = (int)cnt;
-                for (uint32_t k = 0; k < cnt; k++) { double d; memcpy(&d, body + 4 + 8 * k, 8); pr->lit[k] = (float)d; }
+                pr->lit = malloc(cnt * sizeof(float)); pr->nlit = pr->lit ? (int)cnt : 0;
+                for (uint32_t k = 0; k < (uint32_t)pr->nlit; k++) { double d; memcpy(&d, body + 4 + 8 * k, 8); pr->lit[k] = (float)d; }
             }
         } else if (id == 0x434C5846u && bdw >= 1) {        /* FXLC */
             uint32_t cnt; memcpy(&cnt, body, 4);
             pr->nins = (int)cnt;
             pr->ncode = (int)(bdw - 1);
             pr->code = malloc((size_t)pr->ncode * 4 + 4);
-            memcpy(pr->code, body + 4, (size_t)pr->ncode * 4);
+            if (pr->code) memcpy(pr->code, body + 4, (size_t)pr->ncode * 4);
+            else pr->ncode = pr->nins = 0;
         }
         i += 1 + len;
     }
@@ -469,6 +471,7 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
  * first field after the vtable is the effect's index + 1).  Returns 1 if the
  * effect was read. */
 int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool) {
+    if (!obj || !mem_is_committed(obj + 7)) return 0;
     char label[sizeof g_fx[0].name]; uint32_t size = 0;
     const uint8_t *res = find_rcdata(name_va, &size, label, sizeof label);
     if (!res) { fprintf(stderr, "d3dx: effect %s: resource not found\n", label); return 0; }

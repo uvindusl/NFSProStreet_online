@@ -2673,16 +2673,29 @@ int win32_call(CPU *c, uint32_t idx) {
             extern uint32_t com_create_effect(void);
             uint32_t ppEffect = A(7);
             uint32_t ppErrorBuffer = A(8);
+            extern int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool);
             uint32_t eff = com_create_effect();
-            { extern int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool); fx_create(eff, A(2), A(6)); }
-            if (ppEffect && mem_is_committed(ppEffect)) {
-                MR32(ppEffect) = eff;
+            /* No COM memory: E_OUTOFMEMORY, out-params untouched.  An effect
+             * whose resource is missing or unreadable is still handed out, as
+             * an inert object (its handles resolve to nothing and its calls
+             * fail): the game does not check this call and calls through a
+             * null effect (checked with a header image without .rsrc).
+             * PROSTREET_FX_STRICT=1 returns E_FAIL instead, like D3DX. */
+            int ok = eff && fx_create(eff, A(2), A(6));
+            int strict = getenv("PROSTREET_FX_STRICT") && *getenv("PROSTREET_FX_STRICT") == '1';
+            if (ppErrorBuffer && mem_is_committed(ppErrorBuffer)) MR32(ppErrorBuffer) = 0;
+            if (!eff) {
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA: out of COM memory\n");
+                r = 0x8007000Eu; /* E_OUTOFMEMORY */
+            } else if (!ok && strict) {
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA: effect not read, E_FAIL\n");
+                r = 0x80004005u; /* E_FAIL */
+            } else {
+                if (ppEffect && mem_is_committed(ppEffect)) MR32(ppEffect) = eff;
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA %s effect 0x%08x -> [0x%08x]\n",
+                        ok ? "created" : "inert (not read)", eff, ppEffect);
+                r = 0; /* D3D_OK */
             }
-            if (ppErrorBuffer && mem_is_committed(ppErrorBuffer)) {
-                MR32(ppErrorBuffer) = 0;
-            }
-            fprintf(stderr, "win32: D3DXCreateEffectFromResourceA created effect 0x%08x -> [0x%08x]\n", eff, ppEffect);
-            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXCreateEffectPool")) {
             uint32_t ppPool = A(0);
             if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x6e000000;

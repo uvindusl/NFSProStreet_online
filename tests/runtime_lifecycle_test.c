@@ -476,7 +476,7 @@ int main(void) {
                         "mem_range_committed checks every page");
         }
 
-        setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,bogus,frames=3,tap=28:FeMainMenu.fng", 1);
+        setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,\n bogus,frames=3,\ntap=28:FeMainMenu.fng,", 1);
         parse();
         ASSERT_EQ(g_nsteps, 3, "script: a bad second key and an unknown step are dropped");
         ASSERT_TRUE(g_step[0].op == S_KEY && g_step[0].b == 200 && g_step[0].b2 == 205 && g_step[0].a == 4,

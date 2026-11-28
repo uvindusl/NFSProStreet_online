@@ -181,16 +181,22 @@ static int pe_find_section(const char *path, const char *name, uint32_t *va, uin
 static int map_rsrc_from(const char *path) {
     uint32_t va, raw, rsz;
     if (pe_find_section(path, ".rsrc", &va, &raw, &rsz) || rsz > 0x4000000u) return -1;
+    if (!rsz || (uint64_t)va + rsz > 0x100000000ull) return -1;
     mem_commit(va, rsz);
     for (uint32_t k = 0; k < 64 && k < rsz; k++)
         if (g_mem[va + k]) return 1;                     /* already there */
-    FILE *f = fopen(path, "rb");
-    int ok = f && !fseek(f, (long)raw, SEEK_SET) && fread(g_mem + va, 1, rsz, f) == rsz;
+    /* read the whole section aside first: a short read or an all-zero
+     * section (a dump may carry one) leaves the guest untouched */
+    uint8_t *buf = malloc(rsz);
+    FILE *f = buf ? fopen(path, "rb") : NULL;
+    int ok = f && !fseek(f, (long)raw, SEEK_SET) && fread(buf, 1, rsz, f) == rsz;
     if (f) fclose(f);
-    if (ok) {                                            /* a dump may carry an all-zero .rsrc */
+    if (ok) {
         ok = 0;
-        for (uint32_t k = 0; k < 64 && k < rsz && !ok; k++) ok = g_mem[va + k] != 0;
+        for (uint32_t k = 0; k < 64 && k < rsz && !ok; k++) ok = buf[k] != 0;
     }
+    if (ok) memcpy(g_mem + va, buf, rsz);
+    free(buf);
     if (ok) fprintf(stderr, "boot: .rsrc (%u bytes at %08x) taken from %s\n", rsz, va, path);
     return ok ? 0 : -1;
 }
@@ -284,6 +290,10 @@ static int relink_list(uint32_t a, uint32_t lo, uint32_t hi) {
  * static constructors, which do not run again) and drop the rest. */
 int gh_in_use(uint32_t a);
 static int g_orig_zero;   /* no original .data: g_orig_data is all zero */
+/* Whether the saved .data covers [a, a+n). */
+static int orig_covers(uint32_t a, uint32_t n) {
+    return g_orig_data && a >= g_orig_lo && (uint64_t)a + n <= (uint64_t)g_orig_lo + g_orig_size;
+}
 
 static void repair_stale_lists(void) {
     char path[4096];
@@ -1122,7 +1132,7 @@ int main(int argc, char **argv) {
      * point outside the image are cleared, no section is loaded, and the
      * free list gets 512 fresh nodes in this run's memory.  The self-linked
      * static heads at 0x00ae3460-0x00ae3494 and the code pointers stay. */
-    if (g_orig_data && mem_is_committed(0x00ae6084)) {
+    if (orig_covers(0x00ae3350u, 0x00ae6100u - 0x00ae3350u) && mem_is_committed(0x00ae6084)) {
         unsigned cleared = 0;
         for (uint32_t a = 0x00ae3350u; a < 0x00ae6100u; a += 4) {
             uint32_t w = MR32(a), o = *(uint32_t *)(g_orig_data + (a - g_orig_lo));

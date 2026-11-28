@@ -36,7 +36,7 @@ scripts/run_boot.sh /path/to/nfs.exe.unpacked 300
 
 Scan codes: 28 Enter, 200 Up (accelerate), 208 Down, 203 Left, 205 Right, 1 Esc.
 
-From a saved profile into a Race Day race (Freestyle event, SOLO, one car per discipline):
+From a saved profile into a Race Day race (Freestyle event, SOLO, one car per discipline). Steps may be wrapped over lines as below: the spaces and newlines around each step are dropped. Run it with `PROSTREET_FRAMEDUMP=999999` so the final `dump` renders the race frame:
 
 ```
 frames=5700,key=28,tap=28:FeMainMenu.fng,frames=90,key=208,frames=30,key=28,
