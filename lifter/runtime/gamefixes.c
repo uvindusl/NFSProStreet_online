@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "cpu.h"
+#include "rt.h"
 
 #ifndef HOOK_SITE
 #define HOOK_SITE(va) (va##u)
@@ -44,6 +45,15 @@ int gamefix_hook(CPU *c, uint32_t ip) {
      * free is skipped: the routine's own NULL test returns early. */
     case HOOK_SITE(0x00436147): {
         uint32_t p = c->esi;
+        {   /* PROSTREET_FREE_WATCH=LO-HI (debugging): report frees in a range */
+            static int fw = -1; static uint32_t flo, fhi;
+            if (fw < 0) { const char *e = getenv("PROSTREET_FREE_WATCH"); char *q; fw = 0;
+                          if (e) { flo = (uint32_t)strtoul(e, &q, 16); if (*q == '-') { fhi = (uint32_t)strtoul(q + 1, NULL, 16); fw = 1; } } }
+            if (fw && p >= flo && p < fhi) {
+                fprintf(stderr, "[free-watch] free(%#x)\n", p);
+                if (mem_is_committed(c->esp)) guest_backtrace(c, 10);
+            }
+        }
         if (!p || !mem_is_committed(p - 0x14)) return 1;
         for (uint32_t slot = 0x00b4d9fcu; slot < 0x00b4dbfcu; slot += 0x10) {
             uint32_t r = MR32(slot);
@@ -99,7 +109,35 @@ int gamefix_hook_ret(CPU *c, uint32_t ip) {
     case HOOK_RETURN_SITE(0x008b2cb0): {
         static int run = -1;
         if (run < 0) { const char *e = getenv("PROSTREET_AUDIO_VOICES"); run = e && *e == '1'; }
-        if (run) return 0;
+        if (run) {
+            /* sub_008b2cb0(ecx voice, table, list entry, chain): log each new
+             * chain's module table once (PROSTREET_AUDIO_TRACE=1) */
+            static int trace = -1; static uint32_t seen[64]; static unsigned nseen;
+            if (trace < 0) { const char *e = getenv("PROSTREET_AUDIO_TRACE"); trace = e && *e == '1'; }
+            uint32_t tab = MR32(c->esp + 4), chain = MR32(c->esp + 12);
+            if (trace && mem_range_committed(chain, 0x80) && MR8(chain + 0x46) > 16) {
+                static unsigned nbad;
+                if (nbad++ < 5) {
+                    fprintf(stderr, "voices: chain %#x has count %u/%u on entry (table %#x, caller %#x):", chain,
+                            MR8(chain + 0x45), MR8(chain + 0x46), tab, MR32(c->esp));
+                    for (unsigned k = 0; k < 0x80; k += 4) fprintf(stderr, "%s%08x", k % 32 ? " " : "\n   ", MR32(chain + k));
+                    fprintf(stderr, "\n");
+                }
+            }
+            unsigned i;
+            for (i = 0; i < nseen && seen[i] != chain; i++) ;
+            if (trace && i == nseen && nseen < 64 && mem_range_committed(chain, 0x80)) {
+                seen[nseen++] = chain;
+                unsigned n = MR8(chain + 0x46);
+                fprintf(stderr, "voices: chain %#x table %#x count %u/%u [+0x18]=%#x:", chain, tab, MR8(chain + 0x45), n, MR32(chain + 0x18));
+                for (unsigned k = 0; k <= n && k < 8 && mem_range_committed(tab + 12 * k, 12); k++)
+                    fprintf(stderr, " {%08x %08x %08x}", MR32(tab + 12 * k), MR32(tab + 12 * k + 4), MR32(tab + 12 * k + 8));
+                fprintf(stderr, " inst:");
+                for (unsigned k = 0; k <= n && k < 8; k++) fprintf(stderr, " %08x", MR32(chain + 0x4c + 4 * k));
+                fprintf(stderr, "\n");
+            }
+            return 0;
+        }
         POP32(c->eip);
         c->esp += 0xc;
         c->eax = 0;
