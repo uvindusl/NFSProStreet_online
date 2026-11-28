@@ -389,10 +389,12 @@ void watch_report_change(uint32_t culprit_ip, uint32_t oldv, uint32_t newv) {
 
 int hdfont_hook(CPU *c, uint32_t ip);
 int gamefix_hook(CPU *c, uint32_t ip);
+int aems_hook(CPU *c, uint32_t ip);
 
 void guest_hook(CPU *c, uint32_t ip) {
     if (hdfont_hook(c, ip)) return;
     if (gamefix_hook(c, ip)) return;
+    if (aems_hook(c, ip)) return;
 }
 
 int gamefix_hook_ret(CPU *c, uint32_t ip);

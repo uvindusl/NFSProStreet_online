@@ -57,9 +57,22 @@ time ls "$GEN"/shard_*.c | \
 echo "== function table =="
 compile_one "$GEN/fntab.c" "$OBJ/fntab.o" $CFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"
 
+# AEMS audio module banks lifted by scripts/lift_aems.sh (game-derived, in out/)
+AEMS="${AEMS:-$ROOT/out/lift-aems}"
+if [ -f "$AEMS/aems_table.c" ]; then
+    echo "== AEMS banks ($(ls "$AEMS"/bank_*.c 2>/dev/null | wc -l)) =="
+    export DEPS="$ROOT/lifter/runtime/cpu.h"
+    rm -f "$OBJ"/aems_*.o
+    for src in "$AEMS"/*.c; do
+        compile_one "$src" "$OBJ/aems_$(basename "$src" .c).o" $CFLAGS -I "$ROOT/lifter/runtime"
+    done
+else
+    rm -f "$OBJ"/aems_*.o
+fi
+
 echo "== runtime =="
 export DEPS="$ROOT/lifter/runtime/rt.h $ROOT/lifter/runtime/cpu.h"
-for src in mem hdfont gamefixes autotest dispatch win32 impargs boot d3d9_hle d3dx9_hle d3dx_effect swrast com; do
+for src in mem hdfont gamefixes aems autotest dispatch win32 impargs boot d3d9_hle d3dx9_hle d3dx_effect swrast com; do
     compile_one "$ROOT/lifter/runtime/$src.c" "$OBJ/rt_$src.o" $RTFLAGS -I "$ROOT/lifter/runtime" -I "$GEN"
 done
 

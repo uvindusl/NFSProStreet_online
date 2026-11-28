@@ -96,6 +96,7 @@ void sub_004591a0(CPU *c) { (void)c; }
 #include "dispatch.c"
 #include "hdfont.c"
 #include "gamefixes.c"
+#include "aems.c"
 #include "d3dx_effect.c"
 #include "swrast.c"
 #include "autotest.c"

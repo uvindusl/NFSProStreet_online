@@ -875,6 +875,11 @@ int com_call(CPU *c, uint32_t magic) {
             /* WAVEFORMATEX.nAvgBytesPerSec drives the play cursor (see GetCurrentPosition) */
             uint32_t fmt = (desc && mem_is_committed(desc)) ? MR32(desc + 16) : 0;
             MR32(obj + 12) = (fmt && mem_is_committed(fmt) && MR32(fmt + 8)) ? MR32(fmt + 8) : 176400u;
+            /* +28 channels | bits << 16, +32 sample rate: for PROSTREET_WAVDUMP */
+            if (fmt && mem_is_committed(fmt + 15)) {
+                MR32(obj + 28) = MR16(fmt + 2) | ((uint32_t)MR16(fmt + 14) << 16);
+                MR32(obj + 32) = MR32(fmt + 4);
+            }
             if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
         } else if (!strcmp(nm, "GetCaps")) {
@@ -964,6 +969,36 @@ int com_call(CPU *c, uint32_t magic) {
                    !strcmp(nm, "GetPan") || !strcmp(nm, "GetFrequency")) {
             uint32_t p = COM_A(1);
             if (p && mem_is_committed(p)) MR32(p) = 0;
+            r = 0;
+        } else if (!strcmp(nm, "Unlock")) {
+            /* Unlock(this, p1, n1, p2, n2): the mixer has written what it
+             * locked.  Nothing is played; PROSTREET_WAVDUMP=1 appends the bytes
+             * to out/audio/dsbuf_<obj>.pcm (format in the .txt next to it), and
+             * the first non-silent write is logged either way. */
+            static int wav = -1; static int heard;
+            if (wav < 0) { const char *e = getenv("PROSTREET_WAVDUMP"); wav = e && *e == '1'; }
+            for (int k = 0; k < 2; k++) {
+                uint32_t p = COM_A(1 + 2 * k), n = COM_A(2 + 2 * k);
+                if (!p || !n || n > len || !mem_range_committed(p, n)) continue;
+                if (!heard) {
+                    for (uint32_t q = 0; q < n; q++) if (g_mem[p + q] && g_mem[p + q] != 0x80) { heard = 1; break; }
+                    if (heard) fprintf(stderr, "audio: first non-silent mix into sound buffer %#x (%u Hz, %u ch, %u bit)\n",
+                                       self, MR32(self + 32), MR32(self + 28) & 0xffff, MR32(self + 28) >> 16);
+                }
+                if (wav) {
+                    char name[64];
+                    mkdir("out", 0755); mkdir("out/audio", 0755);
+                    snprintf(name, sizeof name, "out/audio/dsbuf_%08x.txt", self);
+                    FILE *f = fopen(name, "r");
+                    if (f) fclose(f);
+                    else if ((f = fopen(name, "w"))) {
+                        fprintf(f, "rate %u channels %u bits %u\n", MR32(self + 32), MR32(self + 28) & 0xffff, MR32(self + 28) >> 16);
+                        fclose(f);
+                    }
+                    snprintf(name, sizeof name, "out/audio/dsbuf_%08x.pcm", self);
+                    if ((f = fopen(name, "ab"))) { fwrite(g_mem + p, 1, n, f); fclose(f); }
+                }
+            }
             r = 0;
         } else if (!strcmp(nm, "GetFormat")) {
             uint32_t pn = COM_A(3);
