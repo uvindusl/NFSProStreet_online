@@ -39,7 +39,7 @@
 #define HOOK_SITE(va) (va##u)
 #endif
 
-#define AEMS_BASE 0x6e000000u      /* win32.c ends heap2 here */
+#define AEMS_BASE 0x6c000000u      /* win32.c ends heap2 here; thread stacks start at 0x70000000 */
 #define AEMS_END  0x6ff00000u
 #define AEMS_ALIGN 0x10000u
 

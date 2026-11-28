@@ -1322,7 +1322,7 @@ static int foreign_code_call(CPU *c, uint32_t addr) {
       if (fn) { g_stat_indirect_ok++; fn(c); return 1; } }
     if (!mode) return 0;
     uint32_t ret = mem_is_committed(c->esp) ? MR32(c->esp) : 0;
-    int pinned = addr >= 0x6e000000u && addr < 0x6ff00000u && mem_is_committed(addr);   /* aems.c: AEMS_BASE..AEMS_END */
+    int pinned = addr >= 0x6c000000u && addr < 0x6ff00000u && mem_is_committed(addr);   /* aems.c: AEMS_BASE..AEMS_END */
     if (pinned) { extern void aems_note_miss(uint32_t a); aems_note_miss(addr); }
     /* EA's audio engine (code 0x008a0000-0x00920000) also calls the skipped
      * modules' entries from its voice tables (sub_008b2cb0); with no module

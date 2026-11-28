@@ -63,7 +63,7 @@ The profile is then saved in `./savedata/NFS ProStreet/` (`ALIAS_PLAYER`, `CAREE
 
 ## Audio module banks (AEMS)
 
-EA's sound library loads "module banks" from the sound data: relocatable x86 code and data that it copies into memory and resolves itself (`sub_008b9e60`, `sub_008b9bf0`). A resolved bank depends only on the address it sits at, so `lifter/runtime/aems.c` pins every bank to a fixed address in `0x6e000000-0x6ff00000` (the address comes from a hash of the bank's bytes) and the bank's code is lifted ahead of time like the image's:
+EA's sound library loads "module banks" from the sound data: relocatable x86 code and data that it copies into memory and resolves itself (`sub_008b9e60`, `sub_008b9bf0`). A resolved bank depends only on the address it sits at, so `lifter/runtime/aems.c` pins every bank to a fixed address in `0x6c000000-0x6ff00000` (the address comes from a hash of the bank's bytes) and the bank's code is lifted ahead of time like the image's:
 
 1. Run with `PROSTREET_AEMS_DUMP=1`. Each bank is written to `out/aems/bank_<hash>_<base>.bin` and listed in `out/aems/banks.txt`; every call that reaches a bank address with no lifted function is added to `out/aems/seeds.txt` as bank hash and offset.
 2. `scripts/lift_aems.py` lifts those entry points (and what they call directly) into `out/lift-aems/`, with a table of the banks' addresses.

@@ -83,7 +83,7 @@ static uint32_t gh_guest_str(const char *s) {
 #define HEAP_BASE 0x20000000u
 #define HEAP_END  0x48000000u
 #define HEAP2_BASE 0x50000000u     /* second region, used once the first is full */
-#define HEAP2_END  0x6e000000u     /* aems.c pins audio module banks above */
+#define HEAP2_END  0x6c000000u     /* aems.c pins audio module banks above */
 #define HEAP_MAGIC 0x48454150u
 
 static uint32_t g_brk = HEAP_BASE;
