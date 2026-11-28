@@ -23,7 +23,7 @@ The lifter works on an **unpacked, unprotected** memory image of the ProStreet P
 | Entry point | `0x00828c25` (`_WinMainCRTStartup`) |
 | Sections | `.text`, `.rdata`, `.data`, `.tls`, `.rsrc`, `diabolus` (6 sections) |
 | `.text` size | 5,656,699 bytes (`0x56507b`) |
-| Functions lifted | 47,514 (+ 4,950 diabolus functions) |
+| Functions lifted | 55,175 (+ 5,399 diabolus functions) |
 | Imports bound | 371 across 15 DLLs |
 
 > The overall file SHA-256 is **not** checked — it differs between dump methods because the PE layout is rebuilt. Only the `.text` section hash is verified, ensuring the game code is identical.
@@ -36,35 +36,39 @@ Each row is only marked ✅ when there is a command that reproduces it on the cu
 
 | Area | State | How to check |
 |---|---|---|
-| x86 → C lift | ✅ 47,514 functions lifted | `scripts/lift_boot.sh` |
+| x86 → C lift | ✅ 55,175 functions lifted | `scripts/lift_boot.sh artifacts/nfs.exe.unpacked` |
 | Native runtime builds, warnings as errors | ✅ | `STRICT=1 scripts/build_runtime.sh` |
 | Image loads, 371 imports bound | ✅ | `scripts/run_boot.sh` (see boot log) |
 | C runtime start-up | ✅ completes (unpacked image post-load state) | `scripts/run_boot.sh` |
 | Reaches `main` | ✅ `WinMain` running (0x004afee0) | `grep 'main-entry' out/boot.log` |
 | D3D9 HLE: device, buffers, draw | ✅ native triangle test | `tests/build_d3d9_htriangle.sh` |
 | D3D9 HLE: textures | ✅ native textured-quad test (API calls only, no pixel comparison) | `tests/build_d3d9_textured_quad.sh` |
+| D3DX Effects & preshaders | ✅ all 34 effects parse; preshader interpreter matches | `tests/build_d3dx_test.sh`, `tests/build_runtime_lifecycle_test.sh` |
 | Shader bytecode parsing | ✅ all 591 shaders parse | `lifter/tools/build_shader_disasm.sh` |
 | D3D9 shader → WGSL translation | ✅ 591/591 emitted and pass `naga` validation (validity only, not correctness) | `scripts/validate_wgsl.sh` |
 | Shader instruction tests | ✅ `texld`, address registers | `tests/d4_instruction_test.sh` |
 | Web build | ✅ builds | `FULL=1 web/build.sh`, then `cd web && npm ci && node build.mjs` |
 | WebGPU test triangle in Chrome | ✅ interpolated triangle verified by pixel sampling | `analysis/webgpu-test/` |
 | A real ProStreet shader rendered correctly in WebGPU | ❌ not yet; output does not match expected colour | in progress |
-| Game files: archive streaming | 🟡 loads `GLOBALA.BUN`, `GlobalMemoryFile.bin`, parses `ATTRIBUTES.BIN` | `grep 'GLOBAL' out/boot.log` |
+| Game files: archive streaming | ✅ loads `GLOBALA.BUN`, `GlobalMemoryFile.bin`, parses `ATTRIBUTES.BIN`, loads car geometry/textures | `grep -E 'GLOBAL|CARS' out/boot.log` |
 | Input, menus, a race (native) | ✅ scripted run: profile, main menu, Race Day event, into the race | `PROSTREET_SCRIPT_LOG=1 PROSTREET_FRAMEDUMP=999999 PROSTREET_SCRIPT=...` (script in [`docs/native-runs.md`](docs/native-runs.md)); the log shows `game flow 6` and `swrast: frame N: 986 draws` for the race frame |
+| Offline software rasterizer | ✅ renders 3D frame render targets to `.ppm` files | `PROSTREET_FRAMEDUMP=300 scripts/run_boot.sh artifacts/nfs.exe.unpacked 15` |
 | Audio | ❌ EA's AEMS sound modules are skipped | — |
 
 The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The roadmap to a playable game is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues
 
-- **Native build runs a race.** Intro movies, title, profile creation and loading, main menu, a Race Day event: the race starts and the car drives (the script in `docs/native-runs.md` ends on the race frame). Frames are checked offline with `PROSTREET_FRAMEDUMP`, and scripted runs use `PROSTREET_SCRIPT`; see [`docs/native-runs.md`](docs/native-runs.md). The attribute database loads through the lifted code once the process dump's stale state is repaired. Main's earlier attribute-tree stand-ins are an opt-in (`PROSTREET_ATTR_GUARD=1`). Not done: EA's AEMS audio modules (skipped), the web build of this work.
+- **Native build runs headlessly.** The native build loads intro movies, title, profile creation and loading, main menu, and a Race Day event into the race. Frames are checked offline with `PROSTREET_FRAMEDUMP`, and scripted runs use `PROSTREET_SCRIPT`; see [`docs/native-runs.md`](docs/native-runs.md). A physical display window (SDL2/Vulkan) is the next milestone.
+- **Retail game support.** The runtime auto-detects either `<gamedir>/nfsps.exe` or standard retail `<gamedir>/nfs.exe`. When running against packed retail executables lacking an uncompressed `.data` section, the runtime automatically zero-initializes the static ranges and applies the list head table.
+- **Audio.** EA's AEMS audio modules are x86 modules loaded dynamically from sound data at runtime; calls into them are currently skipped.
 - **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
 - **Shader coverage is still per-opcode.** `cmp` and `lrp` match D3D9 in one synthetic CPU-interpreter case (`bash lifter/tools/cpu_shader_semantics_test.sh`); there is no corpus-wide or GPU differential for them, and other opcodes have not all been exercised numerically.
 - **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.
 
 ## What you need
 
-- A legitimately owned copy of the game.
+- A legitimately owned copy of the game. Point `game/` symlink (or `PROSTREET_GAMEDIR`) to your game installation directory.
 - A **readable, unprotected build of the game executable.** The retail executable on some releases is wrapped in copy protection and cannot be lifted as shipped. This project does not provide, and does not document how to produce, an unprotected image. If you cannot obtain one legitimately, the lifter has nothing to work on.
 - To build: Linux x86-64, Python 3, Node.js 20 or newer, a C compiler, and [wasi-sdk](https://github.com/WebAssembly/wasi-sdk/releases) unpacked into `deps/` for the web build. The tested setup is 8 cores and 15 GB of RAM; use `J=2` to limit parallel jobs.
 - For shader validation: [`naga-cli`](https://crates.io/crates/naga-cli). `scripts/validate_wgsl.sh` runs it over every extracted blob.
@@ -72,10 +76,19 @@ The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The r
 
 ## Build and run
 
-```
-scripts/lift_boot.sh                        # lift the boot set (JTSWITCH=1 is required)
-STRICT=1 J=2 scripts/build_runtime.sh       # native runtime -> out/prostreet
-scripts/run_boot.sh <image> 60              # boot and print a report
+```bash
+# 1. Lift the target executable
+scripts/lift_boot.sh artifacts/nfs.exe.unpacked
+
+# 2. Build the native runtime (STRICT=1 treats warnings as errors)
+STRICT=1 scripts/build_runtime.sh
+
+# 3. Boot natively (pointing game -> your installed game directory)
+ln -s "/path/to/Need for Speed ProStreet" game
+scripts/run_boot.sh artifacts/nfs.exe.unpacked 60
+
+# 4. Or render and dump a specific frame offline (saved to out/frame_300_rt*.ppm):
+PROSTREET_FRAMEDUMP=300 scripts/run_boot.sh artifacts/nfs.exe.unpacked 15
 ```
 
 `scripts/build_runtime.sh` compiles the generated shards with `-w` and the hand-written runtime with `-Wall -Wextra`. `STRICT=1` turns any runtime warning into a build failure. Do not trust a build made without it.
