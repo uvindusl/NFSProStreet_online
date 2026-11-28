@@ -47,11 +47,16 @@
  * when no bank has been lifted. */
 typedef struct { uint32_t hash, base, size; } AemsBank;
 typedef void (*aems_fn_t)(CPU *);
-__attribute__((weak)) const AemsBank aems_known[1];
-__attribute__((weak)) const uint32_t aems_known_count;
-__attribute__((weak)) const uint32_t aems_fn_addr[1];
-__attribute__((weak)) const aems_fn_t aems_fn[1];
-__attribute__((weak)) const uint32_t aems_fn_count;
+/* Undefined weak references: 0 when the table is not linked in.  (Weak
+ * definitions here would be const zeros the compiler may fold into the
+ * code, hiding the generated table.) */
+extern const AemsBank aems_known[] __attribute__((weak));
+extern const uint32_t aems_known_count __attribute__((weak));
+extern const uint32_t aems_fn_addr[] __attribute__((weak));
+extern const aems_fn_t aems_fn[] __attribute__((weak));
+extern const uint32_t aems_fn_count __attribute__((weak));
+static uint32_t known_count(void) { return &aems_known_count ? aems_known_count : 0; }
+static uint32_t fn_count(void) { return &aems_fn_count ? aems_fn_count : 0; }
 
 static int aems_env(const char *name, int dflt) {
     const char *e = getenv(name);
@@ -93,14 +98,14 @@ static uint32_t pin_base(uint32_t hash, uint32_t size) {
      * first one not in use is taken.  With none free the instance gets a new
      * slot, which the next lift adds. */
     int busy = 0;
-    for (uint32_t i = 0; i < aems_known_count; i++)
+    for (uint32_t i = 0; i < known_count(); i++)
         if (aems_known[i].hash == hash && aems_known[i].size == size) {
             if (!bank_live(aems_known[i].base)) return aems_known[i].base;
             busy = 1;
         }
     if (busy) fprintf(stderr, "aems: every known address of bank %08x is in use; this instance gets a new slot\n", hash);
     /* slots of the known banks are taken, so a new bank goes after them */
-    for (uint32_t i = 0; i < aems_known_count; i++) {
+    for (uint32_t i = 0; i < known_count(); i++) {
         uint32_t end = (aems_known[i].base + aems_known[i].size + AEMS_ALIGN - 1) & ~(AEMS_ALIGN - 1);
         if (end > g_next) g_next = end;
     }
@@ -113,7 +118,7 @@ static uint32_t pin_base(uint32_t hash, uint32_t size) {
 /* Lifted bank function at `a`, or NULL. */
 aems_fn_t aems_lookup(uint32_t a) {
     if (a < AEMS_BASE || a >= AEMS_END) return NULL;
-    uint32_t lo = 0, hi = aems_fn_count;
+    uint32_t lo = 0, hi = fn_count();
     while (lo < hi) {
         uint32_t m = (lo + hi) / 2;
         if (aems_fn_addr[m] < a) lo = m + 1;
@@ -152,6 +157,7 @@ int aems_hook(CPU *c, uint32_t ip) {
         dump = aems_env("PROSTREET_AEMS_DUMP", 0);
         log = dump || aems_env("PROSTREET_AEMS_LOG", 0);
         pin = aems_env("PROSTREET_AEMS_PIN", 1);
+        if (log) fprintf(stderr, "aems: %u known bank addresses, %u lifted functions\n", known_count(), fn_count());
     }
     switch (ip) {
     /* sub_008b9e60, right after the allocator returned: eax = where the bank
