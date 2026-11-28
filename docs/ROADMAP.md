@@ -19,10 +19,10 @@ main() ✅  WinMain entered & running (0x004afee0)
 D3D9 / DisplayDevice ✅  initialized (pDev=0x4c0001f0, 0x032a5fc0)
 Asset Loading ✅  GLOBALA.BUN mounted, ATTRIBUTES.BIN parsed (3.2 MB, 251 attributes validated)
 Attribute tree validation ✅  sub_005310e0 override in g_dtab
-Window message pump ✅  PeekMessageA/GetMessageA/DispatchMessageA host pump implemented
-D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented
+Window message pump 🟡  PeekMessageA/GetMessageA/DispatchMessageA host pump implemented, not boot-verified
+D3D9/D3DX lifecycle 🟡  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented, not boot-verified
 
-Current front 🟡  sub_004c91d0 / secondary asset processing
+Current front 🟡  boot-verify Present, then sub_004c91d0 / secondary asset processing
 Game systems ❌  audio, input, menus, racing — not started
 ```
 

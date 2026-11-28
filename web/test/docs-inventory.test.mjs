@@ -6,6 +6,28 @@ import { fileURLToPath } from 'node:url';
 
 const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ROOT = path.resolve(WEB, '..');
+const inventoryText = fs.readFileSync(path.join(WEB, 'test', 'PORTED.md'), 'utf8');
+
+const rowsFrom = (text, section) => {
+  const marker = `## ${section}`;
+  const start = text.indexOf(marker);
+  assert.notEqual(start, -1, `missing section: ${section}`);
+  const rest = text.slice(start + marker.length);
+  const next = rest.search(/^## /m);
+  const block = next === -1 ? rest : rest.slice(0, next);
+  return block.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.startsWith('|'))
+    .slice(2)
+    .map(line => line.split('|')[1]?.trim().replaceAll('`', ''))
+    .filter(Boolean);
+};
+
+const listedFiles = [
+  ...rowsFrom(inventoryText, 'Copied files'),
+  ...rowsFrom(inventoryText, 'New in this port'),
+];
+const absoluteFor = name => name.startsWith('web/') ? path.join(ROOT, name) : path.join(WEB, 'test', name);
 
 test('debug README only indexes notes that exist', () => {
   const text = fs.readFileSync(path.join(ROOT, 'debug', 'README.md'), 'utf8');
@@ -18,36 +40,27 @@ test('debug README only indexes notes that exist', () => {
   assert.deepEqual(missing, []);
 });
 
-test('test inventory lists every test and the real runner', () => {
-  const inventory = fs.readFileSync(path.join(WEB, 'test', 'PORTED.md'), 'utf8');
+test('test inventory table lists every test and the real runner', () => {
   const tests = fs.readdirSync(path.join(WEB, 'test')).filter(name => name.endsWith('.test.mjs'));
-  assert.deepEqual(tests.filter(name => !inventory.includes(name)), []);
-  assert.ok(inventory.includes('web/tools/unit-tests.mjs'));
+  assert.deepEqual(tests.filter(name => !listedFiles.includes(name)), []);
+  assert.ok(listedFiles.includes('web/tools/unit-tests.mjs'));
 });
 
 test('listed inventory files exist', () => {
-  const inventory = fs.readFileSync(path.join(WEB, 'test', 'PORTED.md'), 'utf8');
-  const missing = [];
+  assert.deepEqual(listedFiles.filter(name => !fs.existsSync(absoluteFor(name))), []);
+});
 
-  for (const section of ['Copied files', 'New in this port']) {
-    const marker = `## ${section}`;
-    const start = inventory.indexOf(marker);
-    assert.notEqual(start, -1, `missing section: ${section}`);
-    const rest = inventory.slice(start + marker.length);
-    const next = rest.search(/^## /m);
-    const block = next === -1 ? rest : rest.slice(0, next);
-    const names = block.split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(line => line.startsWith('|'))
-      .slice(2)
-      .map(line => line.split('|')[1].trim().replaceAll('`', ''))
-      .filter(Boolean);
-
-    for (const name of names) {
-      const absolute = name.startsWith('web/') ? path.join(ROOT, name) : path.join(WEB, 'test', name);
-      if (!fs.existsSync(absolute)) missing.push({ section, name });
-    }
-  }
-
-  assert.deepEqual(missing, []);
+test('inventory parser ignores prose mentions', () => {
+  const fake = [
+    '# Fake inventory',
+    '',
+    '## Copied files',
+    '',
+    '| File | Reason |',
+    '|------|--------|',
+    '| real.test.mjs | listed in the table |',
+    '',
+    'Prose ghost.test.mjs is not a row.',
+  ].join('\n');
+  assert.deepEqual(rowsFrom(fake, 'Copied files'), ['real.test.mjs']);
 });
