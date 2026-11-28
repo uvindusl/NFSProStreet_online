@@ -50,8 +50,9 @@ The first PR of the port moves these behind one header, `lifter/runtime/platform
 
 ## Branches and pull requests
 
-- Each person works in their own fork, on short branches, and opens PRs against `uvindusl/NFSProStreet_online` `main`.
-- Merge `main` into your branch at least once a day; keep each PR to one feature or fix.
+- Work on short branches in `uvindusl/NFSProStreet_online` (both of us can push branches there) and open PRs against **`development`**.
+- `development` is where PRs are merged and tested together; once a set of changes is checked there, it is merged into `main`. `main` is what works.
+- Merge `development` into your branch at least once a day; keep each PR to one feature or fix.
 - A PR that changes a shared file says so in its description, and the other person reviews it.
 - Never commit the game image, the unpacked dump, lifted output or anything derived from them (`out/`, `gen/`, `savedata/` are git-ignored).
 
