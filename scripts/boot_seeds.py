@@ -400,6 +400,10 @@ def main():
             o = v - base
             if img[o - 1] in (0xCC, 0xC3, 0x90) or img[o - 3] == 0xC2:
                 seeds.add(v)
+            elif off >= 1 and img[off - 1] == 0x68:
+                # `push offset fn` whatever precedes fn: 0x502400 (a callback
+                # the race's physics passes at 0x52863b) follows a jmp
+                seeds.add(v)
     codeptr = len(seeds) - before
 
     # 5. switch tables: `jmp dword ptr [reg*4 + table]` (FF 24 85/8D/95/9D/
