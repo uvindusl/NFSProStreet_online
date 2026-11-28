@@ -609,5 +609,26 @@ static inline int mem_is_committed(uint32_t addr){
     uint32_t pg = (addr) >> 14;
     return (g_cbits[pg>>3] >> (pg&7)) & 1;
 }
+/* Whether all of [a, a+n) is committed guest memory (n = 0 is always true). */
+static inline int mem_range_committed(uint32_t a, uint64_t n){
+    if (!n) return 1;
+    if (!a || (uint64_t)a + n > 0x100000000ull) return 0;
+    for (uint64_t p = a & ~0x3fffull; p < (uint64_t)a + n; p += 0x4000)
+        if (!mem_is_committed((uint32_t)p)) return 0;
+    return 1;
+}
+/* Copy the guest C string at va into buf (at most cap-1 bytes, NUL ended),
+ * checking each page before reading it.  NULL when va is 0 or uncommitted. */
+static inline const char *guest_cstr(uint32_t va, char *buf, uint32_t cap){
+    extern uint8_t *g_mem;
+    if (!va || !cap || !mem_is_committed(va)) return 0;
+    uint32_t i = 0;
+    for (; i + 1 < cap; i++) {
+        uint32_t a = va + i;
+        if (a < va || ((a & 0x3fffu) == 0 && !mem_is_committed(a))) break;
+        if (!(buf[i] = (char)g_mem[a])) return buf;
+    }
+    buf[i] = 0; return buf;
+}
 
 #endif

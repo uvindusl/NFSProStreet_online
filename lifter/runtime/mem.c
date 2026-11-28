@@ -233,10 +233,13 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
 #elif defined(__aarch64__)
         /* ESR_EL1 data-abort syndrome: WnR (bit 6) is set for a write */
         {
-            struct _aarch64_ctx *h = (struct _aarch64_ctx *)uc->uc_mcontext.__reserved;
-            while (h->magic && h->size &&
-                   (char *)h < (char *)uc->uc_mcontext.__reserved + sizeof(uc->uc_mcontext.__reserved)) {
-                if (h->magic == ESR_MAGIC) {
+            char *lo = (char *)uc->uc_mcontext.__reserved, *hi = lo + sizeof(uc->uc_mcontext.__reserved);
+            struct _aarch64_ctx *h = (struct _aarch64_ctx *)lo;
+            /* each record's header must fit before it is read, and its size
+             * must keep the next one inside the reserved area */
+            while ((char *)h + sizeof *h <= hi && h->magic && h->size >= sizeof *h &&
+                   h->size <= (size_t)(hi - (char *)h)) {
+                if (h->magic == ESR_MAGIC && h->size >= sizeof(struct esr_context)) {
                     is_write = (((struct esr_context *)h)->esr >> 6) & 1;
                     break;
                 }
@@ -340,6 +343,11 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
 }
 
 void mem_fault_handler_install(void) {
+#if defined(__aarch64__)
+    /* backtrace() loads its unwinder (and takes the loader lock) on first
+     * use; do that here, so the fatal report only walks the stack. */
+    { void *bt[2]; (void)backtrace(bt, 2); }
+#endif
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = fault_report;

@@ -118,11 +118,21 @@ static uint32_t dw(Fx *fx, uint32_t o) {
 }
 static uint32_t rd(Fx *fx) { uint32_t v = dw(fx, fx->cur); fx->cur += 4; return v; }
 
+/* Step over n bytes padded to 4; refuses (and fails the parse) when the
+ * padded length runs past the end, so a huge n cannot wrap cur. */
+static int skip(Fx *fx, uint32_t n) {
+    uint64_t end = (uint64_t)fx->cur + (((uint64_t)n + 3) & ~3ull);
+    if (end > fx->len) { fx->ok = 0; return 0; }
+    fx->cur = (uint32_t)end; return 1;
+}
+
 static char *fx_string(Fx *fx, uint32_t off) {
     if (!off) return strdup("");
-    uint32_t o = 8 + off, n = dw(fx, o);
+    uint64_t o = 8ull + off;
+    uint32_t n = o + 4 <= fx->len ? dw(fx, (uint32_t)o) : 0;
     if (o + 4 + n > fx->len || n > 4096) { fx->ok = 0; return strdup(""); }
     char *s = malloc(n + 1);
+    if (!s) { fx->ok = 0; return strdup(""); }
     memcpy(s, fx->d + o + 4, n); s[n] = 0;
     return s;
 }
@@ -321,6 +331,7 @@ static int fx_parse(Fx *fx, int fxi) {
     fx->nparams = rd(fx); fx->ntechs = rd(fx); rd(fx); rd(fx);
     if (!fx->ok || fx->nparams > 1024 || fx->ntechs > 256) return 0;
     fx->params = calloc(fx->nparams ? fx->nparams : 1, sizeof(FxParam));
+    if (!fx->params) return 0;
     for (uint32_t i = 0; i < fx->nparams && fx->ok; i++) {
         FxParam *p = &fx->params[i];
         uint32_t toff = rd(fx), voff = rd(fx);
@@ -330,6 +341,7 @@ static int fx_parse(Fx *fx, int fxi) {
         p->handle = new_handle(HK_PARAM, fxi, i, 0xFFFFFFFFu, 0);
     }
     fx->techs = calloc(fx->ntechs ? fx->ntechs : 1, sizeof(FxTech));
+    if (!fx->techs) return 0;
     for (uint32_t i = 0; i < fx->ntechs && fx->ok; i++) {
         FxTech *t = &fx->techs[i];
         uint32_t nameo = rd(fx); t->nann = rd(fx); t->npasses = rd(fx);
@@ -338,6 +350,7 @@ static int fx_parse(Fx *fx, int fxi) {
         t->ann = read_annotations(fx, t->nann, fxi);
         t->handle = new_handle(HK_TECH, fxi, i, 0, 0);
         t->passes = calloc(t->npasses ? t->npasses : 1, sizeof(FxPass));
+        if (!t->passes) return 0;
         for (uint32_t k = 0; k < t->npasses && fx->ok; k++) {
             FxPass *ps = &t->passes[k];
             uint32_t pn = rd(fx); ps->nann = rd(fx); ps->nstates = rd(fx);
@@ -346,6 +359,7 @@ static int fx_parse(Fx *fx, int fxi) {
             ps->ann = read_annotations(fx, ps->nann, fxi);
             ps->handle = new_handle(HK_PASS, fxi, i, k, 0);
             ps->states = calloc(ps->nstates ? ps->nstates : 1, sizeof(FxState));
+            if (!ps->states || (uint64_t)fx->cur + 16ull * ps->nstates > fx->len) { fx->ok = 0; break; }
             for (uint32_t s = 0; s < ps->nstates; s++) read_state(fx, fx->cur + 16 * s, &ps->states[s]);
             fx->cur += 16 * ps->nstates;
         }
@@ -354,13 +368,12 @@ static int fx_parse(Fx *fx, int fxi) {
     /* object table: { nsmall, nresources }, parameter objects, then one record
      * per state whose value is a shader, an expression or a parameter name */
     uint32_t nsmall = rd(fx), nres = rd(fx);
-    for (uint32_t i = 0; i < nsmall && fx->ok; i++) { rd(fx); uint32_t n = rd(fx); fx->cur += (n + 3) & ~3u; }
+    for (uint32_t i = 0; i < nsmall && fx->ok; i++) { rd(fx); uint32_t n = rd(fx); if (fx->ok) skip(fx, n); }
     for (uint32_t i = 0; i < nres && fx->ok; i++) {
         uint32_t ti = rd(fx), idx = rd(fx), el = rd(fx), si = rd(fx), usage = rd(fx), n = rd(fx);
         uint32_t at = fx->cur;
         (void)el;
-        fx->cur += (n + 3) & ~3u;
-        if (at + n > fx->len) return 0;
+        if (!fx->ok || !skip(fx, n)) return 0;
         FxState *st = NULL; FxPass *ps = NULL;
         if (ti == 0xFFFFFFFFu) {
             if (idx < fx->nparams && si < fx->params[idx].nstates) st = &fx->params[idx].states[si];
@@ -375,6 +388,7 @@ static int fx_parse(Fx *fx, int fxi) {
                 if (!strncmp(fx->params[q].name, (const char *)fx->d + at, n)) { st->ref = (int)q; break; }
         } else if (usage == 0 && ((first >> 16) == 0xFFFEu || (first >> 16) == 0xFFFFu) && ps) {
             FxShader *sh = calloc(1, sizeof *sh);
+            if (!sh) return 0;
             sh->is_ps = (first >> 16) == 0xFFFFu;
             sh->size = n;
             sh->bytecode = gh_alloc(n, 0, 4);
@@ -406,7 +420,7 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
     uint32_t root = base + rva, dir = root;
     char want[64] = "";
     uint32_t want_id = 0;
-    if (name_va >= 0x10000u && mem_is_committed(name_va)) snprintf(want, sizeof want, "%s", (const char *)g_mem + name_va);
+    if (name_va >= 0x10000u && guest_cstr(name_va, want, sizeof want)) {}
     else want_id = name_va;
     {   /* a label for logs: cut to fit */
         const char *src = want[0] ? want : "(id)";
@@ -544,7 +558,8 @@ static int resolve(Fx *fx, uint32_t h, Ref *r) {
         }
         return 0;
     }
-    const char *s = (const char *)g_mem + h;                 /* a name */
+    char sb[256]; const char *s = guest_cstr(h, sb, sizeof sb);  /* a name */
+    if (!s) return 0;
     if ((r->p = param_by_name(fx, s, &r->elem))) { r->kind = HK_PARAM; return 1; }
     for (uint32_t i = 0; i < fx->ntechs; i++)
         if (!strcmp(fx->techs[i].name, s)) { r->kind = HK_TECH; r->t = &fx->techs[i]; return 1; }
@@ -859,6 +874,7 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
     Fx *fx = &g_fx[id - 1];
     uint32_t eip = c->eip, r = 0;
     Ref ref; uint32_t *dst, n; FxParam *p;
+    char nb[256]; const char *nm;                            /* guest names, read page by page */
     switch (m) {
     case 3:                                                   /* GetDesc */
         if (mem_is_committed(A(1) + 12)) { MR32(A(1)) = 0; MR32(A(1) + 4) = fx->nparams; MR32(A(1) + 8) = fx->ntechs; MR32(A(1) + 12) = 0; }
@@ -884,13 +900,13 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
         break;
     case 9:                                                   /* GetParameterByName(parent, name) */
         r = 0;
-        if (A(2) && mem_is_committed(A(2)) && (p = param_by_name(fx, (const char *)g_mem + A(2), NULL))) r = p->handle;
+        if ((nm = guest_cstr(A(2), nb, sizeof nb)) && (p = param_by_name(fx, nm, NULL))) r = p->handle;
         break;
     case 10:                                                  /* GetParameterBySemantic */
         r = 0;
-        if (A(2) && mem_is_committed(A(2)))
+        if ((nm = guest_cstr(A(2), nb, sizeof nb)))
             for (uint32_t i = 0; i < fx->nparams; i++)
-                if (fx->params[i].sem[0] && !strcasecmp(fx->params[i].sem, (const char *)g_mem + A(2))) { r = fx->params[i].handle; break; }
+                if (fx->params[i].sem[0] && !strcasecmp(fx->params[i].sem, nm)) { r = fx->params[i].handle; break; }
         break;
     case 11:                                                  /* GetParameterElement(h, index) */
         r = 0;
@@ -907,18 +923,18 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
     case 12: r = A(1) < fx->ntechs ? fx->techs[A(1)].handle : 0; break;          /* GetTechnique */
     case 13:                                                  /* GetTechniqueByName */
         r = 0;
-        if (A(1) && mem_is_committed(A(1)))
+        if ((nm = guest_cstr(A(1), nb, sizeof nb)))
             for (uint32_t i = 0; i < fx->ntechs; i++)
-                if (!strcmp(fx->techs[i].name, (const char *)g_mem + A(1))) { r = fx->techs[i].handle; break; }
+                if (!strcmp(fx->techs[i].name, nm)) { r = fx->techs[i].handle; break; }
         break;
     case 14:                                                  /* GetPass(technique, index) */
         r = (resolve(fx, A(1), &ref) && ref.t && A(2) < ref.t->npasses) ? ref.t->passes[A(2)].handle : 0;
         break;
     case 15:                                                  /* GetPassByName */
         r = 0;
-        if (resolve(fx, A(1), &ref) && ref.t && A(2) && mem_is_committed(A(2)))
+        if (resolve(fx, A(1), &ref) && ref.t && (nm = guest_cstr(A(2), nb, sizeof nb)))
             for (uint32_t i = 0; i < ref.t->npasses; i++)
-                if (!strcmp(ref.t->passes[i].name, (const char *)g_mem + A(2))) { r = ref.t->passes[i].handle; break; }
+                if (!strcmp(ref.t->passes[i].name, nm)) { r = ref.t->passes[i].handle; break; }
         break;
     case 16: case 17: r = 0; break;                           /* GetFunction, GetFunctionByName */
     case 18: case 19: {                                       /* GetAnnotation(h, index), ...ByName(h, name) */
@@ -930,9 +946,9 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
             else if (ref.p && ref.kind == HK_PARAM) { ann = ref.p->ann; na = ref.p->nann; }
         }
         if (m == 18) { if (A(2) < na) r = ann[A(2)].handle; }
-        else if (A(2) && mem_is_committed(A(2)))
+        else if ((nm = guest_cstr(A(2), nb, sizeof nb)))
             for (uint32_t i = 0; i < na; i++)
-                if (!strcmp(ann[i].name, (const char *)g_mem + A(2))) { r = ann[i].handle; break; }
+                if (!strcmp(ann[i].name, nm)) { r = ann[i].handle; break; }
         break;
     }
     case 20: case 21: case 78:                                /* SetValue, GetValue, SetRawValue */
@@ -940,6 +956,7 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
             uint32_t off = m == 78 ? A(3) : 0, bytes = m == 78 ? A(4) : A(3);
             if (off > 4u * n) off = 4u * n;
             if (bytes > 4u * n - off) bytes = 4u * n - off;
+            if (!mem_range_committed(A(2), bytes)) { r = D3DERR_INVALIDCALL; break; }
             if (m == 78 && bytes == 64 && getenv("PROSTREET_FXLOG")) {
                 const float *f = (const float *)(g_mem + A(2));
                 fprintf(stderr, "fx: %s.%s raw matrix, caller %08x:", fx->name, p->name, MR32(c->esp + 4 * 5 + 0x0));
@@ -974,6 +991,7 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
     case 24: case 28: case 32: case 25: case 29: case 33:     /* Set/Get Bool/Int/Float Array(h, p, count) */
         if ((p = num_param(fx, A(1), &dst, &n)) && A(2) && mem_is_committed(A(2))) {
             int kind = (m == 24 || m == 25) ? 1 : (m == 28 || m == 29) ? 2 : 3, get = m & 1;
+            if (!mem_range_committed(A(2), 4ull * (A(3) < n ? A(3) : n))) { r = D3DERR_INVALIDCALL; break; }
             for (uint32_t i = 0; i < A(3) && i < n; i++) {
                 if (get) MR32(A(2) + 4 * i) = get_comp(p, dst[i], kind);
                 else set_comp(p, &dst[i], kind, MR32(A(2) + 4 * i));
@@ -983,6 +1001,8 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
     case 34: case 35: case 36: case 37:                       /* Set/GetVector, Set/GetVectorArray */
         if ((p = num_param(fx, A(1), &dst, &n)) && A(2) && mem_is_committed(A(2))) {
             uint32_t per = p->rows * p->cols, cnt = m >= 36 ? A(3) : 1, comps = per < 4 ? per : 4;
+            if (per && cnt > n / per) cnt = n / per;
+            if (!per || !mem_range_committed(A(2), 16ull * cnt)) { r = D3DERR_INVALIDCALL; break; }
             for (uint32_t e = 0; e < cnt && (e + 1) * per <= n; e++)
                 for (uint32_t q = 0; q < comps; q++) {
                     if (m & 1) MR32(A(2) + 16 * e + 4 * q) = get_comp(p, dst[e * per + q], 3);
@@ -997,8 +1017,9 @@ int fx_call(CPU *c, uint32_t self, unsigned m, uint32_t *ret) {
             int tr = m >= 44, get = base & 1;
             uint32_t per = p->rows * p->cols, cnt = base >= 2 ? A(3) : 1;
             for (uint32_t e = 0; e < cnt && (e + 1) * per <= n; e++) {
+                if (base >= 4 && !mem_range_committed(A(2) + 4 * e, 4)) break;
                 uint32_t mp = base >= 4 ? MR32(A(2) + 4 * e) : A(2) + 64 * e;
-                if (!mp || !mem_is_committed(mp + 60)) break;
+                if (!mem_range_committed(mp, 64)) break;
                 for (uint32_t row = 0; row < 4; row++) for (uint32_t col = 0; col < 4; col++) {
                     uint32_t g = mp + 4 * (tr ? col * 4 + row : row * 4 + col);
                     int in = row < p->rows && col < p->cols;

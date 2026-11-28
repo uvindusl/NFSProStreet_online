@@ -461,6 +461,21 @@ int main(void) {
         ASSERT_EQ(decl_size(2), 12u, "FLOAT3 attribute is 12 bytes");
         ASSERT_TRUE(!range_committed(0xfffff000u, 0x2000u), "a range past 4 GB is not committed");
 
+        {   /* guest strings stop at the first uncommitted page (0x4a000000 is
+             * between heap1 and the COM region, so nothing else uses it) */
+            char nb[64];
+            mem_commit(0x4a000000u, 0x4000u);
+            memcpy(g_mem + 0x4a003ffcu, "abcd", 4);           /* no NUL before the page ends */
+            const char *gs = guest_cstr(0x4a003ffcu, nb, sizeof nb);
+            ASSERT_TRUE(gs && !strcmp(gs, "abcd"), "guest_cstr stops at an uncommitted page");
+            memcpy(g_mem + 0x4a000000u, "0123456789", 11);
+            gs = guest_cstr(0x4a000000u, nb, 5);
+            ASSERT_TRUE(gs && !strcmp(gs, "0123"), "guest_cstr truncates to its buffer");
+            ASSERT_TRUE(guest_cstr(0x4a004000u, nb, sizeof nb) == NULL, "guest_cstr refuses an uncommitted start");
+            ASSERT_TRUE(mem_range_committed(0x4a000000u, 0x4000u) && !mem_range_committed(0x4a003000u, 0x2000u),
+                        "mem_range_committed checks every page");
+        }
+
         setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,bogus,frames=3,tap=28:FeMainMenu.fng", 1);
         parse();
         ASSERT_EQ(g_nsteps, 3, "script: a bad second key and an unknown step are dropped");

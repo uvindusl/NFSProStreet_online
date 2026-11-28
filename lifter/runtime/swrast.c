@@ -153,31 +153,38 @@ typedef struct {
 
 typedef struct { int usage, index; } Sem;
 typedef struct {
-    const uint32_t *code; int is_ps, major;
+    const uint32_t *code, *end; int is_ps, major;   /* end: one past the last token */
     Sem in[16];                 /* VS: v# -> vertex element; PS 3.0: v# -> varying */
     Sem out[16];                /* VS 3.0: o# -> varying */
     int nin, nout;
 } Sh;
 
+/* Length of the instruction at p in tokens; 0 when it would run past s->end,
+ * which the walks treat as the end of the shader. */
 static int ilen(const Sh *s, const uint32_t *p) {
     uint32_t op = *p & 0xFFFFu;
-    if (op == 0xFFFEu) return 1 + (int)(*p >> 16);
-    if (s->major >= 2) return 1 + (int)((*p >> 24) & 0xF);
-    if (op == 81) return 6;
-    int n = 1;
-    while (p[n] & 0x80000000u) n++;
-    return n;
+    long left = (long)(s->end - p), n;
+    if (op == 0xFFFEu) n = 1 + (long)(*p >> 16);
+    else if (s->major >= 2) n = 1 + (long)((*p >> 24) & 0xF);
+    else if (op == 81) n = 6;
+    else { n = 1; while (n < left && (p[n] & 0x80000000u)) n++; }
+    return n < left ? (int)n : 0;   /* < left: END must still follow */
 }
+/* Whether p is an instruction to process (inside the code, before END). */
+#define SH_LIVE(s, p) ((p) < (s)->end && (*(p) & 0xFFFFu) != 0xFFFFu)
 
 static int sh_open(Sh *s, uint32_t obj) {
     memset(s, 0, sizeof *s);
     for (int i = 0; i < 16; i++) s->in[i].usage = s->out[i].usage = -1;
-    if (!obj || !mem_is_committed(obj + 8) || !MR32(obj + 4)) return 0;
+    if (!obj || !mem_is_committed(obj + 11) || !MR32(obj + 4)) return 0;
+    uint32_t size = MR32(obj + 8);
+    if (size < 8 || size > 0x40000u || !mem_range_committed(MR32(obj + 4), size)) return 0;
     s->code = (const uint32_t *)(g_mem + MR32(obj + 4));
+    s->end = s->code + size / 4;
     s->is_ps = (s->code[0] >> 16) == 0xFFFFu;
     s->major = (int)((s->code[0] >> 8) & 0xFF);
-    for (const uint32_t *p = s->code + 1; (*p & 0xFFFFu) != 0xFFFFu; p += ilen(s, p)) {
-        if ((*p & 0xFFFFu) != 31) continue;                   /* dcl usage, register */
+    for (const uint32_t *p = s->code + 1, *nx; SH_LIVE(s, p) && (nx = p + ilen(s, p)) > p; p = nx) {
+        if ((*p & 0xFFFFu) != 31 || nx - p < 3) continue;     /* dcl usage, register */
         uint32_t reg = p[2], type = ((reg >> 28) & 7) | ((reg >> 8) & 0x18), n = reg & 0x7FF;
         Sem sem = { (int)(p[1] & 0x1F), (int)((p[1] >> 16) & 0xF) };
         if (type == 1 && n < 16) s->in[n] = sem;
@@ -189,7 +196,8 @@ static int sh_open(Sh *s, uint32_t obj) {
 static void load_consts(const Sh *s, M *m) {
     memset(m, 0, sizeof *m);
     memcpy(m->c, s->is_ps ? psc : vsc, s->is_ps ? sizeof psc : sizeof vsc);
-    for (const uint32_t *p = s->code + 1; (*p & 0xFFFFu) != 0xFFFFu; p += ilen(s, p)) {
+    for (const uint32_t *p = s->code + 1, *nx; SH_LIVE(s, p) && (nx = p + ilen(s, p)) > p; p = nx) {
+        if (nx - p < 6) continue;                             /* def needs 1 + 1 + 4 tokens */
         uint32_t op = *p & 0xFFFFu, n = p[1] & 0x7FF;
         if (op == 81 && n < 256) memcpy(m->c[n], p + 2, 16);
         if (op == 48 && n < 16) memcpy(m->ci[n], p + 2, 16);
@@ -246,9 +254,10 @@ static void rd_src(const Sh *s, M *m, const uint32_t **pp, float v[4]) {
 /* Run a shader.  Returns 0 if the pixel was discarded. */
 static int sh_run(const Sh *s, M *m) {
     const uint32_t *loop_pc[4]; int loop_n[4], depth = 0;
-    for (const uint32_t *p = s->code + 1; (*p & 0xFFFFu) != 0xFFFFu; ) {
+    for (const uint32_t *p = s->code + 1; SH_LIVE(s, p); ) {
         uint32_t op = *p & 0xFFFFu;
         const uint32_t *next = p + ilen(s, p), *q = p + 1;
+        if (next == p) break;                                 /* truncated instruction */
         if (op == 0xFFFEu || op == 0 || op == 31 || op == 81 || op == 48 || op == 47) { p = next; continue; }
         if (op == 38) {                                       /* rep i# */
             uint32_t n = *q & 0x7FF;
@@ -367,13 +376,7 @@ static uint32_t decl_size(int type) {
 }
 
 /* Whether all of [a, a+n) is committed guest memory. */
-static int range_committed(uint32_t a, uint64_t n) {
-    if (!n) return 1;
-    if (!a || (uint64_t)a + n > 0x100000000ull) return 0;
-    for (uint64_t p = a & ~0xfffull; p < (uint64_t)a + n; p += 0x1000)
-        if (!mem_is_committed((uint32_t)p)) return 0;
-    return 1;
-}
+static int range_committed(uint32_t a, uint64_t n) { return mem_range_committed(a, n); }
 
 /* Vertices a non-indexed draw of `n` primitives reads. */
 static uint64_t prim_verts(uint32_t type, uint32_t n) {
@@ -542,6 +545,7 @@ static void draw(uint32_t type, uint32_t nprims, const uint8_t *ib, int ib32, in
     load_consts(&ps, &pm);
     uint32_t nv = type == 4 ? nprims * 3 : nprims + 2;
     Vtx *vt = malloc(sizeof(Vtx) * nv);
+    if (!vt) { n_skipped++; return; }
     for (uint32_t i = 0; i < nv; i++) {
         uint32_t k = first + i, index = ib ? (ib32 ? ((const uint32_t *)ib)[k] : ((const uint16_t *)ib)[k]) : k;
         run_vertex(&vs, &vm, &vy, (uint32_t)((int32_t)index + base), &vt[i]);
@@ -630,7 +634,7 @@ void sw_dev_call(CPU *c, const char *nm) {
     else if (!strcmp(nm, "SetPixelShader")) cur_ps = A(1);
     else if (!strcmp(nm, "SetVertexShaderConstantF") || !strcmp(nm, "SetPixelShaderConstantF")) {
         int isps = nm[3] == 'P'; uint32_t max = isps ? 224 : 256;
-        if (A(1) < max && A(3) <= max - A(1) && mem_is_committed(A(2)) && mem_is_committed(A(2) + 16 * A(3) - 1))
+        if (A(1) < max && A(3) <= max - A(1) && range_committed(A(2), 16ull * A(3)))
             memcpy(isps ? psc[A(1)] : vsc[A(1)], g_mem + A(2), 16u * A(3));
     } else if (!strcmp(nm, "SetVertexDeclaration")) cur_decl = A(1);
     else if (!strcmp(nm, "SetStreamSource")) { if (A(1) < 16) { stream[A(1)].vb = A(2); stream[A(1)].off = A(3); stream[A(1)].stride = A(4); } }

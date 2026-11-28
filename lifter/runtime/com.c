@@ -58,6 +58,8 @@ static uint32_t g_dev = 0;
  * sound thread then called through a null vtable in sub_008c5d90). */
 static pthread_mutex_t g_com_lock = PTHREAD_MUTEX_INITIALIZER;
 
+#define E_OUTOFMEM 0x8007000Eu  /* E_OUTOFMEMORY / DSERR_OUTOFMEMORY */
+
 static uint32_t com_alloc(uint32_t n) {
     /* sizes come from guest data (sound buffer lengths): refuse what cannot
      * fit before rounding, so a huge size cannot wrap to a tiny block.  The
@@ -82,6 +84,7 @@ uint32_t com_new(uint32_t iface, uint32_t extra) {
     uint32_t vt = g_vtab[iface];
     if (!vt) {
         vt = com_alloc(n * 4u);
+        if (!vt) { pthread_mutex_unlock(&vt_lock); return 0; }
         for (unsigned i = 0; i < n; i++) {
             MR32(vt + 4u * i) = COM_MAGIC | (iface << 16) | i;
         }
@@ -546,6 +549,7 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "CreateVertexBuffer") || !strcmp(nm, "CreateIndexBuffer")) {
             /* (this, Length, Usage, FVF|Format, Pool, ppBuffer, pSharedHandle) */
             uint32_t obj = com_new(nm[6] == 'V' ? IF_VB : IF_IB, 64);
+            if (!obj) { r = E_OUTOFMEM; goto out; }
             MR32(obj + R_W) = COM_A(1);
             MR32(obj + R_FMT) = COM_A(3);
             MR32(obj + R_REF) = 1;
@@ -559,12 +563,14 @@ int com_call(CPU *c, uint32_t magic) {
             r = 0;
         } else if (!strcmp(nm, "CreateStateBlock")) {
             uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_STATEBLOCK, 64);
-            r = 0;
+            uint32_t o = com_new(IF_STATEBLOCK, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = o;
+            r = o ? 0 : E_OUTOFMEM;
         } else if (!strcmp(nm, "CreateQuery")) {
             uint32_t pp = COM_A(2);
-            if (pp && mem_is_committed(pp)) MR32(pp) = com_new(IF_QUERY, 64);
-            r = 0;
+            uint32_t o = com_new(IF_QUERY, 64);
+            if (pp && mem_is_committed(pp)) MR32(pp) = o;
+            r = o ? 0 : E_OUTOFMEM;
         } else if (!strcmp(nm, "CreateVertexDeclaration")) {
             /* keep a copy of the D3DVERTEXELEMENT9 array (8 bytes each, ends at stream 0xFF) */
             uint32_t el = COM_A(1), pp = COM_A(2), n = 0, obj = com_new(IF_VDECL, 64);
@@ -735,6 +741,7 @@ int com_call(CPU *c, uint32_t magic) {
             /* (this, rguid, ppDevice, pUnkOuter); remember which system device it is */
             uint32_t rguid = COM_A(1), pp = COM_A(2);
             uint32_t dev = com_new(IF_DIDEV, 64);
+            if (!dev) { r = E_OUTOFMEM; goto out; }
             MR32(dev + 4) = (rguid && mem_is_committed(rguid) && MR8(rguid) == 0x60) ? 0x12u : 0x13u;
             if (pp && mem_is_committed(pp)) MR32(pp) = dev;
             r = 0;
@@ -861,8 +868,9 @@ int com_call(CPU *c, uint32_t magic) {
             /* DSBUFFERDESC: dwSize, dwFlags, dwBufferBytes, dwReserved, lpwfxFormat */
             uint32_t len = (desc && mem_is_committed(desc)) ? MR32(desc + 8) : 0;
             if (len == 0) len = 0x10000;     /* the primary buffer has no size of its own */
-            uint32_t obj = com_new(IF_DSBUF, 64);
-            MR32(obj + 4) = com_alloc(len);
+            uint32_t obj = com_new(IF_DSBUF, 64), buf = obj ? com_alloc(len) : 0;
+            if (!buf) { r = E_OUTOFMEM; goto out; }
+            MR32(obj + 4) = buf;
             MR32(obj + 8) = len;
             /* WAVEFORMATEX.nAvgBytesPerSec drives the play cursor (see GetCurrentPosition) */
             uint32_t fmt = (desc && mem_is_committed(desc)) ? MR32(desc + 16) : 0;
@@ -892,6 +900,7 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "DuplicateSoundBuffer")) {
             uint32_t src = COM_A(1), pp = COM_A(2);
             uint32_t obj = com_new(IF_DSBUF, 64);
+            if (!obj) { r = E_OUTOFMEM; goto out; }
             if (src && mem_is_committed(src)) { MR32(obj + 4) = MR32(src + 4); MR32(obj + 8) = MR32(src + 8); MR32(obj + 12) = MR32(src + 12); }
             if (pp && mem_is_committed(pp)) MR32(pp) = obj;
             r = 0;
@@ -904,6 +913,7 @@ int com_call(CPU *c, uint32_t magic) {
         if (!strcmp(nm, "Lock")) {
             /* Lock(this, offset, bytes, ppv1, pcb1, ppv2, pcb2, flags) */
             uint32_t off = COM_A(1), n = COM_A(2), flags = COM_A(7);
+            if (!buf || !len) { r = 0x80004005u; goto out; } /* E_FAIL: no buffer behind it */
             if (flags & 2u) { off = 0; n = len; }      /* DSBLOCK_ENTIREBUFFER */
             if (len && off >= len) off %= len;
             if (n > len) n = len;
@@ -1023,6 +1033,7 @@ int com_call(CPU *c, uint32_t magic) {
     } else {
         r = 0;
     }
+out:
 
     /* PROSTREET_COMTRACE=1 logs every COM method call with its result;
      * PROSTREET_COMTRACE=<substring> only the interfaces whose name contains it. */

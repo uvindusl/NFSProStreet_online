@@ -22,6 +22,8 @@ PE="${1:-artifacts/nfs.exe.unpacked}"
 NSHARD="${2:-64}"
 
 cd "$ROOT"
+# The seed scan and the lifter both disassemble with Capstone.
+python3 -c 'import capstone' 2>/dev/null || { echo "lift_boot.sh: needs the Python capstone module (pip install capstone)" >&2; exit 1; }
 python3 scripts/boot_seeds.py "$PE" lifter/seeds-boot.txt
 # Instruction hooks: every HOOK_SITE(0x...) in the runtime sources; the
 # lifted code calls guest_hook() before each of those instructions.
