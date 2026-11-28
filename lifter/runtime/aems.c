@@ -87,14 +87,18 @@ static int bank_live(uint32_t base) {
 }
 
 static uint32_t pin_base(uint32_t hash, uint32_t size) {
+    /* A bank can be added again while an earlier instance is still in the
+     * list (the race adds a second copy of a front-end bank): each instance
+     * needs its own address, so the table can hold several per bank and the
+     * first one not in use is taken.  With none free the instance gets a new
+     * slot, which the next lift adds. */
+    int busy = 0;
     for (uint32_t i = 0; i < aems_known_count; i++)
         if (aems_known[i].hash == hash && aems_known[i].size == size) {
-            /* a second instance while the first is still added cannot share
-             * its address: it gets a free slot (and runs unlifted) */
             if (!bank_live(aems_known[i].base)) return aems_known[i].base;
-            fprintf(stderr, "aems: bank %08x is already added at %#x; this instance goes elsewhere\n", hash, aems_known[i].base);
-            break;
+            busy = 1;
         }
+    if (busy) fprintf(stderr, "aems: every known address of bank %08x is in use; this instance gets a new slot\n", hash);
     /* slots of the known banks are taken, so a new bank goes after them */
     for (uint32_t i = 0; i < aems_known_count; i++) {
         uint32_t end = (aems_known[i].base + aems_known[i].size + AEMS_ALIGN - 1) & ~(AEMS_ALIGN - 1);

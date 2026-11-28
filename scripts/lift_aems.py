@@ -15,7 +15,7 @@ function per entry, calls between the bank's functions are direct, calls out
 of the bank go through dispatch_indirect.
 
 Output:
-  outdir/bank_<hash>.c       the bank's functions
+  outdir/bank_<hash>_<base>.c   the functions of the bank at that base
   outdir/aems_table.c        aems_known[] (hash, base, size: the pins) and the
                              sorted lookup table aems.c serves to dispatch.c
 
@@ -43,9 +43,11 @@ for _n, _v in vars(Lifter).items():
 def main():
     dump = sys.argv[1] if len(sys.argv) > 1 else 'out/aems'
     out = sys.argv[2] if len(sys.argv) > 2 else 'out/lift-aems'
-    # One address per bank: the first one recorded, unless it overlaps a bank
-    # already placed (that bank is pinned elsewhere on the next run, dumped
-    # again and placed then).  The runtime pins known banks at these addresses.
+    # Every recorded address of a bank, unless it overlaps one already placed
+    # (that instance is pinned elsewhere on the next run, dumped again and
+    # placed then).  A bank has several addresses when the game adds it again
+    # while an earlier instance is still added.  The runtime pins known banks
+    # at these addresses.
     banks, taken = {}, []
     with open(os.path.join(dump, 'banks.txt')) as f:
         for line in f:
@@ -53,7 +55,7 @@ def main():
             if len(p) != 3:
                 continue
             h, base, size = int(p[0], 16), int(p[1], 16), int(p[2], 16)
-            if h in banks or not os.path.exists(os.path.join(dump, f'bank_{h:08x}_{base:08x}.bin')):
+            if (h, base) in banks or not os.path.exists(os.path.join(dump, f'bank_{h:08x}_{base:08x}.bin')):
                 continue
             if any(base < b + s and b < base + size for b, s in taken):
                 continue
@@ -104,7 +106,7 @@ def main():
         if not done:
             print(f'lift_aems: bank {h:08x} at {base:#x}: no seeds yet (run with PROSTREET_AEMS_DUMP=1 to collect them)',
                   file=sys.stderr)
-        with open(os.path.join(out, f'bank_{h:08x}.c'), 'w') as f:
+        with open(os.path.join(out, f'bank_{h:08x}_{base:08x}.c'), 'w') as f:
             f.write('#include "cpu.h"\n#include <math.h>\n')
             f.write('void dispatch_indirect(CPU*,uint32_t);\nvoid dispatch_tail(CPU*);\nvoid unsupported_insn(CPU*,uint32_t,const char*);\n')
             f.write('void cpuid_shim(CPU*);\nuint64_t rdtsc_shim(void);\n\n')
