@@ -61,6 +61,18 @@ The profile is then saved in `./savedata/NFS ProStreet/` (`ALIAS_PLAYER`, `CAREE
 
 `PROSTREET_FRAMEDUMP=N` renders frame N with the software rasteriser (`lifter/runtime/swrast.c`) and writes each render target to `out/frame_N_rt*.ppm`. The last target is the composed frame. `_LOG=1` adds per-draw details. The rasteriser exists to check rendering offline; it is not a display.
 
+## Audio module banks (AEMS)
+
+EA's sound library loads "module banks" from the sound data: relocatable x86 code and data that it copies into memory and resolves itself (`sub_008b9e60`, `sub_008b9bf0`). A resolved bank depends only on the address it sits at, so `lifter/runtime/aems.c` pins every bank to a fixed address in `0x6e000000-0x6ff00000` (the address comes from a hash of the bank's bytes) and the bank's code is lifted ahead of time like the image's:
+
+1. Run with `PROSTREET_AEMS_DUMP=1`. Each bank is written to `out/aems/bank_<hash>_<base>.bin` and listed in `out/aems/banks.txt`; every call that reaches a bank address with no lifted function is added to `out/aems/seeds.txt` as bank hash and offset.
+2. `scripts/lift_aems.py` lifts those entry points (and what they call directly) into `out/lift-aems/`, with a table of the banks' addresses.
+3. `scripts/build_runtime.sh` compiles `out/lift-aems/` when it exists. The next run pins each known bank at its recorded address, and dispatch runs the lifted functions; a call to a bank function that is still unlifted is skipped and logged (`foreign code: call to an unlifted AEMS bank`) and lands in `seeds.txt` for the next lift.
+
+A few rounds of run and lift cover what a script reaches; the Race Day script loads about 20 banks and reaches about 25 entry points. Some banks change from run to run (the same slot held five different banks in five runs, likely the opponents' car sounds), so a new one can still show up as unlifted. Everything in `out/aems/` and `out/lift-aems/` is game data and stays out of git. `PROSTREET_AEMS_LOG=1` logs each bank without dumping; `PROSTREET_AEMS_PIN=0` leaves banks where the game puts them.
+
+`PROSTREET_WAVDUMP=1` appends what the mixer writes into each DirectSound buffer to `out/audio/dsbuf_<buffer>.pcm` (format in the `.txt` next to it). The first non-silent write is logged either way (`audio: first non-silent mix ...`).
+
 ## Switches
 
 | Variable | Effect |
@@ -69,7 +81,7 @@ The profile is then saved in `./savedata/NFS ProStreet/` (`ALIAS_PLAYER`, `CAREE
 | `PROSTREET_TEXT=9000:PLAYER` | frame-timed typing |
 | `PROSTREET_CALLCHK=log\|off` | callee returned elsewhere: follow it (default), only report, or ignore |
 | `PROSTREET_FOREIGN=stop` | stop at calls into heap code (AEMS audio modules) instead of skipping them |
-| `PROSTREET_AUDIO_VOICES=1` | run EA's voice module chains (they fault until AEMS modules are lifted) |
+| `PROSTREET_AUDIO_VOICES=1` | run EA's voice module chains (they still fault in a race, see Known limits) |
 | `PROSTREET_GAMEFIXES=0` | turn off the fixes for bugs in the original game (`gamefixes.c`) |
 | `PROSTREET_ATTR_GUARD=1` | main's attribute-tree stand-ins (off: the lifted code loads it) |
 | `PROSTREET_HDFONT=0` | no HD-font-pack glyph correction |
