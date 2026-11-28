@@ -477,6 +477,23 @@ int main(void) {
                         "mem_range_committed checks every page");
         }
 
+        {   /* AEMS banks: sequential slots without a generated table, a hash
+             * that ignores the fields written before allocation, and no
+             * lifted function to find */
+            uint32_t b0 = pin_base(0x1234u, 0x100u), b1 = pin_base(0x5678u, 0x20000u), b2 = pin_base(0x9abcu, 0x10u);
+            ASSERT_TRUE(b0 == AEMS_BASE && b1 == AEMS_BASE + AEMS_ALIGN && b2 == AEMS_BASE + 3 * AEMS_ALIGN,
+                        "aems: banks get aligned slots in turn");
+            ASSERT_TRUE(pin_base(1u, AEMS_END - AEMS_BASE) == 0, "aems: a bank that does not fit gets no slot");
+            memset(g_mem + 0x4a000000u, 0x11, 0x60);
+            uint32_t h0 = bank_hash(0x4a000000u, 0x60);
+            MR32(0x4a00003cu) = 0xdeadbeefu; MR32(0x4a000040u) = 0x12345678u;
+            ASSERT_TRUE(bank_hash(0x4a000000u, 0x60) == h0, "aems: the hash skips the id and data pointer fields");
+            MR8(0x4a000050u) = 0x22;
+            ASSERT_TRUE(bank_hash(0x4a000000u, 0x60) != h0, "aems: the hash covers the code");
+            ASSERT_TRUE(aems_lookup(AEMS_BASE + 0x40u) == NULL && aems_lookup(0x00401000u) == NULL,
+                        "aems: no lifted function without a generated table");
+        }
+
         setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,\n bogus,frames=3,\ntap=28:FeMainMenu.fng,", 1);
         parse();
         ASSERT_EQ(g_nsteps, 3, "script: a bad second key and an unknown step are dropped");
