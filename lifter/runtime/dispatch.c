@@ -1313,7 +1313,7 @@ void guest_backtrace(CPU *c, int maxn) {
  * once per target.  PROSTREET_FOREIGN=stop keeps the old stop.  Targets in
  * the image or in uncommitted memory still stop: those mean a lost state. */
 static int foreign_code_call(CPU *c, uint32_t addr) {
-    extern uint32_t gh_brk(void);
+    extern int gh_in_use(uint32_t a);
     static int mode = -1;
     if (mode < 0) { const char *e = getenv("PROSTREET_FOREIGN"); mode = !(e && !strcmp(e, "stop")); }
     if (!mode) return 0;
@@ -1323,9 +1323,14 @@ static int foreign_code_call(CPU *c, uint32_t addr) {
      * code those entries are garbage.  Skip such a call too: it only touches
      * sound, and anything else still stops below. */
     int audio = ret >= 0x008a0000u && ret < 0x00920000u && !mem_is_committed(addr);
-    if (!audio && (addr < 0x20000000u || addr >= gh_brk() || !mem_is_committed(addr))) return 0;
+    if (!audio && (!gh_in_use(addr) || !mem_is_committed(addr))) return 0;
+    /* The callee's convention is unknown: the return is taken as cdecl (the
+     * caller pops any arguments), which is what the module entry points
+     * reached so far use. */
     enum { MAXT = 64 };
     static uint32_t seen[MAXT]; static unsigned nseen; static unsigned long calls;
+    static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mtx);
     calls++;
     unsigned i;
     for (i = 0; i < nseen && seen[i] != addr; i++) ;
@@ -1334,6 +1339,7 @@ static int foreign_code_call(CPU *c, uint32_t addr) {
         fprintf(stderr, "foreign code: call to %s at %#x from %#x skipped (eax=0); %u targets, %lu calls so far\n",
                 audio ? "an unbuilt audio module entry" : "heap code", addr, ret, nseen, calls);
     }
+    pthread_mutex_unlock(&mtx);
     c->eax = 0;
     POP32(c->eip);
     return 1;

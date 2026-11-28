@@ -93,6 +93,11 @@ static pthread_mutex_t g_heap_mtx = PTHREAD_MUTEX_INITIALIZER;
 /* End of the part of the guest heap handed out so far. */
 uint32_t gh_brk(void) { return g_brk; }
 
+/* Whether `a` is in the part of either heap region handed out so far. */
+int gh_in_use(uint32_t a) {
+    return (a >= HEAP_BASE && a < g_brk) || (a >= HEAP2_BASE && a < g_brk2);
+}
+
 /* Freed blocks are kept by size and handed out again: the game allocates and
  * frees every frame, and a bump arena alone fills its 640 MB in minutes.
  * Blocks up to 64 KB sit in exact-size lists (index = size / 16); larger ones
@@ -352,6 +357,23 @@ static pthread_mutex_t *cs_get(uint32_t va) {
             break;
         }
     }
+    if (!r) {
+        /* Table full (DeleteCriticalSection keeps slots: a deleted section's
+         * memory is often initialised again at the same address).  Share one
+         * recursive lock among the rest rather than not locking at all. */
+        static pthread_mutex_t spill;
+        static int ready;
+        if (!ready) {
+            pthread_mutexattr_t at;
+            pthread_mutexattr_init(&at);
+            pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
+            pthread_mutex_init(&spill, &at);
+            pthread_mutexattr_destroy(&at);
+            ready = 1;
+            fprintf(stderr, "win32: %d critical sections in use; the rest share one lock\n", CS_MAX);
+        }
+        r = &spill;
+    }
     pthread_mutex_unlock(&g_cs_mtx);
     return r;
 }
@@ -512,7 +534,10 @@ static void *guest_thread(void *arg) {
 
 #define IOB_BASE 0x1B020000u
 #define IOB_STRIDE 128u
-#define FH_BASE 0x50000000u
+/* File handles sit above the user address space (0x8f0000x0), where no guest
+ * pointer can be: at 0x50000000 they overlapped the second heap region. */
+#define FH_BASE 0x8F000000u
+#define IS_FH(h) (((h) & 0xFFFFFC00u) == FH_BASE)
 
 typedef struct { int used; FILE *fp; } FileEnt;
 static FileEnt g_files[64];
@@ -522,7 +547,7 @@ static FILE *file_of(uint32_t h) {
         uint32_t i = (h - IOB_BASE) / IOB_STRIDE;
         return i == 0 ? stdin : i == 1 ? stdout : stderr;
     }
-    if ((h & 0xF0000000u) != FH_BASE) return 0;
+    if (!IS_FH(h)) return 0;
     uint32_t i = (h >> 4) & 0x3F;
     return g_files[i].used ? g_files[i].fp : 0;
 }
@@ -540,19 +565,30 @@ static const char *g_gamedir = "game";
 static char g_pathbuf[4][4096];
 static int g_pathi;
 
+/* Bounded string building without snprintf("%s"), which gcc's
+ * -Wformat-truncation flags under STRICT=1.  Output is cut to fit and always
+ * NUL-terminated. */
+static size_t path_put(char *dest, size_t dest_sz, size_t at, const char *src) {
+    size_t len = strlen(src);
+    if (at >= dest_sz) return at;
+    if (len > dest_sz - 1 - at) len = dest_sz - 1 - at;
+    memcpy(dest + at, src, len);
+    dest[at + len] = 0;
+    return at + len;
+}
+
 static void path_join(char *dest, size_t dest_sz, const char *base, const char *comp) {
     if (!dest || dest_sz == 0) return;
-    const char *safe_comp = comp ? comp : "";
-    if (!base || !*base) {
-        snprintf(dest, dest_sz, "%s", safe_comp);
-        return;
-    }
-    snprintf(dest, dest_sz, "%s/%s", base, safe_comp);
+    dest[0] = 0;
+    size_t at = 0;
+    if (base && *base) { at = path_put(dest, dest_sz, at, base); at = path_put(dest, dest_sz, at, "/"); }
+    path_put(dest, dest_sz, at, comp ? comp : "");
 }
 
 static void path_copy(char *dest, size_t dest_sz, const char *src) {
     if (!dest || dest_sz == 0) return;
-    snprintf(dest, dest_sz, "%s", src ? src : "");
+    dest[0] = 0;
+    path_put(dest, dest_sz, 0, src ? src : "");
 }
 
 static void resolve_case(char *path) {
@@ -1068,7 +1104,12 @@ void win32_text_tick(unsigned long frame) {
         while (e && *e && n < 8) {
             char *end;
             ent[n].frame = strtoul(e, &end, 10);
-            if (*end != ':') break;
+            const char *c0 = strchr(e, ',');
+            if (*end != ':' || end == e) {          /* skip a bad entry, keep the rest */
+                fprintf(stderr, "win32: PROSTREET_TEXT: skipping bad entry at \"%.16s\"\n", e);
+                e = c0 ? c0 + 1 : "";
+                continue;
+            }
             const char *t = end + 1, *c = strchr(t, ',');
             size_t len = c ? (size_t)(c - t) : strlen(t);
             if (len >= sizeof ent[n].text) len = sizeof ent[n].text - 1;
@@ -1562,7 +1603,7 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "fclose")) {
         FILE *fp = file_of(A(0));
         if (fp && fp != stdin && fp != stdout && fp != stderr) fclose(fp);
-        if ((A(0) & 0xF0000000u) == FH_BASE) g_files[(A(0) >> 4) & 0x3F].used = 0;
+        if (IS_FH(A(0))) g_files[(A(0) >> 4) & 0x3F].used = 0;
         r = 0;
     } else if (str_eq(n, "fread")) {
         FILE *fp = file_of(A(3));
@@ -1596,7 +1637,10 @@ int win32_call(CPU *c, uint32_t idx) {
         if (f & 0x0100u) flags |= O_CREAT;
         if (f & 0x0200u) flags |= O_TRUNC;
         if (f & 0x0400u) flags |= O_EXCL;
-        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, 0644);
+        /* _S_IWRITE (0x80) makes a writable file, else read-only; the
+         * process umask applies, as it does to fopen's files */
+        mode_t mode = (flags & O_CREAT) && !(A(2) & 0x80u) ? 0444 : 0666;
+        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, mode);
     } else if (str_eq(n, "_sopen")) {
         uint32_t f = A(1);
         int flags = (f & 3u) == 0 ? O_RDONLY : (f & 3u) == 1 ? O_WRONLY : O_RDWR;
@@ -2213,7 +2257,13 @@ int win32_call(CPU *c, uint32_t idx) {
         /* Ascending insertion sort (stable).  The comparator is guest code
          * called as cmp(prev, elem), so the scratch element must be guest
          * memory too; an element moves left while cmp(prev, elem) > 0. */
-        uint32_t tmp = gh_alloc(sz ? sz : 1, 0, 16);
+        uint32_t esp0 = c->esp, tmp = 0, heap = 0;
+        if (sz <= 0x10000u) { c->esp = (c->esp - sz) & ~15u; tmp = c->esp; }   /* on the guest stack */
+        else tmp = heap = gh_alloc(sz, 0, 16);
+        if (!tmp && cnt > 1) {
+            fprintf(stderr, "win32: qsort of %u elements of %u bytes: no memory for the scratch element\n", cnt, sz);
+            guest_exit(255);
+        }
         for (uint32_t i = 1; i < cnt && tmp; i++) {
             memcpy(g_mem + tmp, g_mem + base + i * sz, sz);
             uint32_t j = i;
@@ -2230,7 +2280,8 @@ int win32_call(CPU *c, uint32_t idx) {
             }
             memcpy(g_mem + base + j * sz, g_mem + tmp, sz);
         }
-        gh_free(tmp);
+        if (heap) gh_free(heap);
+        c->esp = esp0;
         r = 0;
     } else if (str_eq(n, "bsearch")) {
         uint32_t key = A(0), base = A(1), cnt = A(2), sz = A(3), cmp = A(4);

@@ -10,10 +10,10 @@
  * ID3DXEffectStateManager on every effect, so those go to the manager when
  * there is one and to the device otherwise.
  *
- * Not done yet: the expression VM for states given by a compiled expression.
  * The preshaders (PRES) inside the shaders run when constants are uploaded
- * (upload_pres).  The counts are printed when an effect is
- * created.
+ * (upload_pres).  States given by a compiled expression are recognised when
+ * the expression only copies a parameter (ST_REF); other expressions are
+ * counted and reported when an effect is created, and the state is not sent.
  *
  * Handles are guest addresses of small records, so the game can store and
  * compare them; a handle that is not such a record is taken as a name, which
@@ -27,6 +27,7 @@
 #include <pthread.h>
 
 extern uint32_t gh_alloc(uint32_t n, int zero, uint32_t align);
+extern void gh_free(uint32_t p);
 extern uint32_t com_get_device(void);
 extern uint32_t com_new_shader(uint32_t bytecode, uint32_t size);
 
@@ -201,13 +202,14 @@ static FxConst *parse_ctab(Fx *fx, const uint8_t *t, uint32_t tsz, int *nout) {
     memcpy(&cnt, t + 12, 4); memcpy(&info, t + 16, 4);
     if (cnt > 256 || info + 20 * (uint64_t)cnt > tsz) return NULL;
     FxConst *cs = calloc(cnt ? cnt : 1, sizeof(FxConst));
+    if (!cs) return NULL;
     for (uint32_t k = 0; k < cnt; k++) {
         const uint8_t *ci = t + info + 20 * k;
         FxConst *c = &cs[*nout];
         uint32_t nameo, typeo;
         memcpy(&nameo, ci, 4); memcpy(&c->regset, ci + 4, 2); memcpy(&c->reg, ci + 6, 2);
         memcpy(&c->count, ci + 8, 2); memcpy(&typeo, ci + 12, 4);
-        if (nameo >= tsz || typeo + 12 > tsz) continue;
+        if (nameo >= tsz || (uint64_t)typeo + 12 > tsz) continue;
         snprintf(c->name, sizeof c->name, "%.*s", (int)(tsz - nameo), (const char *)t + nameo);
         memcpy(&c->cls, t + typeo, 2); memcpy(&c->type, t + typeo + 2, 2);
         memcpy(&c->rows, t + typeo + 4, 2); memcpy(&c->cols, t + typeo + 6, 2);
@@ -283,7 +285,7 @@ static void read_ctab(Fx *fx, FxShader *sh) {
  * a CTAB with one constant and an FXLC block with one `mov`.  Returns the
  * parameter's index, or -1 for anything more than that. */
 static int expr_param(Fx *fx, uint32_t at, uint32_t n) {
-    int param = -1, single_mov = 0;
+    int param = -1, single_mov = 0, literals = 0;
     uint32_t nw = n / 4;
     for (uint32_t i = 1; i < nw; ) {
         uint32_t tok = dw(fx, at + 4 * i);
@@ -293,18 +295,23 @@ static int expr_param(Fx *fx, uint32_t at, uint32_t n) {
         uint32_t body = at + 4 * (i + 2);
         if (id == 0x42415443u && len >= 8) {                  /* 'CTAB' */
             uint32_t cnt = dw(fx, body + 12), info = dw(fx, body + 16);
-            if (cnt != 1 || info + 20 > (len - 1) * 4) return -1;
+            if (cnt != 1 || (uint64_t)info + 20 > (len - 1) * 4) return -1;
             uint32_t nameo = dw(fx, body + info);
             if (nameo >= (len - 1) * 4) return -1;
             const char *nm = (const char *)fx->d + body + nameo;
             for (uint32_t q = 0; q < fx->nparams; q++)
                 if (!strncmp(fx->params[q].name, nm, (len - 1) * 4 - nameo)) { param = (int)q; break; }
-        } else if (id == 0x434C5846u && len >= 3) {           /* 'FXLC': count, then instructions */
-            single_mov = dw(fx, body) == 1 && (dw(fx, body + 4) >> 20) == 0x100u;
+        } else if (id == 0x434C5846u && len >= 7) {           /* 'FXLC': count, then instructions */
+            /* one `mov` with one input, not relative, read from the input
+             * table (2) that the CTAB's constant fills */
+            single_mov = dw(fx, body) == 1 && ((dw(fx, body + 4) >> 20) & 0x7ffu) == 0x100u &&
+                         dw(fx, body + 8) == 1 && dw(fx, body + 12) == 0 && dw(fx, body + 16) == 2;
+        } else if (id == 0x54494C43u && len >= 2) {           /* 'CLIT': literal count */
+            literals = dw(fx, body) != 0;
         }
         i += 1 + len;
     }
-    return single_mov ? param : -1;
+    return single_mov && !literals ? param : -1;
 }
 
 static int fx_parse(Fx *fx, int fxi) {
@@ -450,23 +457,28 @@ static const uint8_t *find_rcdata(uint32_t name_va, uint32_t *size, char *label,
 int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool) {
     char label[sizeof g_fx[0].name]; uint32_t size = 0;
     const uint8_t *res = find_rcdata(name_va, &size, label, sizeof label);
+    if (!res) { fprintf(stderr, "d3dx: effect %s: resource not found\n", label); return 0; }
     pthread_mutex_lock(&g_fx_lock);
     int fxi = g_nfx < FX_MAX ? g_nfx++ : -1;
     pthread_mutex_unlock(&g_fx_lock);
-    if (!res || fxi < 0) {
-        fprintf(stderr, "d3dx: effect %s: %s\n", label, res ? "too many effects" : "resource not found");
-        return 0;
-    }
+    if (fxi < 0) { fprintf(stderr, "d3dx: effect %s: too many effects\n", label); return 0; }
     Fx *fx = &g_fx[fxi];
     snprintf(fx->name, sizeof fx->name, "%s", label);
-    fx->d = malloc(size); memcpy(fx->d, res, size); fx->len = size;
+    fx->d = malloc(size ? size : 1);
+    if (!fx->d) { fprintf(stderr, "d3dx: effect %s: out of memory\n", label); return 0; }
+    memcpy(fx->d, res, size); fx->len = size;
     fx->cur_tech = 0; fx->cur_pass = -1;
-    if (!fx_parse(fx, fxi)) {
-        fprintf(stderr, "d3dx: effect %s: not a readable fx_2_0 effect (%u bytes)\n", label, size);
-        fx->nparams = fx->ntechs = 0;
+    fx->scratch = gh_alloc(256 * 16, 1, 16);
+    if (!fx->scratch || !fx_parse(fx, fxi)) {
+        fprintf(stderr, "d3dx: effect %s: %s (%u bytes)\n", label,
+                fx->scratch ? "not a readable fx_2_0 effect" : "no guest memory for its constants", size);
+        /* The slot stays used but inert: no handle refers to it.  What a
+         * failed parse allocated below the top-level arrays is not freed. */
+        if (fx->scratch) gh_free(fx->scratch);
+        free(fx->d); free(fx->params); free(fx->techs);
+        memset(fx, 0, sizeof *fx);
         return 0;
     }
-    fx->scratch = gh_alloc(256 * 16, 1, 16);
     MR32(obj + 4) = (uint32_t)fxi + 1u;
     /* Effects created with the same ID3DXEffectPool share the value of every
      * parameter declared `shared` (D3DX_PARAMETER_SHARED) with the same name.
@@ -741,6 +753,7 @@ static void upload_pres(CPU *c, Fx *fx, FxShader *sh) {
     FxPres *pr = sh->pres;
     if (!pr) return;
     PresRegs *r = calloc(1, sizeof *r);
+    if (!r) return;
     for (int i = 0; i < pr->nin; i++) {
         FxConst *k = &pr->in[i];
         if (k->param < 0 || k->regset != 2 || !k->count || k->reg + k->count > 256) continue;

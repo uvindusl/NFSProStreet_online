@@ -433,6 +433,43 @@ int main(void) {
     }
 
     /* -------------------------------------------------------------- */
+    /* Test Suite 3c: bounds and parsing in the runtime stand-ins     */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 3c: bounds and parsing ---\n");
+    {
+        char d[8];
+        path_join(d, sizeof d, "abcdef", "ghij");
+        ASSERT_TRUE(!strcmp(d, "abcdef/"), "path_join cuts to fit and terminates");
+        path_copy(d, sizeof d, "0123456789");
+        ASSERT_TRUE(!strcmp(d, "0123456"), "path_copy cuts to fit and terminates");
+
+        ASSERT_EQ(com_alloc(0xfffffff8u), 0u, "com_alloc refuses a size that would wrap");
+
+        uint32_t h = gh_alloc(64, 1, 16);
+        ASSERT_TRUE(h && gh_in_use(h), "gh_in_use: a heap block is in use");
+        ASSERT_TRUE(!gh_in_use(HEAP2_BASE + 0x1000u) || g_brk2 > HEAP2_BASE + 0x1000u,
+                    "gh_in_use: heap2 beyond its mark is not");
+        gh_free(h);
+
+        uint32_t fh = file_new(stderr);
+        ASSERT_TRUE(IS_FH(fh) && file_of(fh) == stderr, "file handles resolve");
+        ASSERT_TRUE(file_of(HEAP2_BASE + 0x10u) == NULL, "a heap2 pointer is not a file handle");
+        g_files[(fh >> 4) & 0x3F].used = 0;
+
+        ASSERT_EQ((unsigned)prim_verts(4, 10), 30u, "triangle list: 3 vertices per primitive");
+        ASSERT_EQ((unsigned)prim_verts(5, 10), 12u, "triangle strip: n + 2 vertices");
+        ASSERT_EQ(decl_size(2), 12u, "FLOAT3 attribute is 12 bytes");
+        ASSERT_TRUE(!range_committed(0xfffff000u, 0x2000u), "a range past 4 GB is not committed");
+
+        setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,bogus,frames=3,tap=28:FeMainMenu.fng", 1);
+        parse();
+        ASSERT_EQ(g_nsteps, 3, "script: a bad second key and an unknown step are dropped");
+        ASSERT_TRUE(g_step[0].op == S_KEY && g_step[0].b == 200 && g_step[0].b2 == 205 && g_step[0].a == 4,
+                    "script: key=200+205:4 holds two keys for 4 frames");
+        unsetenv("PROSTREET_SCRIPT");
+    }
+
+    /* -------------------------------------------------------------- */
     /* Test Suite 4: Window Message Filtering & Routing               */
     /* -------------------------------------------------------------- */
     printf("\n--- Test Suite 4: Window Message Filtering & Routing ---\n");

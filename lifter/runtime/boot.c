@@ -128,10 +128,71 @@ static void original_exe_path(char *path, size_t n) {
     const char *h = getenv("PROSTREET_HEADER_IMAGE");
     if (h && *h) {
         snprintf(path, n, "%s", h);
-    } else {
-        const char *d = getenv("PROSTREET_GAMEDIR");
-        snprintf(path, n, "%s/nfsps.exe", (d && *d) ? d : "game");
+        return;
     }
+    /* The DRM-free executable is usually nfsps.exe; a retail install has the
+     * SecuROM launcher nfs.exe instead. */
+    const char *d = getenv("PROSTREET_GAMEDIR");
+    if (!d || !*d) d = "game";
+    snprintf(path, n, "%s/nfsps.exe", d);
+    if (access(path, R_OK) != 0) {
+        char alt[4096];
+        snprintf(alt, sizeof alt, "%s/nfs.exe", d);
+        if (access(alt, R_OK) == 0) snprintf(path, n, "%s", alt);
+    }
+}
+
+/* The image the boot was loaded from (argv[1]), for fallbacks when the
+ * original executable lacks a section (the retail launcher has no .data and
+ * no .rsrc of the game). */
+static const char *g_dump_path = "artifacts/nfs.exe.unpacked";
+
+/* Find section `name` in the PE file at `path`: its virtual address, file
+ * offset and the bytes that are in the file (clamped to the virtual size).
+ * Returns 0 when found and the range fits in the guest address space. */
+static int pe_find_section(const char *path, const char *name, uint32_t *va, uint32_t *raw, uint32_t *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    uint8_t hdr[0x1000];
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    fclose(f);
+    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x78 > n ||
+        *(uint32_t *)(hdr + peoff) != 0x00004550u) return -1;
+    unsigned nsec = *(uint16_t *)(hdr + peoff + 6), optsz = *(uint16_t *)(hdr + peoff + 20);
+    uint32_t image_base = *(uint32_t *)(hdr + peoff + 24 + 28);
+    for (unsigned i = 0; i < nsec; i++) {
+        uint64_t off = (uint64_t)peoff + 24 + optsz + 40ull * i;
+        if (off + 40 > n) break;
+        const uint8_t *sh = hdr + off;
+        if (strncmp((const char *)sh, name, 8)) continue;
+        uint32_t vsz = *(uint32_t *)(sh + 8), rsz = *(uint32_t *)(sh + 16);
+        uint64_t v = (uint64_t)image_base + *(uint32_t *)(sh + 12);
+        if (rsz > vsz) rsz = vsz;
+        if (!rsz || v + rsz > 0xffff0000ull) return -1;
+        *va = (uint32_t)v; *raw = *(uint32_t *)(sh + 20); *size = rsz;
+        return 0;
+    }
+    return -1;
+}
+
+/* Map the .rsrc section of `path` if the guest has nothing there yet.
+ * Returns 0 when copied, 1 when the guest already has it, -1 otherwise. */
+static int map_rsrc_from(const char *path) {
+    uint32_t va, raw, rsz;
+    if (pe_find_section(path, ".rsrc", &va, &raw, &rsz) || rsz > 0x4000000u) return -1;
+    mem_commit(va, rsz);
+    for (uint32_t k = 0; k < 64 && k < rsz; k++)
+        if (g_mem[va + k]) return 1;                     /* already there */
+    FILE *f = fopen(path, "rb");
+    int ok = f && !fseek(f, (long)raw, SEEK_SET) && fread(g_mem + va, 1, rsz, f) == rsz;
+    if (f) fclose(f);
+    if (ok) {                                            /* a dump may carry an all-zero .rsrc */
+        ok = 0;
+        for (uint32_t k = 0; k < 64 && k < rsz && !ok; k++) ok = g_mem[va + k] != 0;
+    }
+    if (ok) fprintf(stderr, "boot: .rsrc (%u bytes at %08x) taken from %s\n", rsz, va, path);
+    return ok ? 0 : -1;
 }
 
 static void overlay_original_headers(void) {
@@ -166,26 +227,10 @@ static void overlay_original_headers(void) {
     /* The artifact's .rsrc is all zero (the dump did not keep the resources),
      * and the game's 34 compiled effects are RT_RCDATA resources that
      * D3DXCreateEffectFromResourceA reads.  Map the section from the original
-     * executable when the artifact has nothing there. */
-    unsigned nsec = *(uint16_t *)(hdr + peoff + 6), optsz = *(uint16_t *)(hdr + peoff + 20);
-    for (unsigned i = 0; i < nsec; i++) {
-        uint8_t *sh = hdr + peoff + 24 + optsz + 40 * i;
-        if (sh + 40 > hdr + n) break;
-        if (memcmp(sh, ".rsrc\0\0\0", 8)) continue;
-        uint32_t vsz = *(uint32_t *)(sh + 8), va = image_base + *(uint32_t *)(sh + 12);
-        uint32_t rsz = *(uint32_t *)(sh + 16), raw = *(uint32_t *)(sh + 20);
-        if (rsz > vsz) rsz = vsz;
-        if (!rsz || rsz > 0x4000000u) break;
-        mem_commit(va, rsz);
-        int empty = 1;
-        for (uint32_t k = 0; k < 64 && empty; k++) empty = g_mem[va + k] == 0;
-        if (!empty) break;
-        f = fopen(path, "rb");
-        if (f && !fseek(f, (long)raw, SEEK_SET) && fread(g_mem + va, 1, rsz, f) == rsz)
-            fprintf(stderr, "boot: .rsrc (%u bytes at %08x) taken from %s\n", rsz, va, path);
-        if (f) fclose(f);
-        break;
-    }
+     * executable when the artifact has nothing there; an executable without
+     * the game's .rsrc (the retail launcher) leaves the image's own. */
+    if (map_rsrc_from(path) < 0 && map_rsrc_from(g_dump_path) < 0)
+        fprintf(stderr, "boot: no .rsrc in %s or %s; effects will not load\n", path, g_dump_path);
 }
 
 /* The original executable's .data, kept from repair_stale_lists() until
@@ -237,32 +282,53 @@ static int relink_list(uint32_t a, uint32_t lo, uint32_t hi) {
  * pointers to itself, {X, X} at X.  For each one that is not empty in the
  * dump, keep the nodes that are static objects in .data (they were linked by
  * static constructors, which do not run again) and drop the rest. */
+int gh_in_use(uint32_t a);
+static int g_orig_zero;   /* no original .data: g_orig_data is all zero */
+
 static void repair_stale_lists(void) {
     char path[4096];
     original_exe_path(path, sizeof path);
-    FILE *f = fopen(path, "rb");
-    if (!f) return;                         /* overlay_original_headers already said so */
-    uint8_t hdr[0x1000];
-    size_t n = fread(hdr, 1, sizeof hdr, f);
-    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
-    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x100 > n) { fclose(f); return; }
-    uint16_t nsec = *(uint16_t *)(hdr + peoff + 6);
-    uint8_t *sh = hdr + peoff + 24 + *(uint16_t *)(hdr + peoff + 20);
     uint32_t lo = 0, size = 0, raw = 0;
-    for (uint16_t i = 0; i < nsec && (size_t)(sh - hdr) + 40 <= n; i++, sh += 40) {
-        if (!memcmp(sh, ".data\0\0\0", 8)) {
-            uint32_t vsize = *(uint32_t *)(sh + 8), rsize = *(uint32_t *)(sh + 16);
-            lo = 0x400000u + *(uint32_t *)(sh + 12);
-            size = rsize < vsize ? rsize : vsize;
-            raw = *(uint32_t *)(sh + 20);
+    uint8_t *orig = NULL;
+    if (!pe_find_section(path, ".data", &lo, &raw, &size)) {
+        FILE *f = fopen(path, "rb");
+        orig = malloc(size);
+        if (!f || !orig || fseek(f, (long)raw, SEEK_SET) != 0 || fread(orig, 1, size, f) != size) {
+            free(orig); orig = NULL;
         }
+        if (f) fclose(f);
     }
-    uint8_t *orig = size ? malloc(size) : NULL;
-    if (!orig || fseek(f, (long)raw, SEEK_SET) != 0 || fread(orig, 1, size, f) != size ||
-        !mem_is_committed(lo) || !mem_is_committed(lo + size - 1)) {
-        fclose(f); free(orig); return;
+    if (!orig) {
+        /* The retail launcher (SecuROM, sections .ROT/.IN/.HEAVEN) has no
+         * .data.  Take the bounds from the loaded image and assume the
+         * original is zero there: every word these passes touch points into
+         * the dumped heap, and an executable on disk holds no heap pointers.
+         * Ranges that would be restored are zeroed instead. */
+        uint32_t r;
+        if (pe_find_section(g_dump_path, ".data", &lo, &r, &size) &&
+            pe_find_section(path, ".data", &lo, &r, &size)) {
+            fprintf(stderr, "boot: no .data bounds in %s or %s, skipping the .data repairs\n", path, g_dump_path);
+            return;
+        }
+        orig = calloc(1, size);
+        if (!orig) return;
+        g_orig_zero = 1;
+        /* The list heads the scan below finds in nfsps.exe (an empty head is
+         * {X, X} at X) whose dumped value is not empty: without them the
+         * tree at 0x00a6aef8 keeps its dead root (sub_0090e2c0 faults). */
+        static const uint32_t heads[] = {
+            0x00a4f398, 0x00a4f3a0, 0x00a4f3a8, 0x00a55500, 0x00a610f8, 0x00a61110, 0x00a6111c, 0x00a61138,
+            0x00a61240, 0x00a63cd0, 0x00a6aeec, 0x00a6aef8, 0x00a6af14, 0x00a79b4c, 0x00a79b80, 0x00a79ba4,
+            0x00a83a60, 0x00a84960, 0x00a84968, 0x00a84970, 0x00a84990, 0x00a9deec, 0x00a9e04c, 0x00a9e05c,
+            0x00a9e08c, 0x00a9e09c, 0x00a9e0d4, 0x00a9e18c, 0x00a9e194, 0x00a9e1a4, 0x00a9e21c, 0x00a9e578 };
+        for (unsigned i = 0; i < sizeof heads / sizeof *heads; i++)
+            if (heads[i] >= lo && heads[i] + 8u <= lo + size) {
+                memcpy(orig + (heads[i] - lo), &heads[i], 4);
+                memcpy(orig + (heads[i] - lo) + 4, &heads[i], 4);
+            }
+        fprintf(stderr, "boot: %s has no .data; repairing .data against zeros\n", path);
     }
-    fclose(f);
+    if (!mem_is_committed(lo) || !mem_is_committed(lo + size - 1)) { free(orig); return; }
     uint32_t hi = lo + size;
     unsigned heads = 0, emptied = 0, relinked = 0, trees = 0;
     for (uint32_t a = lo; a + 8u <= hi; a += 4) {
@@ -451,8 +517,15 @@ static void restore_original_ranges(void) {
         if (r0 < lo) r0 = lo;
         if (r1 > hi) r1 = hi;
         if (r1 <= r0) continue;
-        memcpy(g_mem + r0, g_orig_data + (r0 - lo), r1 - r0);
-        fprintf(stderr, "boot: %08x-%08x restored from the original executable\n", r0, r1);
+        if (g_orig_zero) {
+            /* no original: clear what points into the dumped heap, keep the rest */
+            for (uint32_t a = (r0 + 3u) & ~3u; a + 4u <= r1; a += 4)
+                if (MR32(a) >= 0x01aa8000u && MR32(a) < 0x40000000u) MR32(a) = 0;
+        } else {
+            memcpy(g_mem + r0, g_orig_data + (r0 - lo), r1 - r0);
+        }
+        fprintf(stderr, "boot: %08x-%08x %s\n", r0, r1,
+                g_orig_zero ? "heap pointers cleared (no original .data)" : "restored from the original executable");
     }
 }
 
@@ -504,7 +577,7 @@ void null_dead_heap_pointers(void) {
                 if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
                 if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
                 /* memory this run's own boot code has allocated is not dead */
-                { extern uint32_t gh_brk(void); if (w >= 0x20000000u && w < gh_brk()) { kept++; continue; } }
+                if (gh_in_use(w)) { kept++; continue; }
                 int live = 0;
                 for (uint32_t k = 0; k < 64u && !live; k += 4)
                     live = mem_is_committed(w + k) && MR32(w + k) != 0;
@@ -557,7 +630,6 @@ void null_dead_heap_pointers(void) {
         uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
         int verbose = getenv("PROSTREET_LAZY_LOG") != NULL;
         unsigned nulled = 0;
-        extern uint32_t gh_brk(void);
         for (uint32_t pc = 0x00401000u; pc + 16u < lo; pc++) {
             if (!(pc & 0xfffu) && !mem_is_committed(pc)) { pc += 0xfffu; continue; }
             const uint8_t *b = g_mem + pc;
@@ -573,7 +645,7 @@ void null_dead_heap_pointers(void) {
             uint32_t w = MR32(x);
             if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
             if (*(uint32_t *)(g_orig_data + (x - lo)) != 0) continue;
-            if (w >= 0x20000000u && w < gh_brk()) continue;
+            if (gh_in_use(w)) continue;
             int stored = 0;
             for (uint32_t q = after; q < after + 0x100u && q + 6u < lo && !stored; q++) {
                 const uint8_t *c = g_mem + q;
@@ -716,6 +788,7 @@ static void apply_watch_env(void) {
 
 int main(int argc, char **argv) {
     const char *pe = argc > 1 ? argv[1] : "artifacts/nfs.exe.unpacked";
+    g_dump_path = pe;
 
     mem_init();
     mem_fault_handler_install();
@@ -1106,6 +1179,7 @@ int main(int argc, char **argv) {
         static const uint32_t lists[] = { 0x00ff25e8, 0x00ff25f4, 0x00ff2600, 0x00ff260c };
         for (unsigned i = 0; i < sizeof lists / sizeof *lists; i++) {
             uint32_t head = gh_alloc(0x20, 1, 16);
+            if (!head) break;
             MR32(head) = head;
             MR32(head + 4) = head;
             MR32(lists[i] + 4) = head;

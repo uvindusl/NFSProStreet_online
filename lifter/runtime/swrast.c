@@ -358,7 +358,33 @@ static void fetch_attr(const uint8_t *p, int type, float v[4]) {
     }
 }
 
-static const uint8_t *up_data; static uint32_t up_stride;      /* DrawPrimitiveUP stream 0 */
+static const uint8_t *up_data; static uint32_t up_stride, up_len;   /* DrawPrimitiveUP stream 0 */
+
+/* Bytes a D3DDECLTYPE attribute takes in the vertex. */
+static uint32_t decl_size(int type) {
+    static const uint8_t sz[] = { 4, 8, 12, 16, 4, 4, 4, 8, 4, 4, 8, 4, 8, 4, 4, 4, 8 };
+    return type >= 0 && type < (int)sizeof sz ? sz[type] : 16;
+}
+
+/* Whether all of [a, a+n) is committed guest memory. */
+static int range_committed(uint32_t a, uint64_t n) {
+    if (!n) return 1;
+    if (!a || (uint64_t)a + n > 0x100000000ull) return 0;
+    for (uint64_t p = a & ~0xfffull; p < (uint64_t)a + n; p += 0x1000)
+        if (!mem_is_committed((uint32_t)p)) return 0;
+    return 1;
+}
+
+/* Vertices a non-indexed draw of `n` primitives reads. */
+static uint64_t prim_verts(uint32_t type, uint32_t n) {
+    switch (type) {
+    case 1: return n;                   /* point list */
+    case 2: return 2ull * n;            /* line list */
+    case 3: return n + 1ull;            /* line strip */
+    case 4: return 3ull * n;            /* triangle list */
+    default: return n + 2ull;           /* strip, fan */
+    }
+}
 
 static void run_vertex(const Sh *vs, M *m, const Varyings *vy, uint32_t index, Vtx *out) {
     /* D3DVERTEXELEMENT9 { WORD stream, offset; BYTE type, method, usage, usageindex } */
@@ -370,11 +396,13 @@ static void run_vertex(const Sh *vs, M *m, const Varyings *vy, uint32_t index, V
             if (MR8(e + 6) != vs->in[r].usage || MR8(e + 7) != vs->in[r].index) continue;
             uint32_t st = MR16(e), off = MR16(e + 2);
             const uint8_t *base = NULL; uint32_t stride = 0;
-            if (st == 0 && up_data) { base = up_data; stride = up_stride; }
-            else if (st < 16 && stream[st].vb) {
+            uint32_t asz = decl_size(MR8(e + 4));
+            if (st == 0 && up_data) {
+                if ((uint64_t)index * up_stride + off + asz <= up_len) { base = up_data; stride = up_stride; }
+            } else if (st < 16 && stream[st].vb) {
                 uint32_t len, fmt, d = com_buf_data(stream[st].vb, &len, &fmt);
                 stride = stream[st].stride;
-                if (d && (uint64_t)stream[st].off + (uint64_t)index * stride + off + 16 <= len + 16u)
+                if (d && (uint64_t)stream[st].off + (uint64_t)index * stride + off + asz <= len)
                     base = g_mem + d + stream[st].off;
             }
             if (base) fetch_attr(base + (size_t)index * stride + off, MR8(e + 4), m->in[r]);
@@ -651,9 +679,21 @@ void sw_dev_call(CPU *c, const char *nm) {
         if (d && (uint64_t)(A(5) + nidx) * isz <= len) draw(A(1), A(6), g_mem + d, fmt == 102, (int32_t)A(2), A(5));
         else n_skipped++;
     } else if (!strcmp(nm, "DrawPrimitiveUP")) {
-        if (mem_is_committed(A(3))) { up_data = g_mem + A(3); up_stride = A(4); draw(A(1), A(2), NULL, 0, 0, 0); up_data = NULL; }
+        uint64_t len = prim_verts(A(1), A(2)) * A(4);
+        if (len <= 0x10000000u && range_committed(A(3), len)) {
+            up_data = g_mem + A(3); up_stride = A(4); up_len = (uint32_t)len;
+            draw(A(1), A(2), NULL, 0, 0, 0); up_data = NULL;
+        } else n_skipped++;
     } else if (!strcmp(nm, "DrawIndexedPrimitiveUP")) {
-        if (mem_is_committed(A(5)) && mem_is_committed(A(7))) { up_data = g_mem + A(7); up_stride = A(8); draw(A(1), A(4), g_mem + A(5), A(6) == 102, 0, 0); up_data = NULL; }
+        /* (type, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData,
+         *  IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) */
+        uint64_t nidx = prim_verts(A(1), A(4)), isz = A(6) == 102 ? 4 : 2;
+        uint64_t vlen = ((uint64_t)A(2) + A(3)) * A(8);
+        if (nidx * isz <= 0x10000000u && vlen <= 0x10000000u &&
+            range_committed(A(5), nidx * isz) && range_committed(A(7), vlen)) {
+            up_data = g_mem + A(7); up_stride = A(8); up_len = (uint32_t)vlen;
+            draw(A(1), A(4), g_mem + A(5), A(6) == 102, 0, 0); up_data = NULL;
+        } else n_skipped++;
     } else if (!strcmp(nm, "Present")) {
         char name[96];
         for (int i = 0; i < nrts; i++) {

@@ -48,9 +48,25 @@ import sys
 IMAGE = sys.argv[1] if len(sys.argv) > 1 else 'artifacts/nfs.exe.unpacked'
 OUT = sys.argv[2] if len(sys.argv) > 2 else 'lifter/seeds-boot.txt'
 BASE = 'lifter/seeds-full.txt'
-# The runtime overlays .data from the retail image, so the function pointers
-# the guest actually reads out of .data are the retail ones.
-CLEAN = os.environ.get('PROSTREET_CLEAN_IMAGE', 'game/nfsps.exe')
+
+
+def original_exe():
+    """The executable boot.c takes the PE header page from
+    (original_exe_path): PROSTREET_HEADER_IMAGE, else <gamedir>/nfsps.exe,
+    else <gamedir>/nfs.exe.  Seeds keyed on header bytes must use the same."""
+    h = os.environ.get('PROSTREET_HEADER_IMAGE')
+    if h:
+        return h
+    d = os.environ.get('PROSTREET_GAMEDIR') or 'game'
+    p = os.path.join(d, 'nfsps.exe')
+    if not os.path.exists(p) and os.path.exists(os.path.join(d, 'nfs.exe')):
+        p = os.path.join(d, 'nfs.exe')
+    return p
+
+
+# The header page and the .data function pointers come from the original
+# executable; PROSTREET_CLEAN_IMAGE (the opt-in .data overlay) overrides it.
+CLEAN = os.environ.get('PROSTREET_CLEAN_IMAGE') or original_exe()
 
 TEXT_LO, TEXT_HI = 0x00401000, 0x00401000 + 0x56507b
 RDATA_LO, RDATA_HI = 0x00967000, 0x00967000 + 0x0e276a
@@ -374,12 +390,17 @@ def main():
     # 3. function pointers held in data tables
     rdata = ptrs_in(img, RDATA_LO, RDATA_HI)
     diab = ptrs_in(img, DIA_LO, DIA_HI)
+    # .data function pointers as the original executable has them: the
+    # static initializers boot.c runs again, and the ranges it restores, put
+    # those values back.  (The dump's own .data pointers were already reached
+    # through the call graph when the dump was taken.)
     data = set()
     if os.path.exists(CLEAN):
         clean = open(CLEAN, 'rb').read()
-        data = ptrs_in(clean, DATA_LO, DATA_HI)
+        if len(clean) >= DATA_HI - base:
+            data = ptrs_in(clean, DATA_LO, DATA_HI)
     else:
-        print('boot_seeds: no clean image at %s, .data not scanned' % CLEAN)
+        print('boot_seeds: no original executable at %s, .data not scanned' % CLEAN)
     before = len(seeds)
     seeds |= rdata | data | diab
     dataptr = len(seeds) - before

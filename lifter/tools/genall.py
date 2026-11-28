@@ -135,9 +135,13 @@ def _p1_key():
         st = os.stat(EXE); h.update(f"{st.st_size}:{int(st.st_mtime)}".encode())
     except OSError:
         h.update(b'-')
+    # every switch that changes what the lifter discovers, and the lifter itself
     h.update(f"|jtswitch={os.environ.get('JTSWITCH','')}|seeds={SEEDS}"
-             f"|sections={os.environ.get('LIFT_SECTIONS','')}".encode())
-    for p in (SEEDS, RELOCS):
+             f"|sections={os.environ.get('LIFT_SECTIONS','')}"
+             f"|pushret={os.environ.get('PUSHRET','')}|callchk={os.environ.get('CALLCHK','')}"
+             f"|hooks={os.environ.get('HOOKS','')}|hookret={os.environ.get('HOOKRET','')}".encode())
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (SEEDS, RELOCS, os.path.join(here, 'lift.py'), os.path.abspath(__file__)):
         h.update(b'|')
         try: h.update(open(p, 'rb').read())
         except OSError: h.update(b'-')

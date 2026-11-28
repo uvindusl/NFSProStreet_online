@@ -359,10 +359,17 @@ push 0x00463e90      ; the target
 ret
 ```
 
-The lift keeps the literal stack semantics, so the dispatcher needs that
-continuation as a function of its own: 1,348 occurrences, 2,289 distinct
-continuations (the diabolus section accounts for the rest). Without them the
-first obfuscated call lands on an address that is not in the function table.
+Kept with literal stack semantics, the dispatcher needs that continuation as
+a function of its own: 1,348 occurrences, 2,289 distinct continuations (the
+diabolus section accounts for the rest). Without them the first obfuscated
+call lands on an address that is not in the function table.
+
+With `PUSHRET=1` (what `scripts/lift_boot.sh` uses) the lifter emits the call
+instead: it runs the target and then, when the target returned to the pushed
+address, the continuation (which still returns to the lifted caller). The same
+holds for `push A; jmp B`. `CALLCHK=1` adds a check after every call: when a
+callee left a different address in `eip` (a SecuROM continuation), the
+dispatcher follows it (`PROSTREET_CALLCHK=log|off` changes that at run time).
 
 ### 11.4 Function pointers in data tables
 

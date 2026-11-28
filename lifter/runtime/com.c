@@ -59,9 +59,13 @@ static uint32_t g_dev = 0;
 static pthread_mutex_t g_com_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uint32_t com_alloc(uint32_t n) {
+    /* sizes come from guest data (sound buffer lengths): refuse what cannot
+     * fit before rounding, so a huge size cannot wrap to a tiny block.  The
+     * region is [COM_BASE, COM_MAX); heap2 starts at COM_MAX. */
+    if (n > COM_MAX - COM_BASE) return 0;
     n = (n + 15u) & ~15u;
     pthread_mutex_lock(&g_com_lock);
-    if (g_com_ptr + n > COM_MAX) { pthread_mutex_unlock(&g_com_lock); return 0; }
+    if ((uint64_t)g_com_ptr + n > COM_MAX) { pthread_mutex_unlock(&g_com_lock); return 0; }
     uint32_t p = g_com_ptr;
     g_com_ptr += n;
     mem_commit(p, n);
@@ -787,7 +791,10 @@ int com_call(CPU *c, uint32_t magic) {
         } else if (!strcmp(nm, "GetDeviceState")) {
             uint32_t sz = COM_A(1);
             uint32_t p = COM_A(2);
-            if (p) {
+            /* DIMOUSESTATE(2) 16/20, keyboard 256, DIJOYSTATE2 272 bytes */
+            if (!p || sz == 0 || sz > 272u || (uint64_t)p + sz > 0x100000000ull) {
+                r = 0x80070057u;                                 /* DIERR_INVALIDPARAM */
+            } else {
                 mem_commit(p, sz);
                 memset(g_mem + p, 0, sz);
                 /* Scripted key presses for unattended runs:
@@ -803,20 +810,25 @@ int com_call(CPU *c, uint32_t magic) {
                     while (e && *e && nkeys < 32) {
                         char *end;
                         keys[nkeys].frame = strtol(e, &end, 10);
-                        if (*end != ':') break;
-                        keys[nkeys].key = (int)strtol(end + 1, &end, 10);
-                        keys[nkeys].len = 10;
-                        if (*end == '+') keys[nkeys].len = strtol(end + 1, &end, 10);
+                        int ok = *end == ':';
+                        if (ok) {
+                            keys[nkeys].key = (int)strtol(end + 1, &end, 10);
+                            keys[nkeys].len = 10;
+                            if (*end == '+') keys[nkeys].len = strtol(end + 1, &end, 10);
+                            ok = *end == ',' || !*end;
+                        }
                         /* scan codes 0-255, mouse buttons 256-263: skip anything else */
-                        if (keys[nkeys].key >= 0 && keys[nkeys].key < 264 && keys[nkeys].len > 0) nkeys++;
-                        e = *end == ',' ? end + 1 : "";
+                        if (ok && keys[nkeys].key >= 0 && keys[nkeys].key < 264 && keys[nkeys].len > 0) nkeys++;
+                        else fprintf(stderr, "dinput: PROSTREET_KEYS: skipping bad entry at \"%.16s\"\n", e);
+                        const char *comma = strchr(e, ',');
+                        e = comma ? comma + 1 : "";
                     }
                 }
                 static uint32_t seen_sz[4];
                 for (int k = 0; k < 4 && seen_sz[k] != sz; k++)
                     if (!seen_sz[k]) { seen_sz[k] = sz; fprintf(stderr, "dinput: GetDeviceState(%u bytes) into %#x from %#x first read at frame %lu\n", sz, p, c->eip, (unsigned long)g_frame_no); break; }
                 {   /* autotest.c's current key (PROSTREET_SCRIPT) */
-                    extern int g_script_key, g_script_key2, g_script_key3;
+                    extern _Atomic int g_script_key, g_script_key2, g_script_key3;
                     int ks[3] = { g_script_key, g_script_key2, g_script_key3 };
                     for (int i = 0; i < 3; i++) {
                         int k = ks[i];
@@ -831,8 +843,8 @@ int com_call(CPU *c, uint32_t magic) {
                     else if ((sz == 16 || sz == 20) && keys[i].key >= 256 && keys[i].key - 256 < (int)sz - 12)
                         MR8(p + 12 + (keys[i].key - 256)) = 0x80;     /* DIMOUSESTATE(2).rgbButtons */
                 }
+                r = 0;
             }
-            r = 0;
         } else if (!strcmp(nm, "GetDeviceData")) {
             static int logged;
             if (!logged++) fprintf(stderr, "dinput: GetDeviceData first call at frame %lu (kind %#x)\n", (unsigned long)g_frame_no, kind);

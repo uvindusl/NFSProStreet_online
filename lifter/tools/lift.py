@@ -604,13 +604,17 @@ class Lifter:
             # bound check never reaches (each case still tests its table entry).
             cnt = 0
             while cnt < 256 and self.in_text(d + 4 * cnt + 3):
-                t = struct.unpack_from('<I', self.fetch(d + 4 * cnt, 4))[0]
+                b = self.fetch(d + 4 * cnt, 4)
+                if len(b) < 4: break                     # region ends inside the entry
+                t = struct.unpack_from('<I', b)[0]
                 if not self.in_text(t) or abs(t - i.address) > 0x4000: break
                 cnt += 1
             if cnt < 2: return None
             n = cnt - 1
         if not (self.in_text(d) and self.in_text(d + 4 * n + 3)): return None
-        ents = list(struct.unpack_from(f'<{n + 1}I', self.fetch(d, 4 * n + 4)))
+        b = self.fetch(d, 4 * n + 4)
+        if len(b) < 4 * n + 4: return None               # table runs past its region
+        ents = list(struct.unpack_from(f'<{n + 1}I', b))
         return (reg, d, ents) if all(self.in_text(t) for t in ents) else None
 
     # ---------- function discovery (CFG) ----------

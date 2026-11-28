@@ -13,6 +13,7 @@ scripts/run_boot.sh /path/to/nfs.exe.unpacked 300
 ```
 
 - `PROSTREET_GAMEDIR` may be relative (default `game`) or absolute. The game sees an absolute directory as `C:\...`.
+- `PROSTREET_HEADER_IMAGE` is the original executable: the PE header page (SecuROM reads constants from it), `.rsrc` (the compiled effects) and `.data` (the clean values the boot repairs compare against) come from it. Without it the boot looks for `<gamedir>/nfsps.exe`, then `<gamedir>/nfs.exe`. A retail `nfs.exe` is the SecuROM launcher, with no `.data` and no game `.rsrc`: the boot then repairs `.data` against zeros (restored ranges are zeroed) and keeps the unpacked image's own `.rsrc`.
 - Saves go to `./savedata` in the working directory. Keep a copy of a saved profile and restore it before each run: with a profile present, boot reaches the main menu at about frame 5840, with no Alias dialogs.
 - The frontend runs at 60 frames per second and races at the game's own 30 fps cap. A scripted race takes about 7 minutes.
 
@@ -46,7 +47,15 @@ wait=FEHubOnline.fng,tap=28:!FEHubOnline.fng,wait=FeEventMatchup.fng:4000,
 frames=120,tap=28:!FeEventMatchup.fng,frames=700,key=200:90,dump
 ```
 
-Without a profile, the first-run flow needs `PROSTREET_TEXT=<frame>:<name>` (or `text=` in a script) for the Alias name.
+Without a profile (no `./savedata`), the game opens the first-run flow: "Create a new Alias?", the autosave notices, the Alias name, driver aids and the sponsor notice. This script answers YES, names the Alias `PLAYER` and ends at the main menu (frame 12462 in a checked run). The steps are frame-timed because the dialogs keep the same package (`FeDialog.fng`) in control:
+
+```
+frames=5700,key=28:20,frames=660,key=205:15,frames=170,key=28:20,frames=760,key=28:20,
+frames=760,key=28:20,frames=710,text=PLAYER,frames=125,key=28:20,frames=810,key=28:20,
+frames=1110,key=28:20,frames=360,key=28:20,frames=860,key=28:20,wait=FeMainMenu.fng:6000
+```
+
+The profile is then saved in `./savedata/NFS ProStreet/` (`ALIAS_PLAYER`, `CAREER_01`). Copy that directory once (`cp -a savedata savedata.base`) and restore it before each run (`rm -rf savedata && cp -a savedata.base savedata`).
 
 ## Frames
 

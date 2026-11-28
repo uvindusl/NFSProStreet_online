@@ -11,9 +11,9 @@ Every claim is marked:
   `dlls/d3dx9_36/effect.c`, and consistent with the game data.
 - **Inferred**: a reading that fits the data but that nothing checks.
 
-Out of scope here: the preshader VM and the shader bytecode itself. Parameter default values
-sit at `value_off` as `rows * cols * max(1, elements)` DWORDs (read by the runtime, not checked
-by `fx_dump.py`).
+Out of scope here: the shader bytecode itself. Parameter default values sit at `value_off` as
+`rows * cols * max(1, elements)` DWORDs (read by the runtime, not checked by `fx_dump.py`).
+Preshaders are described under [Preshaders](#preshaders).
 
 ## Reproduce
 
@@ -106,7 +106,7 @@ Each record gives the value of one state that is not a plain constant.
 | usage | Data | Seen | Status |
 |---|---|---|---|
 | 0, shader state | shader bytecode, from the version token to the END token `0x0000FFFF` | 591 | Confirmed (data) |
-| 0, other state | compiled expression, first DWORD `0x46580200`, last DWORD `0x0000FFFF` | 231 | Blob boundaries confirmed (data); contents not decoded |
+| 0, other state | compiled expression, first DWORD `0x46580200`, last DWORD `0x0000FFFF` | 231 | Confirmed (data): see [Expressions](#expressions) |
 | 1 | NUL-terminated name of the parameter the state takes its value from | 122 | Confirmed (data): every name is a parameter of the same effect |
 | 2 | not seen | 0 | Not decoded; `--check` fails if it appears |
 
@@ -174,8 +174,8 @@ Ops 8 and 73 are expressions only in `IDI_UCAP_FX` (3 passes each).
 | 171 | `D3DSAMP_MIPFILTER` | 7 | 0, 1, 2, expression | NONE, POINT, LINEAR |
 | 174 | `D3DSAMP_MAXANISOTROPY` | 10 | expression | 6 samplers |
 
-Ops 169, 170 and 171 are expressions on 73 samplers each, so the HLE cannot apply those samplers
-correctly until the expression VM exists.
+Ops 169, 170 and 171 are expressions on 73 samplers each. Each one copies a parameter, so the
+runtime sends that parameter's value (see [Expressions](#expressions)).
 
 ## Expressions
 
@@ -186,8 +186,27 @@ similar, so the state's value is the parameter's first component. **Confirmed (d
 `lifter/runtime/d3dx_effect.c` reports any expression that is not of this shape when it loads
 an effect, and reports none for the 32 effects the game creates.
 
+## Preshaders
+
 Every shader blob has a `PRES` comment, but in 508 of the 591 it is the bare tag with no body.
-The other 83 carry a real preshader (308 to 532+ bytes), which is not decoded.
+The other 83 carry a real preshader (308 to 532+ bytes): a small program, run on the CPU, that
+computes shader constants from the effect's parameters. The runtime runs them whenever it uploads
+the shader's constants (`upload_pres` in `lifter/runtime/d3dx_effect.c`). **Confirmed (Wine)**:
+the layout follows Wine's `dlls/d3dx9_36/preshader.c`; **confirmed (data)**: every program in the
+game's 34 effects parses and uses only handled opcodes.
+
+A preshader is a token stream (`0x46580200` ... `0x0000FFFF`) of comment blocks:
+
+- `CTAB`: the constant table of the inputs (parameters, by name, mapped to input registers).
+- `CLIT`: a count, then that many doubles (the literals).
+- `FXLC`: an instruction count, then the instructions. Each starts with a code DWORD
+  (opcode in bits 20 to 30, bit 31 set when the first input is a scalar, component count in
+  bits 0 to 15), then the input count, then one operand per input and the output operand.
+  An operand is `{relative flag, table, offset}`; a relative operand also carries an index
+  table and offset. Tables: 1 literals, 2 inputs, 4 outputs (the shader's float constants),
+  7 temporaries.
+
+`tests/runtime_lifecycle_test.c` runs a synthetic program through the interpreter.
 
 ## Runtime
 
@@ -200,8 +219,7 @@ installs its own with `SetStateManager`) or to the device. The dumped image has 
 
 ## Not decoded
 
-- The 83 real `PRES` preshaders inside the shader blobs (the constants they compute are not set).
-- Parameter default values, and the `flags` DWORD of a parameter.
+- The `flags` DWORD of a parameter.
 - The meaning of the `unknown` header count and of state `index` 256.
 - Resource `usage` 2, sampler arrays, and string or shader parameter objects: none occur in the
   game.

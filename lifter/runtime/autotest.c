@@ -38,8 +38,9 @@
 extern void sw_request_dump(long frame);
 extern void win32_post_char(uint32_t ch);
 
-int g_script_key = -1;                  /* read by DirectInput GetDeviceState (com.c) */
-int g_script_key2 = -1, g_script_key3 = -1;   /* more keys held with it (key=200+205) */
+/* Read by DirectInput GetDeviceState (com.c) on the game's input thread. */
+_Atomic int g_script_key = -1;
+_Atomic int g_script_key2 = -1, g_script_key3 = -1;   /* more keys held with it (key=200+205) */
 
 enum { S_WAIT, S_FLOW, S_KEY, S_TEXT, S_FRAMES, S_DUMP, S_DIALOG, S_TAP };
 typedef struct { int op; long a, b, b2, b3; char s[64]; } Step;
@@ -56,8 +57,13 @@ static const char *top_package(void) {
     for (uint32_t i = 0; i < cnt && i < 64 && node && mem_is_committed(node + 0x24); i++) {
         if (MR32(node + 0x20)) {
             uint32_t p = MR32(node + 0x0c);
-            if (!p || !mem_is_committed(p)) return "";
-            snprintf(name, sizeof name, "%s", (const char *)g_mem + p);
+            /* copy at most 63 bytes, checking each page before reading it */
+            size_t n = 0;
+            while (n < sizeof name - 1 && p + n >= p && mem_is_committed(p + (uint32_t)n) && g_mem[p + n]) {
+                name[n] = (char)g_mem[p + n];
+                n++;
+            }
+            name[n] = 0;
             return name;
         }
         node = MR32(node + 4);
@@ -99,7 +105,8 @@ static void parse(void) {
         else if (!strcmp(tok, "dialog"))        { s->op = S_DIALOG; s->a = val ? atol(val) : 3000; }
         else { fprintf(stderr, "script: unknown step '%s', ignored\n", tok); continue; }
         if (s->op == S_TAP && (s->b < 0 || s->b > 263)) { fprintf(stderr, "script: bad tap step, ignored\n"); continue; }
-        if (s->op == S_KEY && (s->b < 0 || s->b > 263 || s->a <= 0)) { fprintf(stderr, "script: bad key step, ignored\n"); continue; }
+        if (s->op == S_KEY && (s->b < 0 || s->b > 263 || s->a <= 0 ||
+                               s->b2 < -1 || s->b2 > 263 || s->b3 < -1 || s->b3 > 263)) { fprintf(stderr, "script: bad key step, ignored\n"); continue; }
         g_nsteps++;
     }
     if (g_nsteps) fprintf(stderr, "script: %d steps\n", g_nsteps);
@@ -138,7 +145,7 @@ void autotest_tick(long frame) {
     case S_KEY:
         if (el == 0) { g_script_key = (int)s->b; g_script_key2 = (int)s->b2; g_script_key3 = (int)s->b3;
                        fprintf(stderr, "script: frame %ld: key %ld%s\n", frame, s->b, s->b2 >= 0 ? " (+more)" : ""); }
-        if (el == s->a) g_script_key = g_script_key2 = g_script_key3 = -1;
+        if (el >= s->a) g_script_key = g_script_key2 = g_script_key3 = -1;
         if (el >= 2 * s->a) done = 1;
         break;
     case S_TEXT:
