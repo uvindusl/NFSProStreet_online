@@ -11,6 +11,7 @@
 
 extern uint32_t com_direct3dcreate9(void);
 extern uint32_t com_directinput8create(uint32_t ppvOut);
+extern uint32_t com_directsoundcreate(uint32_t ppDS);
 
 #include <ctype.h>
 #include <dirent.h>
@@ -81,21 +82,84 @@ static uint32_t gh_guest_str(const char *s) {
 
 #define HEAP_BASE 0x20000000u
 #define HEAP_END  0x48000000u
+#define HEAP2_BASE 0x50000000u     /* second region, used once the first is full */
+#define HEAP2_END  0x6ff00000u
 #define HEAP_MAGIC 0x48454150u
 
 static uint32_t g_brk = HEAP_BASE;
+static uint32_t g_brk2 = HEAP2_BASE;
 static pthread_mutex_t g_heap_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* End of the part of the guest heap handed out so far. */
+uint32_t gh_brk(void) { return g_brk; }
+
+/* Whether `a` is in the part of either heap region handed out so far. */
+int gh_in_use(uint32_t a) {
+    return (a >= HEAP_BASE && a < g_brk) || (a >= HEAP2_BASE && a < g_brk2);
+}
+
+/* Freed blocks are kept by size and handed out again: the game allocates and
+ * frees every frame, and a bump arena alone fills its 640 MB in minutes.
+ * Blocks up to 64 KB sit in exact-size lists (index = size / 16); larger ones
+ * in one list searched for a block no more than twice the size asked for.
+ * The link is the fourth header word. */
+#define HEAP_FREE 0x46524545u
+#define GH_SMALL_MAX 0x10000u
+static uint32_t g_free_small[GH_SMALL_MAX / 16u + 1u];
+static uint32_t g_free_big;
 
 uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
     if (n == 0) n = 1;
     if (align < 16) align = 16;
-    pthread_mutex_lock(&g_heap_mtx);
-    uint32_t p = (g_brk + 15u) & ~15u;
     uint32_t total = (n + 15u) & ~15u;
-    if (p + 16u + total > HEAP_END) {
-        fprintf(stderr, "heap: exhausted at %08x (asked %u)\n", g_brk, n);
+    if (total < n) return 0;
+    pthread_mutex_lock(&g_heap_mtx);
+    uint32_t p = 0;
+    if (total <= GH_SMALL_MAX) {
+        p = g_free_small[total / 16u];
+        if (p) g_free_small[total / 16u] = MR32(p + 12);
+    } else {
+        uint32_t prev = 0, q = g_free_big;
+        for (int k = 0; q && k < 256; k++, prev = q, q = MR32(q + 12)) {
+            uint32_t t = MR32(q + 8);
+            if (t >= total && t / 2u <= total) {
+                if (prev) MR32(prev + 12) = MR32(q + 12); else g_free_big = MR32(q + 12);
+                p = q;
+                break;
+            }
+        }
+    }
+    if (p) {
+        MR32(p) = HEAP_MAGIC;
+        MR32(p + 4) = n;
+        MR32(p + 12) = 0;
+        if (zero) memset(g_mem + p + 16u, 0, n);
         pthread_mutex_unlock(&g_heap_mtx);
-        return 0;
+        return p + 16u;
+    }
+    p = (g_brk + 15u) & ~15u;
+    if (p + 16u + total > HEAP_END || p + 16u + total < p) {
+        /* A race asks for more than the first region holds (a 36.8 MB block
+         * with ~600 MB in use).  Go on in the second region, between the COM
+         * objects (COM_MAX 0x50000000, com.c) and the thread stacks
+         * (0x70000000 up). */
+        uint32_t q = (g_brk2 + 15u) & ~15u;
+        if (q + 16u + total > HEAP2_END || q + 16u + total < q) {
+            fprintf(stderr, "heap: exhausted at %08x and %08x (asked %u)\n", g_brk, g_brk2, n);
+            pthread_mutex_unlock(&g_heap_mtx);
+            return 0;
+        }
+        static int said;
+        if (!said++) fprintf(stderr, "heap: first region full at %08x, continuing at %08x\n", g_brk, q);
+        g_brk2 = q + 16u + total;
+        mem_commit(q, 16u + total);
+        MR32(q) = HEAP_MAGIC;
+        MR32(q + 4) = n;
+        MR32(q + 8) = total;
+        MR32(q + 12) = 0;
+        if (zero) memset(g_mem + q + 16u, 0, n);
+        pthread_mutex_unlock(&g_heap_mtx);
+        return q + 16u;
     }
     g_brk = p + 16u + total;
     mem_commit(p, 16u + total);
@@ -111,16 +175,23 @@ uint32_t gh_alloc(uint32_t n, int zero, uint32_t align) {
 
 void gh_free(uint32_t p) {
     if (!p) return;
-    if (MR32(p - 16u) != HEAP_MAGIC)
+    int in1 = p >= HEAP_BASE + 16u && p < HEAP_END, in2 = p >= HEAP2_BASE + 16u && p < HEAP2_END;
+    if ((!in1 && !in2) || !mem_is_committed(p - 16u) || MR32(p - 16u) != HEAP_MAGIC) {
         fprintf(stderr, "heap: free of a bad pointer %08x\n", p);
-    /* A real free list is not needed to reach the first milestone; the
-     * arena is 192 MB.  Mark the block so a double free is visible. */
-    if (MR32(p - 16u) == HEAP_MAGIC) MR32(p - 16u) = 0;
+        return;
+    }
+    pthread_mutex_lock(&g_heap_mtx);
+    uint32_t h = p - 16u, total = MR32(h + 8);
+    MR32(h) = HEAP_FREE;        /* a second free of it is reported above */
+    if (total <= GH_SMALL_MAX) { MR32(h + 12) = g_free_small[total / 16u]; g_free_small[total / 16u] = h; }
+    else { MR32(h + 12) = g_free_big; g_free_big = h; }
+    pthread_mutex_unlock(&g_heap_mtx);
 }
 
+/* Size the caller asked for (the second header word). */
 uint32_t gh_usize(uint32_t p) {
     if (!p || MR32(p - 16u) != HEAP_MAGIC) return 0;
-    return MR32(p - 4);
+    return MR32(p - 12u);
 }
 
 /* Current top of the bump arena, for fault diagnostics. */
@@ -260,6 +331,52 @@ typedef struct {
 } HEnt;
 static HEnt g_h[H_MAX];
 static pthread_mutex_t g_h_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* Critical sections.  The guest's CRITICAL_SECTION is only an address to us:
+ * each one gets a recursive host mutex the first time it is entered (many
+ * were initialised in the dumped process, so InitializeCriticalSection is not
+ * a reliable place to create it).  Without real locks the game's allocator
+ * and resource lists were corrupted by its loader threads. */
+enum { CS_MAX = 8192 };
+static struct { uint32_t va; pthread_mutex_t m; } g_cs[CS_MAX];
+static pthread_mutex_t g_cs_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t *cs_get(uint32_t va) {
+    pthread_mutex_t *r = NULL;
+    pthread_mutex_lock(&g_cs_mtx);
+    uint32_t i = (va >> 2) * 2654435761u % CS_MAX;
+    for (unsigned n = 0; n < CS_MAX; n++, i = (i + 1) % CS_MAX) {
+        if (g_cs[i].va == va) { r = &g_cs[i].m; break; }
+        if (!g_cs[i].va) {
+            pthread_mutexattr_t at;
+            pthread_mutexattr_init(&at);
+            pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
+            pthread_mutex_init(&g_cs[i].m, &at);
+            pthread_mutexattr_destroy(&at);
+            g_cs[i].va = va;
+            r = &g_cs[i].m;
+            break;
+        }
+    }
+    if (!r) {
+        /* Table full (DeleteCriticalSection keeps slots: a deleted section's
+         * memory is often initialised again at the same address).  Share one
+         * recursive lock among the rest rather than not locking at all. */
+        static pthread_mutex_t spill;
+        static int ready;
+        if (!ready) {
+            pthread_mutexattr_t at;
+            pthread_mutexattr_init(&at);
+            pthread_mutexattr_settype(&at, PTHREAD_MUTEX_RECURSIVE);
+            pthread_mutex_init(&spill, &at);
+            pthread_mutexattr_destroy(&at);
+            ready = 1;
+            fprintf(stderr, "win32: %d critical sections in use; the rest share one lock\n", CS_MAX);
+        }
+        r = &spill;
+    }
+    pthread_mutex_unlock(&g_cs_mtx);
+    return r;
+}
 
 static uint32_t h_make(int kind) {
     pthread_mutex_lock(&g_h_mtx);
@@ -417,7 +534,10 @@ static void *guest_thread(void *arg) {
 
 #define IOB_BASE 0x1B020000u
 #define IOB_STRIDE 128u
-#define FH_BASE 0x50000000u
+/* File handles sit above the user address space (0x8f0000x0), where no guest
+ * pointer can be: at 0x50000000 they overlapped the second heap region. */
+#define FH_BASE 0x8F000000u
+#define IS_FH(h) (((h) & 0xFFFFFC00u) == FH_BASE)
 
 typedef struct { int used; FILE *fp; } FileEnt;
 static FileEnt g_files[64];
@@ -427,7 +547,7 @@ static FILE *file_of(uint32_t h) {
         uint32_t i = (h - IOB_BASE) / IOB_STRIDE;
         return i == 0 ? stdin : i == 1 ? stdout : stderr;
     }
-    if ((h & 0xF0000000u) != FH_BASE) return 0;
+    if (!IS_FH(h)) return 0;
     uint32_t i = (h >> 4) & 0x3F;
     return g_files[i].used ? g_files[i].fp : 0;
 }
@@ -445,19 +565,30 @@ static const char *g_gamedir = "game";
 static char g_pathbuf[4][4096];
 static int g_pathi;
 
+/* Bounded string building without snprintf("%s"), which gcc's
+ * -Wformat-truncation flags under STRICT=1.  Output is cut to fit and always
+ * NUL-terminated. */
+static size_t path_put(char *dest, size_t dest_sz, size_t at, const char *src) {
+    size_t len = strlen(src);
+    if (at >= dest_sz) return at;
+    if (len > dest_sz - 1 - at) len = dest_sz - 1 - at;
+    memcpy(dest + at, src, len);
+    dest[at + len] = 0;
+    return at + len;
+}
+
 static void path_join(char *dest, size_t dest_sz, const char *base, const char *comp) {
     if (!dest || dest_sz == 0) return;
-    const char *safe_comp = comp ? comp : "";
-    if (!base || !*base) {
-        snprintf(dest, dest_sz, "%s", safe_comp);
-        return;
-    }
-    snprintf(dest, dest_sz, "%s/%s", base, safe_comp);
+    dest[0] = 0;
+    size_t at = 0;
+    if (base && *base) { at = path_put(dest, dest_sz, at, base); at = path_put(dest, dest_sz, at, "/"); }
+    path_put(dest, dest_sz, at, comp ? comp : "");
 }
 
 static void path_copy(char *dest, size_t dest_sz, const char *src) {
     if (!dest || dest_sz == 0) return;
-    snprintf(dest, dest_sz, "%s", src ? src : "");
+    dest[0] = 0;
+    path_put(dest, dest_sz, 0, src ? src : "");
 }
 
 static void resolve_case(char *path) {
@@ -957,6 +1088,114 @@ static int wm_push(uint32_t m, uint32_t wp, uint32_t lp) {
     return ok;
 }
 
+/* autotest.c types through this */
+void win32_post_char(uint32_t ch) { wm_push(0x0102u, ch, 1u); }
+
+/* Scripted typing for unattended runs: PROSTREET_TEXT="9000:PLAYER" posts one
+ * WM_CHAR per character, every 4 frames from frame 9000 (the frontend's text
+ * boxes take characters from the window procedure, FEKeyboardInput::NotifyChar).
+ * Several entries are separated by commas.  Called once per Present. */
+void win32_text_tick(unsigned long frame) {
+    static struct { unsigned long frame; char text[64]; } ent[8];
+    static int n = -1;
+    if (n < 0) {
+        n = 0;
+        const char *e = getenv("PROSTREET_TEXT");
+        while (e && *e && n < 8) {
+            char *end;
+            ent[n].frame = strtoul(e, &end, 10);
+            const char *c0 = strchr(e, ',');
+            if (*end != ':' || end == e) {          /* skip a bad entry, keep the rest */
+                fprintf(stderr, "win32: PROSTREET_TEXT: skipping bad entry at \"%.16s\"\n", e);
+                e = c0 ? c0 + 1 : "";
+                continue;
+            }
+            const char *t = end + 1, *c = strchr(t, ',');
+            size_t len = c ? (size_t)(c - t) : strlen(t);
+            if (len >= sizeof ent[n].text) len = sizeof ent[n].text - 1;
+            memcpy(ent[n].text, t, len); ent[n].text[len] = 0;
+            n++;
+            e = c ? c + 1 : "";
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        if (frame < ent[i].frame || (frame - ent[i].frame) % 4) continue;
+        unsigned long k = (frame - ent[i].frame) / 4;
+        if (k < strlen(ent[i].text)) wm_push(0x0102u, (uint8_t)ent[i].text[k], 1u);   /* WM_CHAR */
+    }
+}
+
+/* _findfirst64i32 / _findnext64i32 / _findclose.  struct _finddata64i32_t:
+ * attrib +0, time_create +8, time_access +16, time_write +24 (int64),
+ * size +32, name[260] +36.  Matching is case-insensitive; "*.*" matches
+ * every name, as on Windows. */
+#include <fnmatch.h>
+#define FIND_MAX 16
+static struct { DIR *d; char dir[1024]; char pat[260]; } g_find[FIND_MAX];
+static pthread_mutex_t g_find_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static int find_fill(int h, uint32_t out) {
+    struct dirent *de;
+    while ((de = readdir(g_find[h].d)) != NULL) {
+        if (fnmatch(g_find[h].pat, de->d_name, FNM_CASEFOLD) != 0) continue;
+        char full[1400];
+        snprintf(full, sizeof full, "%s/%s", g_find[h].dir, de->d_name);
+        struct stat st;
+        if (stat(full, &st) != 0) continue;
+        if (out && mem_is_committed(out)) {
+            mem_commit(out, 296);
+            memset(g_mem + out, 0, 296);
+            MR32(out + 0) = S_ISDIR(st.st_mode) ? 0x10u : 0x20u;     /* _A_SUBDIR / _A_ARCH */
+            uint64_t t = (uint64_t)st.st_mtime;
+            for (int k = 0; k < 3; k++) { MR32(out + 8 + 8 * k) = (uint32_t)t; MR32(out + 12 + 8 * k) = (uint32_t)(t >> 32); }
+            MR32(out + 32) = S_ISDIR(st.st_mode) ? 0u : (uint32_t)st.st_size;
+            snprintf((char *)(g_mem + out + 36), 260, "%s", de->d_name);
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static uint32_t find_first(const char *spec, uint32_t out) {
+    const char *sl = NULL;
+    for (const char *q = spec; *q; q++) if (*q == '\\' || *q == '/') sl = q;
+    char dir[1024], pat[260];
+    if (sl) { snprintf(dir, sizeof dir, "%.*s", (int)(sl - spec), spec); snprintf(pat, sizeof pat, "%s", sl + 1); }
+    else    { snprintf(dir, sizeof dir, "."); snprintf(pat, sizeof pat, "%s", spec); }
+    if (!strcmp(pat, "*.*")) snprintf(pat, sizeof pat, "*");
+    const char *hd = sl ? xp(dir) : g_gamedir;
+    pthread_mutex_lock(&g_find_mtx);
+    int h = -1;
+    for (int i = 0; i < FIND_MAX; i++) if (!g_find[i].d) { h = i; break; }
+    uint32_t r = 0xFFFFFFFFu;
+    if (h >= 0 && (g_find[h].d = opendir(hd)) != NULL) {
+        snprintf(g_find[h].dir, sizeof g_find[h].dir, "%s", hd);
+        snprintf(g_find[h].pat, sizeof g_find[h].pat, "%s", pat);
+        if (find_fill(h, out)) r = (uint32_t)h + 1;           /* handles 1..FIND_MAX */
+        else { closedir(g_find[h].d); g_find[h].d = NULL; }
+    }
+    pthread_mutex_unlock(&g_find_mtx);
+    return r;
+}
+
+static uint32_t find_next(uint32_t handle, uint32_t out) {
+    int h = (int)handle - 1;
+    if (h < 0 || h >= FIND_MAX) return 0xFFFFFFFFu;
+    pthread_mutex_lock(&g_find_mtx);
+    uint32_t r = (g_find[h].d && find_fill(h, out)) ? 0u : 0xFFFFFFFFu;
+    pthread_mutex_unlock(&g_find_mtx);
+    return r;
+}
+
+static uint32_t find_close(uint32_t handle) {
+    int h = (int)handle - 1;
+    if (h < 0 || h >= FIND_MAX) return 0xFFFFFFFFu;
+    pthread_mutex_lock(&g_find_mtx);
+    if (g_find[h].d) { closedir(g_find[h].d); g_find[h].d = NULL; }
+    pthread_mutex_unlock(&g_find_mtx);
+    return 0;
+}
+
 static int wm_match_filter(uint32_t msg, uint32_t min_msg, uint32_t max_msg) {
     if (min_msg == 0 && max_msg == 0) return 1;
     if (max_msg == 0) return msg >= min_msg;
@@ -1034,11 +1273,28 @@ int win32_call(CPU *c, uint32_t idx) {
     const char *n = e->name;
 
     POP32(c->eip);                 /* the caller's return address */
+    const uint32_t ret_eip = c->eip;
     g_calls[idx]++;
     if (g_trace && g_trace_n < 20000) {
         fprintf(stderr, "  [%5u] %-14s %-40s ret=%08x a0=%08x a1=%08x\n",
                 ++g_trace_n, e->dll, n, c->eip,
                 A(0), A(1));
+    }
+
+    /* PROSTREET_WATCH_VAL: a block operation that covers the watched word is
+     * reported before it runs (see rt_watch_check in dispatch.c). */
+    {
+        static uint32_t wva; static int wread;
+        if (!wread) { const char *v = getenv("PROSTREET_WATCH_VAL"); wva = v ? (uint32_t)strtoul(v, NULL, 16) : 0; wread = 1; }
+        if (wva && (!strncmp(n, "mem", 3) || str_eq(n, "ReadFile") || str_eq(n, "fread"))) {
+            uint32_t dst = str_eq(n, "ReadFile") ? A(1) : A(0);
+            uint32_t len = str_eq(n, "fread") ? A(1) * A(2) : A(2);
+            if (wva >= dst && wva - dst < len) {
+                fprintf(stderr, "\n[watch] %s(dst=%08x, a1=%08x, len=%08x) covers %08x, ret=%08x esp=%08x\n",
+                        n, dst, A(1), len, wva, c->eip, c->esp);
+                guest_backtrace(c, 8);
+            }
+        }
     }
 
     uint32_t r = 0;
@@ -1347,7 +1603,7 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "fclose")) {
         FILE *fp = file_of(A(0));
         if (fp && fp != stdin && fp != stdout && fp != stderr) fclose(fp);
-        if ((A(0) & 0xF0000000u) == FH_BASE) g_files[(A(0) >> 4) & 0x3F].used = 0;
+        if (IS_FH(A(0))) g_files[(A(0) >> 4) & 0x3F].used = 0;
         r = 0;
     } else if (str_eq(n, "fread")) {
         FILE *fp = file_of(A(3));
@@ -1372,14 +1628,19 @@ int win32_call(CPU *c, uint32_t idx) {
         r = (uint32_t)remove(xp(gs(A(0))));
     } else if (str_eq(n, "rename")) {
         r = (uint32_t)rename(xp(gs(A(0))), xp(gs(A(1))));
-    } else if (str_eq(n, "_open")) {
+    } else if (str_eq(n, "_open") || str_eq(n, "?_open@@YAHPBDHH@Z")) {
+        /* the C++ overload _open(const char *, int, int) is the same call;
+         * the mode is Windows' _S_IREAD/_S_IWRITE (0x100/0x80), not Unix bits */
         uint32_t f = A(1);
         int flags = (f & 3u) == 0 ? O_RDONLY : (f & 3u) == 1 ? O_WRONLY : O_RDWR;
         if (f & 0x0008u) flags |= O_APPEND;
         if (f & 0x0100u) flags |= O_CREAT;
         if (f & 0x0200u) flags |= O_TRUNC;
         if (f & 0x0400u) flags |= O_EXCL;
-        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, (mode_t)A(2));
+        /* _S_IWRITE (0x80) makes a writable file, else read-only; the
+         * process umask applies, as it does to fopen's files */
+        mode_t mode = (flags & O_CREAT) && !(A(2) & 0x80u) ? 0444 : 0666;
+        r = (uint32_t)open(xp(gs(A(0))), flags | O_BINARY, mode);
     } else if (str_eq(n, "_sopen")) {
         uint32_t f = A(1);
         int flags = (f & 3u) == 0 ? O_RDONLY : (f & 3u) == 1 ? O_WRONLY : O_RDWR;
@@ -1409,11 +1670,27 @@ int win32_call(CPU *c, uint32_t idx) {
         char *p = getcwd((char *)(g_mem + A(0)), (size_t)A(1));
         r = p ? A(0) : 0;
     } else if (str_eq(n, "_fullpath")) {
-        const char *p = xp(gs(A(0)));
-        char *rp = realpath(p, 0);
-        snprintf((char *)(g_mem + A(1)), (size_t)A(2), "%s", rp ? rp : p);
-        free(rp);
-        r = A(1);
+        /* char *_fullpath(char *absPath, const char *relPath, size_t max):
+         * absPath is the output.  The result stays a guest (Windows) path:
+         * a relative one gets "C:" + the working directory in front, which
+         * xp() maps back to the same host file.  absPath NULL (malloc'd
+         * result) is not supported. */
+        const char *rel = gs(A(1));
+        char out[1024];
+        if ((isalpha((unsigned char)rel[0]) && rel[1] == ':') || rel[0] == '\\' || rel[0] == '/') {
+            snprintf(out, sizeof out, "%s", rel);
+        } else {
+            char cwd[512];
+            if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "/");
+            snprintf(out, sizeof out, "C:%s\\%s", cwd, rel);
+        }
+        for (char *q = out; *q; q++) if (*q == '/') *q = '\\';
+        if (A(0) && strlen(out) < A(2)) {
+            snprintf((char *)(g_mem + A(0)), (size_t)A(2), "%s", out);
+            r = A(0);
+        } else {
+            r = 0;
+        }
     } else if (str_eq(n, "_getdrive")) {
         r = 3;   /* C: */
     } else if (str_eq(n, "_getdiskfree")) {
@@ -1445,6 +1722,9 @@ int win32_call(CPU *c, uint32_t idx) {
         fprintf(stderr, "win32: %s('%s' -> '%s') = 0x%08x (fd=%d, errno=%d)\n",
                 n, path ? path : "", resolved ? resolved : "", r, fd, errno);
     } else if (str_eq(n, "ReadFile")) {
+        if (getenv("PROSTREET_READTRACE"))
+            fprintf(stderr, "  [ReadFile] h=%08x buf=%08x n=%08x ovl=%08x ret=%08x esp=%08x\n",
+                    A(0), A(1), A(2), A(4), c->eip, c->esp);
         r = (uint32_t)read((int)(A(0) - 0x20000u), g_mem + A(1), A(2));
         if (A(3)) MR32(A(3)) = r;
     } else if (str_eq(n, "WriteFile")) {
@@ -1452,6 +1732,16 @@ int win32_call(CPU *c, uint32_t idx) {
         if (A(3)) MR32(A(3)) = r;
     } else if (str_eq(n, "SetFilePointer")) {
         r = (uint32_t)lseek((int)(A(0) - 0x20000u), (off_t)(int32_t)A(1), (int)A(3));
+    } else if (str_eq(n, "SetFilePointerEx")) {
+        /* (hFile, LARGE_INTEGER liDistanceToMove, PLARGE_INTEGER lpNewFilePointer, dwMoveMethod):
+         * the 64-bit distance is passed by value, so this takes five stack slots. */
+        int64_t dist = (int64_t)(((uint64_t)A(2) << 32) | A(1));
+        off_t pos = lseek((int)(A(0) - 0x20000u), (off_t)dist, (int)A(4));
+        if (pos >= 0 && A(3) && mem_is_committed(A(3))) {
+            MR32(A(3)) = (uint32_t)pos;
+            MR32(A(3) + 4) = (uint32_t)((uint64_t)pos >> 32);
+        }
+        r = (pos >= 0);
     } else if (str_eq(n, "GetFileSize")) {
         off_t cur = lseek((int)(A(0) - 0x20000u), 0, SEEK_CUR);
         off_t end = lseek((int)(A(0) - 0x20000u), 0, SEEK_END);
@@ -1499,11 +1789,17 @@ int win32_call(CPU *c, uint32_t idx) {
     } else if (str_eq(n, "SystemTimeToFileTime")) {
         r = 1;
     } else if (str_eq(n, "QueryPerformanceCounter")) {
-        uint64_t v = real_us();
+        /* 100 ns ticks at 10 MHz, what Windows reports and what the dumped
+         * process saw: the dump caches more than one calibration made from
+         * this frequency (the movie player kept running ten times too slowly
+         * with a 1 MHz counter after the game timer's own scale was reset). */
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        uint64_t v = (uint64_t)ts.tv_sec * 10000000ull + (uint64_t)ts.tv_nsec / 100ull;
         if (A(0)) { MR32(A(0)) = (uint32_t)v; MR32(A(0) + 4) = (uint32_t)(v >> 32); }
         r = 1;
     } else if (str_eq(n, "QueryPerformanceFrequency")) {
-        if (A(0)) { MR32(A(0)) = 1000000u; MR32(A(0) + 4) = 0; }
+        if (A(0)) { MR32(A(0)) = 10000000u; MR32(A(0) + 4) = 0; }
         r = 1;
     } else if (str_eq(n, "Sleep") || str_eq(n, "SleepEx")) {
         uint32_t ms = A(0);
@@ -1643,8 +1939,47 @@ int win32_call(CPU *c, uint32_t idx) {
         }
         r = 0;
     } else if (str_eq(n, "GetCurrentDirectoryA")) {
-        snprintf((char *)(g_mem + A(1)), A(0), "%s", g_gamedir);
-        r = (uint32_t)strlen(g_gamedir);
+        /* DWORD GetCurrentDirectoryA(DWORD nBufferLength, LPSTR lpBuffer).
+         * An absolute PROSTREET_GAMEDIR ("/home/.../Need for Speed ProStreet")
+         * is handed to the game as "C:\home\...": the game's path resolver
+         * (sub_008998f3) takes the drive of a rooted path from the current
+         * directory with strchr(cwd, ':') and copied "up to the colon" with a
+         * NULL result, overrunning its buffer.  xp() maps "C:\x" back to /x.
+         * A relative game directory ("game") stays as it is. */
+        char cwd[1024];
+        if (g_gamedir[0] == '/') {
+            snprintf(cwd, sizeof cwd, "C:%s", g_gamedir);
+            for (char *q = cwd; *q; q++) if (*q == '/') *q = '\\';
+        } else {
+            snprintf(cwd, sizeof cwd, "%s", g_gamedir);
+        }
+        size_t len = strlen(cwd);
+        if (A(1) && A(0) > len) {
+            memcpy(g_mem + A(1), cwd, len + 1);
+            r = (uint32_t)len;
+        } else {
+            r = (uint32_t)len + 1;          /* buffer too small: size needed */
+        }
+    } else if (str_eq(n, "SHGetFolderPathA")) {
+        /* (hwnd, csidl, token, flags, path[MAX_PATH]).  The game asks for
+         * CSIDL_PERSONAL | CSIDL_FLAG_CREATE (0x8005) to find its save folder;
+         * every folder maps to "savedata" in the working directory (beside
+         * the game directory), so saves never land in the game's own files.
+         * Absolute ("C:" + cwd, which xp() maps back): EA's path canonicaliser
+         * (sub_0089f1e7) mangles a relative "game\\..\\savedata" into
+         * an unterminated "game/" and overruns the caller's buffer. */
+        char dir[512], cwd[400];
+        if (!getcwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, "/tmp");
+        snprintf(dir, sizeof dir, "C:%s\\savedata", cwd);
+        for (char *q = dir; *q; q++) if (*q == '/') *q = '\\';
+        size_t dl = strlen(dir);
+        if (dl >= 260) {
+            r = 0x80004005u;                /* E_FAIL: does not fit MAX_PATH */
+        } else {
+            if (A(4)) memcpy(g_mem + A(4), dir, dl + 1);
+            mkdir(xp(dir), 0755);
+            r = 0;                          /* S_OK */
+        }
     } else if (str_eq(n, "GetSystemDirectoryA")) {
         snprintf((char *)(g_mem + A(0)), A(1), "C:\\WINDOWS\\SYSTEM32");
         r = 19;
@@ -1780,6 +2115,22 @@ int win32_call(CPU *c, uint32_t idx) {
                 r = 0x102u;
             }
             pthread_mutex_unlock(&h->m);
+        } else if (h->kind == HK_MUTEX) {
+            /* owner in th, recursion depth in count */
+            pthread_t self = pthread_self();
+            pthread_mutex_lock(&h->m);
+            #define MTX_FREE (h->count <= 0 || pthread_equal(h->th, self))
+            if (ms == 0xFFFFFFFFu) { while (!MTX_FREE) pthread_cond_wait(&h->cv, &h->m); }
+            else if (ms != 0) {
+                struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+                ts.tv_sec += ms / 1000; ts.tv_nsec += (long)(ms % 1000) * 1000000L;
+                if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+                while (!MTX_FREE) { if (pthread_cond_timedwait(&h->cv, &h->m, &ts) == ETIMEDOUT) break; }
+            }
+            if (MTX_FREE) { h->th = self; h->count = h->count <= 0 ? 1 : h->count + 1; r = 0; }
+            else r = 0x102u;
+            #undef MTX_FREE
+            pthread_mutex_unlock(&h->m);
         } else {
             r = 0;
         }
@@ -1797,8 +2148,19 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 1;
     } else if (str_eq(n, "CreateMutexA") || str_eq(n, "CreateMutexW")) {
         r = h_make(HK_MUTEX);
+        HEnt *h = h_get(r);
+        if (h && A(1)) { h->th = pthread_self(); h->count = 1; }   /* bInitialOwner */
     } else if (str_eq(n, "ReleaseMutex")) {
-        r = 1;
+        HEnt *h = h_get(A(0));
+        r = 0;
+        if (h && h->kind == HK_MUTEX) {
+            pthread_mutex_lock(&h->m);
+            if (h->count > 0 && pthread_equal(h->th, pthread_self())) {
+                if (--h->count == 0) pthread_cond_broadcast(&h->cv);
+                r = 1;
+            }
+            pthread_mutex_unlock(&h->m);
+        }
     } else if (str_eq(n, "CreateSemaphoreA")) {
         r = h_make(HK_SEM);
         HEnt *h = h_get(r);
@@ -1817,11 +2179,19 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 1;
     } else if (str_eq(n, "DuplicateHandle")) {
         r = 0;
-    } else if (str_eq(n, "InitializeCriticalSection") || str_eq(n, "DeleteCriticalSection") ||
-               str_eq(n, "EnterCriticalSection") || str_eq(n, "LeaveCriticalSection")) {
+    } else if (str_eq(n, "InitializeCriticalSection") || str_eq(n, "DeleteCriticalSection")) {
+        r = 0;
+    } else if (str_eq(n, "EnterCriticalSection")) {
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        if (m) pthread_mutex_lock(m);
+        r = 0;
+    } else if (str_eq(n, "LeaveCriticalSection")) {
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        if (m) pthread_mutex_unlock(m);     /* EPERM when not the owner: ignored */
         r = 0;
     } else if (str_eq(n, "TryEnterCriticalSection")) {
-        r = 1;
+        pthread_mutex_t *m = A(0) ? cs_get(A(0)) : NULL;
+        r = (!m || pthread_mutex_trylock(m) == 0) ? 1 : 0;
     } else if (str_eq(n, "CreateWaitableTimerA")) {
         r = h_make(HK_EVENT);
     } else if (str_eq(n, "SetWaitableTimer")) {
@@ -1884,15 +2254,22 @@ int win32_call(CPU *c, uint32_t idx) {
     /* ---- qsort / bsearch --------------------------------------------- */
     } else if (str_eq(n, "qsort")) {
         uint32_t base = A(0), cnt = A(1), sz = A(2), cmp = A(3);
-        /* simple insertion sort, stable enough for boot.  The comparator is
-         * guest code, so the scratch element must be guest memory too. */
-        uint32_t tmp = gh_alloc(sz ? sz : 1, 0, 16);
+        /* Ascending insertion sort (stable).  The comparator is guest code
+         * called as cmp(prev, elem), so the scratch element must be guest
+         * memory too; an element moves left while cmp(prev, elem) > 0. */
+        uint32_t esp0 = c->esp, tmp = 0, heap = 0;
+        if (sz <= 0x10000u) { c->esp = (c->esp - sz) & ~15u; tmp = c->esp; }   /* on the guest stack */
+        else tmp = heap = gh_alloc(sz, 0, 16);
+        if (!tmp && cnt > 1) {
+            fprintf(stderr, "win32: qsort of %u elements of %u bytes: no memory for the scratch element\n", cnt, sz);
+            guest_exit(255);
+        }
         for (uint32_t i = 1; i < cnt && tmp; i++) {
             memcpy(g_mem + tmp, g_mem + base + i * sz, sz);
             uint32_t j = i;
             while (j > 0) {
-                PUSH32(base + (j - 1) * sz);
                 PUSH32(tmp);
+                PUSH32(base + (j - 1) * sz);
                 PUSH32(SENTINEL);
                 dispatch_indirect(c, cmp);
                 while (c->eip != SENTINEL) { uint32_t t = c->eip; c->eip = 0; dispatch_indirect(c, t); }
@@ -1903,7 +2280,8 @@ int win32_call(CPU *c, uint32_t idx) {
             }
             memcpy(g_mem + base + j * sz, g_mem + tmp, sz);
         }
-        gh_free(tmp);
+        if (heap) gh_free(heap);
+        c->esp = esp0;
         r = 0;
     } else if (str_eq(n, "bsearch")) {
         uint32_t key = A(0), base = A(1), cnt = A(2), sz = A(3), cmp = A(4);
@@ -1919,16 +2297,29 @@ int win32_call(CPU *c, uint32_t idx) {
             c->esp += 8;
             int32_t v = (int32_t)c->eax;
             if (v == 0) { r = base + mid * sz; break; }
-            if (v < 0) lo = mid + 1; else hi = mid;
+            if (v < 0) hi = mid; else lo = mid + 1;     /* cmp(key, elem) < 0: key is lower */
         }
 
     /* ---- getenv / filesystem find ------------------------------------ */
     } else if (str_eq(n, "getenv")) {
         r = 0;
-    } else if (str_eq(n, "_findfirst64i32") || str_eq(n, "_findnext64i32")) {
-        r = 0xFFFFFFFFu;
-    } else if (str_eq(n, "_findclose")) {
+    } else if (str_eq(n, "_setjmp3")) {
+        /* sub_006e0650 (a protected call: the error jump chain at +0x50, Lua's
+         * luaD_rawrunprotected shape) sets a jump buffer and runs a function.
+         * The first return of setjmp is 0, which is all a run without errors
+         * needs.  A real longjmp back into lifted code is not supported. */
         r = 0;
+    } else if (str_eq(n, "longjmp")) {
+        fprintf(stderr, "\n*** longjmp(%#x, %d) from %#x: a protected call raised an error; not supported\n", A(0), (int)A(1), c->eip);
+        guest_exit(255);
+    } else if (str_eq(n, "_findfirst64i32")) {
+        /* intptr_t _findfirst64i32(const char *spec, struct _finddata64i32_t *)
+         * (the memcard code lists the save folders with it) */
+        r = find_first(gs(A(0)), A(1));
+    } else if (str_eq(n, "_findnext64i32")) {
+        r = find_next(A(0), A(1));
+    } else if (str_eq(n, "_findclose")) {
+        r = find_close(A(0));
 
     /* ---- MSVC C++ runtime -------------------------------------------- */
     } else if (str_eq(n, "__CxxThrowException")) {
@@ -2206,14 +2597,36 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     } else if (str_eq(n, "GetDesktopWindow")) {
         r = 0x00B00000u;
+    } else if (str_eq(n, "GetKeyboardLayout")) {
+        r = 0x04090409u;                                 /* US English */
+    } else if (str_eq(n, "GetKeyState")) {
+        r = 0;                                           /* no modifier or lock is down */
+    } else if (str_eq(n, "MapVirtualKeyA") || str_eq(n, "MapVirtualKeyExA")) {
+        /* The game turns each DirectInput scan code into a virtual key
+         * (sub_0089c843) before it reacts to it; without this a pressed key was
+         * dropped.  Type 1 = scan code to virtual key, US layout, set 1. */
+        static const uint8_t vk[0x59] = {
+            0, 0x1b, '1','2','3','4','5','6','7','8','9','0', 0xbd, 0xbb, 0x08, 0x09,
+            'Q','W','E','R','T','Y','U','I','O','P', 0xdb, 0xdd, 0x0d, 0x11, 'A','S',
+            'D','F','G','H','J','K','L', 0xba, 0xde, 0xc0, 0x10, 0xdc, 'Z','X','C','V',
+            'B','N','M', 0xbc, 0xbe, 0xbf, 0x10, 0x6a, 0x12, 0x20, 0x14, 0x70, 0x71, 0x72, 0x73, 0x74,
+            0x75, 0x76, 0x77, 0x78, 0x79, 0x90, 0x91, 0x24, 0x26, 0x21, 0x6d, 0x25, 0x0c, 0x27, 0x6b, 0x23,
+            0x28, 0x22, 0x2d, 0x2e, 0, 0, 0, 0x7a, 0x7b };
+        uint32_t code = A(0) & 0xffu;
+        r = (A(1) == 1 || A(1) == 3) && code < sizeof vk ? vk[code] : 0;
     } else if (str_eq(n, "GetActiveWindow") || str_eq(n, "GetForegroundWindow")) {
         r = g_hwnd ? g_hwnd : 0x00B00001u;
     } else if (str_eq(n, "Direct3DCreate9")) {
         r = com_direct3dcreate9();
     } else if (str_eq(n, "DirectInput8Create")) {
-        uint32_t ppvOut = A(2);
+        /* (hinst, dwVersion, riidltf, ppvOut, punkOuter): the interface goes to
+         * the fourth argument, not into the IID that the third points at. */
+        uint32_t ppvOut = A(3);
         r = com_directinput8create(ppvOut);
         /* Fall through to finish label */
+    } else if (str_eq(e->dll, "DSOUND.dll") && str_eq(n, "#1")) {
+        /* DirectSoundCreate(lpcGuid, ppDS, pUnkOuter) */
+        r = com_directsoundcreate(A(1));
     } else if (strncmp(n, "D3DX", 4) == 0) {
         if (str_eq(n, "D3DXMatrixMultiply")) {
             uint32_t a0 = A(0), a1 = A(1), a2 = A(2);
@@ -2260,15 +2673,29 @@ int win32_call(CPU *c, uint32_t idx) {
             extern uint32_t com_create_effect(void);
             uint32_t ppEffect = A(7);
             uint32_t ppErrorBuffer = A(8);
+            extern int fx_create(uint32_t obj, uint32_t name_va, uint32_t pool);
             uint32_t eff = com_create_effect();
-            if (ppEffect && mem_is_committed(ppEffect)) {
-                MR32(ppEffect) = eff;
+            /* No COM memory: E_OUTOFMEMORY, out-params untouched.  An effect
+             * whose resource is missing or unreadable is still handed out, as
+             * an inert object (its handles resolve to nothing and its calls
+             * fail): the game does not check this call and calls through a
+             * null effect (checked with a header image without .rsrc).
+             * PROSTREET_FX_STRICT=1 returns E_FAIL instead, like D3DX. */
+            int ok = eff && fx_create(eff, A(2), A(6));
+            int strict = getenv("PROSTREET_FX_STRICT") && *getenv("PROSTREET_FX_STRICT") == '1';
+            if (ppErrorBuffer && mem_is_committed(ppErrorBuffer)) MR32(ppErrorBuffer) = 0;
+            if (!eff) {
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA: out of COM memory\n");
+                r = 0x8007000Eu; /* E_OUTOFMEMORY */
+            } else if (!ok && strict) {
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA: effect not read, E_FAIL\n");
+                r = 0x80004005u; /* E_FAIL */
+            } else {
+                if (ppEffect && mem_is_committed(ppEffect)) MR32(ppEffect) = eff;
+                fprintf(stderr, "win32: D3DXCreateEffectFromResourceA %s effect 0x%08x -> [0x%08x]\n",
+                        ok ? "created" : "inert (not read)", eff, ppEffect);
+                r = 0; /* D3D_OK */
             }
-            if (ppErrorBuffer && mem_is_committed(ppErrorBuffer)) {
-                MR32(ppErrorBuffer) = 0;
-            }
-            fprintf(stderr, "win32: D3DXCreateEffectFromResourceA created effect 0x%08x -> [0x%08x]\n", eff, ppEffect);
-            r = 0; /* D3D_OK */
         } else if (str_eq(n, "D3DXCreateEffectPool")) {
             uint32_t ppPool = A(0);
             if (ppPool && mem_is_committed(ppPool)) MR32(ppPool) = 0x6e000000;
@@ -2319,6 +2746,14 @@ int win32_call(CPU *c, uint32_t idx) {
         r = 0;
     }
 
+    /* A stand-in that calls back into guest code (qsort's and bsearch's
+     * comparators) leaves eip at the callback's SENTINEL return.  The lifted
+     * caller decides where to go next from eip: a call written as
+     * "push RET; push [IAT]; ret" (sub_00460ac0 calls qsort that way) runs its
+     * continuation only when eip is RET, so it skipped it and leaked the
+     * frame (a /GS failure in sub_004556e0 while a race loaded). */
+    if (c->eip == SENTINEL) c->eip = ret_eip;
+    { extern void rt_watch_check(CPU *, const char *, uint32_t); rt_watch_check(c, n, c->eip); }
     c->eax = r;
     c->esp += 4u * (uint32_t)e->nargs;
     return 1;

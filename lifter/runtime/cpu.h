@@ -98,6 +98,12 @@ uint8_t *guest_memchk(uint32_t a, unsigned n, const char *fn);
 #define MRF64(a) (*(double   *)(g_mem + (uint32_t)(a)))
 #endif
 
+/* One process-wide lock around the guest's LOCK-prefixed instructions (see
+ * lift.py).  A spinlock: the guarded sequences are a few host instructions. */
+extern volatile unsigned char g_guest_lock;
+#define GUEST_LOCK()   do { while (__atomic_test_and_set(&g_guest_lock, __ATOMIC_ACQUIRE)) { } } while (0)
+#define GUEST_UNLOCK() __atomic_clear(&g_guest_lock, __ATOMIC_RELEASE)
+
 enum { R_EAX=0,R_ECX,R_EDX,R_EBX,R_ESP,R_EBP,R_ESI,R_EDI };
 
 /* An indirect or out-of-range jmp at the end of a lifted function: control
@@ -129,6 +135,11 @@ static inline guest_fn_t dispatch_fast(uint32_t a){
     uint32_t o = a - DISPATCH_TEXT_BASE;
     return o < DISPATCH_TEXT_SIZE ? g_dtab[o] : (guest_fn_t)0;
 }
+/* CALLCHK=1 lifts: a callee that came back to an address other than the one
+ * the call pushed jumped through a computed `ret` (SecuROM).  Handled in
+ * dispatch.c: callchk_slow(). */
+void callchk_slow(struct CPU *c, uint32_t expect);
+#define CALLCHK(c_, r_) do { if (__builtin_expect((c_)->eip != (r_), 0)) callchk_slow((c_), (r_)); } while (0)
 #define DISPATCH_CALL(c_, t_) do { uint32_t _dc = (uint32_t)(t_); guest_fn_t _df = dispatch_fast(_dc); \
     if (_df) _df(c_); else dispatch_indirect((c_), _dc); } while (0)
 #ifdef __wasm__
@@ -586,6 +597,7 @@ static inline double f80_load(const uint8_t *p){
 }
 #define WCHK(ip) watch_check(ip)
 void guest_hook(CPU *c, uint32_t ip);
+int  guest_hook_ret(CPU *c, uint32_t ip);   /* HOOKRET sites: nonzero = the hook returned from the function */
 
 void mem_init(void);
 void mem_commit(uint32_t addr, uint32_t size);
@@ -596,6 +608,27 @@ extern uint8_t g_cbits[1u<<16];   /* bitmap of the committed 16 KB pages */
 static inline int mem_is_committed(uint32_t addr){
     uint32_t pg = (addr) >> 14;
     return (g_cbits[pg>>3] >> (pg&7)) & 1;
+}
+/* Whether all of [a, a+n) is committed guest memory (n = 0 is always true). */
+static inline int mem_range_committed(uint32_t a, uint64_t n){
+    if (!n) return 1;
+    if (!a || (uint64_t)a + n > 0x100000000ull) return 0;
+    for (uint64_t p = a & ~0x3fffull; p < (uint64_t)a + n; p += 0x4000)
+        if (!mem_is_committed((uint32_t)p)) return 0;
+    return 1;
+}
+/* Copy the guest C string at va into buf (at most cap-1 bytes, NUL ended),
+ * checking each page before reading it.  NULL when va is 0 or uncommitted. */
+static inline const char *guest_cstr(uint32_t va, char *buf, uint32_t cap){
+    extern uint8_t *g_mem;
+    if (!va || !cap || !mem_is_committed(va)) return 0;
+    uint32_t i = 0;
+    for (; i + 1 < cap; i++) {
+        uint32_t a = va + i;
+        if (a < va || ((a & 0x3fffu) == 0 && !mem_is_committed(a))) break;
+        if (!(buf[i] = (char)g_mem[a])) return buf;
+    }
+    buf[i] = 0; return buf;
 }
 
 #endif

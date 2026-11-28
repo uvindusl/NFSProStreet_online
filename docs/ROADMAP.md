@@ -23,7 +23,7 @@ Window message pump ✅  PeekMessageA/GetMessageA/DispatchMessageA host pump imp
 D3D9/D3DX lifecycle ✅  BeginScene/EndScene/Present & ID3DXEffect pass lifecycle implemented
 
 Current front 🟡  sub_004c91d0 / secondary asset processing
-Game systems ❌  audio, input, menus, racing — not started
+Game systems 🟡  input, menus, a race run natively (scripted); audio not started
 ```
 
 ---

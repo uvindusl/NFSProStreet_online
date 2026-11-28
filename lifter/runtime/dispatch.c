@@ -3,6 +3,7 @@
  * IMP_MAGIC + index and are routed to win32_call(). */
 #include "rt.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -382,113 +383,37 @@ static void sub_019f7630_impl(CPU *restrict c) {
     POP32(c->eip);
 }
 
-/* Object descriptor node constructor (0x004591a0) */
-void sub_004591a0(CPU *restrict c) {
-    uint32_t ret_addr;
-    POP32(ret_addr);
-    uint32_t esi = MR32(c->esp);      /* arg0: node pointer */
-    uint32_t ebp = MR32(c->esp + 4);  /* arg1: template_obj */
-    uint32_t ebx = MR32(c->esp + 8);  /* arg2: flags / count */
-    c->esp += 12;
+/* Object descriptor node constructor (0x004591a0): lifted now that the boot
+ * seeds reach it (a SecuROM computed call targets it); the hand-written
+ * stand-in is gone. */
+void sub_004591a0(CPU *restrict c);
 
-    /* Initialize inner circular list at node + 0x20 */
-    MR32(esi + 0x20) = esi + 0x20;
-    MR32(esi + 0x24) = esi + 0x20;
+/* The chunk-loader continuations 0x01a00674 / 0x01a006b8 / 0x01a006ec had
+ * hand-written stand-ins here.  They are lifted now (push/jmp and computed
+ * calls are seeded), and the stand-ins did not resume the continuation after
+ * `push 0x1a006b8; jmp 0x4592e0`, which left sub_01a00510's frame on the stack
+ * and faulted in sub_00458f80 while loading GLOBALA.BUN. */
 
-    char s1_buf[256] = {0};
-    char s2_buf[256] = {0};
-    if (ebp && mem_is_committed(ebp)) {
-        if (mem_is_committed(ebp + 0x04)) {
-            strncpy(s1_buf, (const char*)(g_mem + ebp + 0x04), sizeof(s1_buf) - 1);
-        }
-        if (mem_is_committed(ebp + 0x20)) {
-            strncpy(s2_buf, (const char*)(g_mem + ebp + 0x20), sizeof(s2_buf) - 1);
-        }
-    }
-
-    uint32_t len1 = (uint32_t)strlen(s1_buf) + 1;
-    uint32_t p1 = gh_alloc(len1, 0, 1);
-    memcpy(g_mem + p1, s1_buf, len1);
-    MR32(esi + 0x08) = p1;
-
-    uint32_t len2 = (uint32_t)strlen(s2_buf) + 1;
-    uint32_t p2 = gh_alloc(len2, 0, 1);
-    memcpy(g_mem + p2, s2_buf, len2);
-    MR32(esi + 0x0c) = p2;
-
-    /* djb2 string hash: hash = hash * 33 + c */
-    uint32_t hash = 0xffffffff;
-    const uint8_t *s = (const uint8_t*)s1_buf;
-    while (*s) {
-        hash = (hash << 5) + hash + *s++;
-    }
-    MR32(esi + 0x10) = hash;
-    MR32(esi + 0x14) = ebp;
-    MR32(esi + 0x18) = ebx;
-    MR32(esi + 0x1c) = 0;
-
-    /* Insert into doubly-linked circular list at sentinel 0x00a9e18c */
-    uint32_t tail = MR32(0x00a9e190);
-    MR32(tail) = esi;
-    MR32(0x00a9e190) = esi;
-    MR32(esi + 0x04) = tail;
-    MR32(esi + 0x00) = 0x00a9e18c;
-
-    c->eax = esi;
-    c->eip = ret_addr;
-}
-
-static void sub_01a006ec_impl(CPU *restrict c) {
-    c->eax = c->edi;
-    c->ecx = MR32(c->esp + 0x1c);
-    MR32(c->fs_base) = c->ecx;
-    POP32(c->ecx);
-    POP32(c->edi);
-    POP32(c->esi);
-    POP32(c->ebp);
-    POP32(c->ebx);
-    c->esp += 0x14;
-    POP32(c->eip);
-}
-
-static void sub_01a006b8_impl(CPU *restrict c) {
-    c->eax = 0x1a6f89c - 0x4c00;
-    if (mem_is_committed(c->eax) && --MR32(c->eax) == 0) {
-        dispatch_indirect(c, 0x00556a04);
-        return;
-    }
-    c->eax = MR32(c->esp + 0x14);
-    if (c->eax != 0) {
-        c->esi = MR32(c->edi + 0x70);
-        PUSH32(0x1a006ecu);
-        dispatch_indirect(c, 0x004596c0);
-        return;
-    }
-    sub_01a006ec_impl(c);
-}
-
-static void sub_01a00674_impl(CPU *restrict c) {
-    uint32_t a = 0x1a61c0e;
-    if (mem_is_committed(a + 0x9088)) {
-        MR32(a + 0x9088)--;
-        if (MR32(a + 0x9088) == 0) {
-            dispatch_indirect(c, 0x00546832);
-            return;
-        }
-    }
-    c->ecx = MR32(c->esp + 0x2c);
-    MR32(c->esp + 0x24) = 0xffffffff;
-    MR32(c->edi + 0x70) = c->eax;
-    if (c->ecx == 0) {
-        sub_01a006b8_impl(c);
-        return;
-    }
-    PUSH32(c->ebx);
-    PUSH32(c->ebp);
-    PUSH32(c->eax);
-    c->eax = c->ecx;
-    PUSH32(0x1a006b8u);
-    dispatch_indirect(c, 0x004592e0);
+/* sub_005310e0 is called indirectly via DISPATCH_CALL from sub_0052eda0
+ * during attribute registration (vtable method index 2; __thiscall with this
+ * in ecx and 5 stack arguments = 20 bytes). In the original binary, it
+ * looks up attribute keys in collection 0xab0e60. For already-present or leaf
+ * nodes, it completes cleanly with `ret 20` (popping the 20 bytes of arguments).
+ * This safe implementation performs that clean return without attempting to
+ * construct uninitialized child subtrees, allowing the engine to complete
+ * loading GLOBAL\ATTRIBUTES.BIN (all 251 attributes) and proceed to subsequent
+ * subsystems. */
+/* PROSTREET_ATTR_GUARD=1: main's workaround for the attribute-tree NULL child
+ * crash at 0x00531064 (stand-ins for sub_00530f60 and 0x00531064, a guard in
+ * the sub_005310e0 stand-in, and a hook on dispatches returning to
+ * 0x00531064).  Off by default: this branch loads the attribute database for
+ * real (dumped state repaired, lifted functions ahead of stand-ins), and with
+ * the hook on, its child-pointer rewrite corrupts live nodes (allocator fault
+ * in sub_00435390 at frame 1). */
+static int attr_guard_on(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("PROSTREET_ATTR_GUARD"); on = e && *e == '1'; }
+    return on;
 }
 
 /* Attribute tree NIL sentinel & child guard for sub_00530f60 / 0x00531064.
@@ -544,17 +469,8 @@ static void sub_00531064_impl(CPU *restrict c) {
     c->eax = (c->edx && mem_is_committed(c->edx + 0x22)) ? (uint32_t)MR16(c->edx + 0x22) : 0;
 }
 
-/* sub_005310e0 is called indirectly via DISPATCH_CALL from sub_0052eda0
- * during attribute registration (vtable method index 2; __thiscall with this
- * in ecx and 5 stack arguments = 20 bytes). In the original binary, it
- * looks up attribute keys in collection 0xab0e60. For already-present or leaf
- * nodes, it completes cleanly with `ret 20` (popping the 20 bytes of arguments).
- * This safe implementation performs that clean return without attempting to
- * construct uninitialized child subtrees, allowing the engine to complete
- * loading GLOBAL\ATTRIBUTES.BIN (all 251 attributes) and proceed to subsequent
- * subsystems. */
 static void sub_005310e0_impl(CPU *restrict c) {
-    guard_attr_tree_node(c);
+    if (attr_guard_on()) guard_attr_tree_node(c);
     POP32(c->eip);
     c->esp += 20u;
     c->eax = 0;
@@ -612,22 +528,48 @@ void dispatch_init(void) {
             g_dtab[a - TEXT_BASE] = (guest_fn_t)g_seh_fn_ptr[i];
     }
 
-    /* Register missing return/continuation points */
-    g_dtab[0x004040f0 - TEXT_BASE] = sub_004040f0;
-    g_dtab[0x0042857c - TEXT_BASE] = sub_0042857c_impl;
-    g_dtab[0x00431060 - TEXT_BASE] = sub_019f7630_impl;
-    g_dtab[0x0044bfd0 - TEXT_BASE] = sub_0044bfd0;
-    g_dtab[0x004add90 - TEXT_BASE] = sub_004add90;
-    g_dtab[0x004c8280 - TEXT_BASE] = sub_004c8280;
-    g_dtab[0x004c9730 - TEXT_BASE] = sub_004c9730;
-    g_dtab[0x00542700 - TEXT_BASE] = sub_00542700;
-    g_dtab[0x004591a0 - TEXT_BASE] = sub_004591a0;
-    g_dtab[0x004ca7d0 - TEXT_BASE] = sub_004040f0;
-    g_dtab[0x005688e0 - TEXT_BASE] = sub_005688e0_impl;
-    g_dtab[0x00909b00 - TEXT_BASE] = sub_00909b00;
-    g_dtab[0x00530f60 - TEXT_BASE] = sub_00530f60_impl;
-    g_dtab[0x00531064 - TEXT_BASE] = sub_00531064_impl;
-    g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
+    /* Hand-written functions for addresses that had no usable lift.  They
+     * date from before the lifter ran SecuROM's obfuscated calls; every one of
+     * these addresses is lifted now, and the lifted function wins.  A stand-in
+     * that stays in front hides the real behaviour: the one for 0x005310e0
+     * returned 0 without registering the attribute class, which left the
+     * attribute database empty (the audio system then sized its tables to 0
+     * and faulted in sub_00500d00).  The table is kept as a fallback for a
+     * build whose lift lacks an address, and to compare behaviour:
+     *   PROSTREET_FORCE_OVERRIDE="0xADDR[,0xADDR...]" or "all"
+     * puts the hand-written function back in front. */
+    {
+        const char *force = getenv("PROSTREET_FORCE_OVERRIDE");
+        static const struct { uint32_t addr; guest_fn_t fn; } ovr[] = {
+            { 0x004040f0, sub_004040f0 },
+            { 0x0042857c, sub_0042857c_impl },
+            { 0x00431060, sub_019f7630_impl },
+            { 0x0044bfd0, sub_0044bfd0 },
+            { 0x004add90, sub_004add90 },
+            { 0x004c8280, sub_004c8280 },
+            { 0x004c9730, sub_004c9730 },
+            { 0x00542700, sub_00542700 },
+            { 0x004591a0, sub_004591a0 },
+            { 0x004ca7d0, sub_004040f0 },
+            { 0x005688e0, sub_005688e0_impl },
+            { 0x00909b00, sub_00909b00 },
+            { 0x005310e0, sub_005310e0_impl },
+        };
+        for (unsigned i = 0; i < sizeof ovr / sizeof *ovr; i++) {
+            guest_fn_t *slot = &g_dtab[ovr[i].addr - TEXT_BASE];
+            char key[16];
+            snprintf(key, sizeof key, "0x%x", ovr[i].addr);
+            if (*slot && !(force && (!strcmp(force, "all") || strstr(force, key)))) continue;
+            if (*slot) fprintf(stderr, "dispatch: PROSTREET_FORCE_OVERRIDE replaces the lifted %s\n", key);
+            *slot = ovr[i].fn;
+        }
+    }
+    if (attr_guard_on()) {
+        g_dtab[0x00530f60 - TEXT_BASE] = sub_00530f60_impl;
+        g_dtab[0x00531064 - TEXT_BASE] = sub_00531064_impl;
+        g_dtab[0x005310e0 - TEXT_BASE] = sub_005310e0_impl;
+        fprintf(stderr, "dispatch: PROSTREET_ATTR_GUARD: attribute-tree stand-ins installed\n");
+    }
 
     com_init();
 }
@@ -1267,9 +1209,10 @@ static void sub_019fee40_impl(CPU *restrict c) {
     c->eip = ret_addr;
 }
 
-/* Lifted function at a diabolus-section address, or NULL.  The table is sorted
- * by dispatch_init(). */
-static guest_fn_t diabolus_lookup(uint32_t a) {
+/* Hand-written stand-in for a diabolus-section address, or NULL.  These were
+ * written when the lift of SecuROM's relocated functions dropped their
+ * obfuscated calls; they follow the old lift's stack conventions. */
+static guest_fn_t diabolus_impl(uint32_t a) {
     if (a == 0x019f4580) return sub_019f4580_impl;
     if (a == 0x019fee40) return sub_019fee40_impl;
     if (a == 0x016be884) return sub_016be884_impl;
@@ -1287,18 +1230,43 @@ static guest_fn_t diabolus_lookup(uint32_t a) {
     if (a == 0x01a01120) return sub_01a01120_impl;
     if (a == 0x01a0114c) return sub_01a0114c_impl;
     if (a == 0x019f7630) return sub_019f7630_impl;
-    if (a == 0x01a19100) return sub_00435140;
-    if (a == 0x01a00674) return sub_01a00674_impl;
-    if (a == 0x01a006b8) return sub_01a006b8_impl;
-    if (a == 0x01a006ec) return sub_01a006ec_impl;
+    return NULL;
+}
+
+/* PROSTREET_FORCE_OVERRIDE="0xADDR[,...]" or "all": prefer the hand-written
+ * function at these addresses even when a lifted one exists. */
+static int override_forced(uint32_t a) {
+    static const char *force;
+    static int read;
+    if (!read) { force = getenv("PROSTREET_FORCE_OVERRIDE"); read = 1; }
+    if (!force) return 0;
+    char key[16];
+    snprintf(key, sizeof key, "0x%x", a);
+    return !strcmp(force, "all") || strstr(force, key) != NULL;
+}
+
+/* Function to run for a diabolus-section address, or NULL.  The lifted
+ * function wins; a stand-in is only for an address the lift lacks.  (The one
+ * for 0x01a01120, the pool constructor, popped 0x14 bytes too many once its
+ * callees were lifted properly: the pool behind sub_004313f0 was never
+ * stored and its allocations returned null.)  The table is sorted by
+ * dispatch_init(). */
+static guest_fn_t diabolus_lookup(uint32_t a) {
+    guest_fn_t lifted = NULL;
     uint32_t lo = 0, hi = g_diab_count;
     while (lo < hi) {
         uint32_t m = (lo + hi) / 2;
         if (g_diab_addr[m] < a) lo = m + 1;
         else if (g_diab_addr[m] > a) hi = m;
-        else return g_diab_fn[m];
+        else { lifted = g_diab_fn[m]; break; }
     }
-    return NULL;
+    guest_fn_t impl = diabolus_impl(a);
+    /* 0x016ba000 is the exception: SecuROM's table dispatcher ends in
+     * `popal; jmp [esp-0x28]`, reading a slot below the stack pointer that the
+     * lift does not keep, so its lifted form jumps to 0.  Bypassing each of
+     * the other 16 stand-ins, one at a time, leaves the boot unchanged. */
+    if (impl && (!lifted || a == 0x016ba000u || override_forced(a))) return impl;
+    return lifted;
 }
 
 static uint32_t nearest_fn(uint32_t a) {
@@ -1337,6 +1305,46 @@ void guest_backtrace(CPU *c, int maxn) {
     }
 }
 
+/* Code the game loads into its heap at run time and calls: EA's AEMS audio
+ * modules ("AEMS Module Instance", sub_00900e50 / sub_008b9360) are
+ * relocatable x86 carried in the sound data, so nothing lifted exists for
+ * them.  Until they are lifted or interpreted, a call into the heap returns
+ * at once with eax = 0 (the module does nothing: no sound from it), reported
+ * once per target.  PROSTREET_FOREIGN=stop keeps the old stop.  Targets in
+ * the image or in uncommitted memory still stop: those mean a lost state. */
+static int foreign_code_call(CPU *c, uint32_t addr) {
+    extern int gh_in_use(uint32_t a);
+    static int mode = -1;
+    if (mode < 0) { const char *e = getenv("PROSTREET_FOREIGN"); mode = !(e && !strcmp(e, "stop")); }
+    if (!mode) return 0;
+    uint32_t ret = mem_is_committed(c->esp) ? MR32(c->esp) : 0;
+    /* EA's audio engine (code 0x008a0000-0x00920000) also calls the skipped
+     * modules' entries from its voice tables (sub_008b2cb0); with no module
+     * code those entries are garbage.  Skip such a call too: it only touches
+     * sound, and anything else still stops below. */
+    int audio = ret >= 0x008a0000u && ret < 0x00920000u && !mem_is_committed(addr);
+    if (!audio && (!gh_in_use(addr) || !mem_is_committed(addr))) return 0;
+    /* The callee's convention is unknown: the return is taken as cdecl (the
+     * caller pops any arguments), which is what the module entry points
+     * reached so far use. */
+    enum { MAXT = 64 };
+    static uint32_t seen[MAXT]; static unsigned nseen; static unsigned long calls;
+    static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mtx);
+    calls++;
+    unsigned i;
+    for (i = 0; i < nseen && seen[i] != addr; i++) ;
+    if (i == nseen && nseen < MAXT) {
+        seen[nseen++] = addr;
+        fprintf(stderr, "foreign code: call to %s at %#x from %#x skipped (eax=0); %u targets, %lu calls so far\n",
+                audio ? "an unbuilt audio module entry" : "heap code", addr, ret, nseen, calls);
+    }
+    pthread_mutex_unlock(&mtx);
+    c->eax = 0;
+    POP32(c->eip);
+    return 1;
+}
+
 static void unresolved(CPU *c, uint32_t addr) {
     g_stat_indirect_miss++;
     uint32_t ret = mem_is_committed(c->esp) ? MR32(c->esp) : 0;
@@ -1371,15 +1379,48 @@ static void unresolved(CPU *c, uint32_t addr) {
     exit(3);
 }
 
+/* PROSTREET_WATCH_VAL=0xADDR: report every change of the 32-bit guest word
+ * at ADDR.  It is checked at each indirect call and after each import and COM
+ * method, and the report names the checkpoint that first saw the new value,
+ * with that thread's guest stack.  The page-protection watch
+ * (PROSTREET_WATCH_W) only works for memory committed before boot and stops at
+ * the first write; a debugger's hardware watchpoint misses writes made by the
+ * kernel (read) and by a memset that zeroes whole cache lines.  This one is
+ * coarse but works for any address and keeps going. */
+void rt_watch_check(CPU *c, const char *what, uint32_t detail) {
+    static int state;                   /* 0 unread, 1 off, 2 on */
+    static uint32_t va, last;
+    static int have;
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    if (state == 1) return;
+    pthread_mutex_lock(&lock);
+    if (state == 0) {
+        const char *v = getenv("PROSTREET_WATCH_VAL");
+        va = v ? (uint32_t)strtoul(v, NULL, 16) : 0;
+        state = va ? 2 : 1;
+    }
+    if (state == 2 && mem_is_committed(va)) {
+        uint32_t now = MR32(va);
+        if (!have || now != last) {
+            fprintf(stderr, "\n[watch] [%08x] %08x -> %08x, first seen at %s %08x (thread esp=%08x)\n",
+                    va, have ? last : 0, now, what, detail, c->esp);
+            guest_backtrace(c, 6);
+            last = now; have = 1;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+}
+
+static int foreign_code_call(CPU *c, uint32_t addr);
 void dispatch_indirect(CPU *c, uint32_t addr) {
+    rt_watch_check(c, "dispatch of", addr);
     static int s_main_entry_logged = 0;
     if (!s_main_entry_logged && (addr == 0x016beea2u || addr == 0x004afee0u)) {
         s_main_entry_logged = 1;
         fprintf(stderr, "main-entry: WinMain entered (entry 0x004afee0, indirect 0x%08x)\n", addr);
     }
-    if (mem_is_committed(c->esp) && MR32(c->esp) == 0x00531064u) {
+    if (attr_guard_on() && mem_is_committed(c->esp) && MR32(c->esp) == 0x00531064u)
         guard_attr_tree_node(c);
-    }
     if (addr >= COM_MAGIC) {
         if (addr >= IMP_MAGIC) {
             uint32_t idx = IMP_INDEX(addr);
@@ -1387,7 +1428,11 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
                 rtlog(RT_IMPORT, idx, mem_is_committed(c->esp) ? MR32(c->esp) : 0, 0);
                 if (win32_call(c, idx) < 0) g_guest_exited = 1;
             } else {
-                fprintf(stderr, "\n*** bad import index %u (addr %08x)\n", idx, addr);
+                /* garbage in the import range: an unbuilt audio module entry
+                 * is skipped like the others (foreign_code_call) */
+                if (foreign_code_call(c, addr)) return;
+                fprintf(stderr, "\n*** bad import index %u (addr %08x, return %08x)\n", idx, addr,
+                        mem_is_committed(c->esp) ? MR32(c->esp) : 0);
                 exit(3);
             }
             return;
@@ -1440,6 +1485,18 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
      * slips through, emulate the return the call site expects instead of
      * stopping, so the caller's own ret does not pop a stale address. */
     if (addr >= 0x10ea000 && addr < 0x1aa8000) {
+        /* A lifted function wins over the hand-written continuations below.
+         * Those date from before the lifter ran SecuROM's push/jmp and
+         * computed calls; once the real continuation is lifted, a stand-in
+         * that adjusts esp by hand unbalances the caller (0x01a00a8b and
+         * 0x01a00b6c left 0x2c bytes behind sub_004c5e00, which tripped the
+         * stack-cookie check in sub_005daeb0). */
+        guest_fn_t lifted = diabolus_lookup(addr);
+        if (lifted) {
+            g_stat_indirect_ok++;
+            lifted(c);
+            return;
+        }
         if (addr == 0x019ff0edu) {
             if (MR32(0x00a9dee8u) == 1) {
                 uint32_t eax = MR32(0x00a9def0u);
@@ -1472,12 +1529,6 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
             { uint32_t _t; POP32(_t); c->ebx = _t; }
             POP32(c->eip);
             c->esp += 0x14u;
-            return;
-        }
-        guest_fn_t f = diabolus_lookup(addr);
-        if (f) {
-            g_stat_indirect_ok++;
-            f(c);
             return;
         }
         g_stat_indirect_ok++;
@@ -1550,14 +1601,7 @@ void dispatch_indirect(CPU *c, uint32_t addr) {
         c->esp += 4u;
         return;
     }
-    if (addr == 0x00531064u) {
-        sub_00531064_impl(c);
-        return;
-    }
-    if (addr == 0x00530f60u) {
-        sub_00530f60_impl(c);
-        return;
-    }
+    if (foreign_code_call(c, addr)) return;
     unresolved(c, addr);
 }
 
@@ -1671,5 +1715,33 @@ void rtlog_dump(int n) {
             fprintf(stderr, "      event %u 0x%08x\n", e->kind, e->a);
             break;
         }
+    }
+}
+
+
+/* A lifted call site whose callee returned to somewhere other than the
+ * address pushed.  PROSTREET_CALLCHK=log reports the first few; =run also
+ * keeps running the guest from c->eip until it reaches the expected return
+ * address (the callee did a computed jump through its own `ret`). */
+void callchk_slow(CPU *c, uint32_t expect) {
+    static int mode = -1, shown = 0;
+    if (mode < 0) {
+        /* default "run": follow the callee's continuation until the expected
+         * return address comes back (SecuROM gadgets that end in a tail jump,
+         * e.g. 0x19f8404 -> 0x10f8d70 returning to 0x19f8410, hand the
+         * continuation back in eip); "log" only reports, "off" ignores it */
+        const char *e = getenv("PROSTREET_CALLCHK");
+        mode = !e || !strcmp(e, "run") ? 2 : !strcmp(e, "off") ? 0 : 1;
+    }
+    if (!mode) return;
+    if (shown < 40) {
+        shown++;
+        fprintf(stderr, "callchk: expected %08x, callee returned to %08x (esp=%08x)\n", expect, c->eip, c->esp);
+    }
+    if (mode == 2) {
+        int guard = 0;
+        while (c->eip != expect && !g_guest_exited && guard++ < 1000 &&
+               c->eip >= 0x401000u && c->eip < 0x1aa8000u)   /* .text and SecuROM's diabolus section */
+            dispatch_indirect(c, c->eip);
     }
 }

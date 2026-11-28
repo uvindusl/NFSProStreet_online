@@ -135,9 +135,13 @@ def _p1_key():
         st = os.stat(EXE); h.update(f"{st.st_size}:{int(st.st_mtime)}".encode())
     except OSError:
         h.update(b'-')
+    # every switch that changes what the lifter discovers, and the lifter itself
     h.update(f"|jtswitch={os.environ.get('JTSWITCH','')}|seeds={SEEDS}"
-             f"|sections={os.environ.get('LIFT_SECTIONS','')}".encode())
-    for p in (SEEDS, RELOCS):
+             f"|sections={os.environ.get('LIFT_SECTIONS','')}"
+             f"|pushret={os.environ.get('PUSHRET','')}|callchk={os.environ.get('CALLCHK','')}"
+             f"|hooks={os.environ.get('HOOKS','')}|hookret={os.environ.get('HOOKRET','')}".encode())
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (SEEDS, RELOCS, os.path.join(here, 'lift.py'), os.path.abspath(__file__)):
         h.update(b'|')
         try: h.update(open(p, 'rb').read())
         except OSError: h.update(b'-')
@@ -191,6 +195,8 @@ def _init(inl=None):
     watch = os.environ.get('WATCH','') == '1'
     cov   = os.environ.get('COVERAGE','') == '1'
     _L = Lifter(EXE, comments=os.environ.get('COMMENTS','') == '1', trap=True, hooks=hooks, watch=watch)
+    # HOOKRET sites: the hook may complete the function's return (native runtime only)
+    _L.hookret = set(int(x,16) for x in os.environ.get('HOOKRET','').replace('0x','').split(',') if x.strip())
     _L.cov = cov
 
 def _inlprobe(a):

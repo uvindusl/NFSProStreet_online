@@ -12,6 +12,10 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <ucontext.h>
+#include <execinfo.h>
+#if defined(__aarch64__)
+#include <asm/sigcontext.h>
+#endif
 #include <unistd.h>
 
 #ifndef MAP_NORESERVE
@@ -19,6 +23,7 @@
 #endif
 
 uint8_t *g_mem = 0;
+volatile unsigned char g_guest_lock = 0;
 uint8_t g_cbits[1u << 16] = {0};   /* one bit per 16 KB page, 64 KB bitmap for 4 GB */
 __thread CPU *g_cur_cpu = 0;       /* thread-local: see rt.h */
 
@@ -225,6 +230,22 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
     if (uc) {
 #if defined(__x86_64__) && defined(REG_ERR)
         is_write = (uc->uc_mcontext.gregs[REG_ERR] & 0x2) != 0;
+#elif defined(__aarch64__)
+        /* ESR_EL1 data-abort syndrome: WnR (bit 6) is set for a write */
+        {
+            char *lo = (char *)uc->uc_mcontext.__reserved, *hi = lo + sizeof(uc->uc_mcontext.__reserved);
+            struct _aarch64_ctx *h = (struct _aarch64_ctx *)lo;
+            /* each record's header must fit before it is read, and its size
+             * must keep the next one inside the reserved area */
+            while ((char *)h + sizeof *h <= hi && h->magic && h->size >= sizeof *h &&
+                   h->size <= (size_t)(hi - (char *)h)) {
+                if (h->magic == ESR_MAGIC && h->size >= sizeof(struct esr_context)) {
+                    is_write = (((struct esr_context *)h)->esr >> 6) & 1;
+                    break;
+                }
+                h = (struct _aarch64_ctx *)((char *)h + h->size);
+            }
+        }
 #endif
     }
     if (g_wwatch_armed && in_guest && is_write &&
@@ -242,6 +263,12 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
             fprintf(stderr, "    esp=%08lx ebp=%08lx esi=%08lx di=%08lx\n",
                     (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                     (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
+        }
+#elif defined(__aarch64__)
+        if (uc) {
+            fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
+                    (void *)uc->uc_mcontext.pc,
+                    guest_fn_from_host((void *)uc->uc_mcontext.pc));
         }
 #endif
         if (g_cur_cpu) {
@@ -282,6 +309,18 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
                 (unsigned long)g[REG_RSP], (unsigned long)g[REG_RBP],
                 (unsigned long)g[REG_RSI], (unsigned long)g[REG_RDI]);
     }
+#elif defined(__aarch64__)
+    if (uc) {
+        fprintf(stderr, "    host PC %p  (guest function 0x%08x)\n",
+                (void *)uc->uc_mcontext.pc,
+                guest_fn_from_host((void *)uc->uc_mcontext.pc));
+        /* host call chain, innermost first; resolve with `nm -n out/prostreet` */
+        void *bt[32];
+        int n = backtrace(bt, 32);
+        fprintf(stderr, "    host backtrace:");
+        for (int i = 0; i < n; i++) fprintf(stderr, " %p", bt[i]);
+        fprintf(stderr, "\n");
+    }
 #endif
     if (g_cur_cpu) {
         CPU *c = g_cur_cpu;
@@ -304,6 +343,11 @@ static void fault_report(int sig, siginfo_t *si, void *uc_) {
 }
 
 void mem_fault_handler_install(void) {
+#if defined(__aarch64__)
+    /* backtrace() loads its unwinder (and takes the loader lock) on first
+     * use; do that here, so the fatal report only walks the stack. */
+    { void *bt[2]; (void)backtrace(bt, 2); }
+#endif
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = fault_report;
@@ -343,7 +387,13 @@ void watch_report_change(uint32_t culprit_ip, uint32_t oldv, uint32_t newv) {
 #define HOOK_SITE(va) (va##u)
 #endif
 
+int hdfont_hook(CPU *c, uint32_t ip);
+int gamefix_hook(CPU *c, uint32_t ip);
+
 void guest_hook(CPU *c, uint32_t ip) {
-    (void)c;
-    (void)ip;
+    if (hdfont_hook(c, ip)) return;
+    if (gamefix_hook(c, ip)) return;
 }
+
+int gamefix_hook_ret(CPU *c, uint32_t ip);
+int guest_hook_ret(CPU *c, uint32_t ip) { return gamefix_hook_ret(c, ip); }

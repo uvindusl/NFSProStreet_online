@@ -86,6 +86,7 @@ void sub_0052c6f0(CPU *c) { (void)c; }
 void sub_004e1480(CPU *c) { (void)c; }
 void sub_0052d5c0(CPU *c) { (void)c; }
 void sub_00435140(CPU *c) { (void)c; }
+void sub_004591a0(CPU *c) { (void)c; }
 
 /* Include actual runtime sources */
 #include "mem.c"
@@ -93,6 +94,11 @@ void sub_00435140(CPU *c) { (void)c; }
 #include "d3dx9_hle.c"
 #include "win32.c"
 #include "dispatch.c"
+#include "hdfont.c"
+#include "gamefixes.c"
+#include "d3dx_effect.c"
+#include "swrast.c"
+#include "autotest.c"
 
 /* Mock wndproc to verify DispatchMessageA callback */
 static uint32_t s_mock_wndproc_called = 0;
@@ -116,6 +122,8 @@ int main(void) {
 
     /* 1. Initialize guest memory, dispatch table, and COM bridge */
     mem_init();
+    /* Suite 3 checks the attribute-tree workaround, which is opt-in */
+    setenv("PROSTREET_ATTR_GUARD", "1", 1);
     dispatch_init();
     mem_commit(TEST_IAT_BASE, 0x1000u);
     win32_init();
@@ -392,6 +400,89 @@ int main(void) {
     uint32_t patched_child2 = MR32(node_addr2 + 4);
     ASSERT_TRUE(patched_child2 != 0u, "dispatch_indirect stack-return guard patched NULL child");
     ASSERT_TRUE(mem_is_committed(patched_child2 + 0x22u), "Stack-return patched sentinel safe at offset 0x22");
+
+    /* -------------------------------------------------------------- */
+    /* Test Suite 3b: Effect preshader (PRES) interpreter             */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 3b: Effect preshader (PRES) interpreter ---\n");
+    {
+        /* inputs c0 = (1,2,3), c1 = (4,5,6); literals 2.0, 0.5 */
+        static uint32_t code[] = {
+            0x20500001u, 2, 0,2,0,  0,1,0,  0,4,0,              /* mul   o0.x   = i0.x * lit0          */
+            0x20400003u, 2, 0,2,4,  0,2,0,  0,7,0,              /* add   t0.xyz = i1.xyz + i0.xyz      */
+            0x50000003u, 2, 0,7,0,  0,2,4,  0,4,4,              /* dot   o1.x   = dot3(t0, i1)         */
+            0xa0500003u, 2, 0,1,1,  0,2,0,  0,4,8,              /* mul   o2.xyz = lit1 (scalar) * i0   */
+            0x30000001u, 3, 0,2,0,  0,1,0,  0,1,1,  0,4,12,     /* cmp   o3.x   = i0.x >= 0 ? lit0 : lit1 */
+            0x10100001u, 1, 1,1,1,2,0,      0,4,16,             /* neg   o4.x   = -i[round(lit1)*4].x  */
+        };
+        static float lit[] = { 2.0f, 0.5f };
+        FxPres pr = { 0 };
+        pr.lit = lit; pr.nlit = 2; pr.code = code; pr.ncode = (int)(sizeof code / 4); pr.nins = 6;
+        PresRegs *r = calloc(1, sizeof *r);
+        r->in[0] = 1; r->in[1] = 2; r->in[2] = 3; r->in[4] = 4; r->in[5] = 5; r->in[6] = 6;
+        ASSERT_TRUE(pres_run(&pr, r), "preshader program runs");
+        ASSERT_TRUE(fabsf(r->out[0] - 2.0f) < 1e-6f, "mul: o0.x = 1 * 2");
+        ASSERT_TRUE(fabsf(r->out[4] - 109.0f) < 1e-4f, "add then dot3: (5,7,9).(4,5,6) = 109");
+        ASSERT_TRUE(fabsf(r->out[8] - 0.5f) < 1e-6f && fabsf(r->out[9] - 1.0f) < 1e-6f && fabsf(r->out[10] - 1.5f) < 1e-6f,
+                    "scalar mul: 0.5 * (1,2,3)");
+        ASSERT_TRUE(fabsf(r->out[12] - 2.0f) < 1e-6f, "cmp: 1 >= 0 picks the first literal");
+        ASSERT_TRUE(fabsf(r->out[16] + 1.0f) < 1e-6f, "relative addressing: index lit1 (0.5) rounds to register 0");
+        ASSERT_TRUE(r->written[0] && r->written[1] && r->written[2] && r->written[3] && r->written[4] && !r->written[5],
+                    "written registers are o0-o4");
+        free(r);
+    }
+
+    /* -------------------------------------------------------------- */
+    /* Test Suite 3c: bounds and parsing in the runtime stand-ins     */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 3c: bounds and parsing ---\n");
+    {
+        char d[8];
+        path_join(d, sizeof d, "abcdef", "ghij");
+        ASSERT_TRUE(!strcmp(d, "abcdef/"), "path_join cuts to fit and terminates");
+        path_copy(d, sizeof d, "0123456789");
+        ASSERT_TRUE(!strcmp(d, "0123456"), "path_copy cuts to fit and terminates");
+
+        ASSERT_EQ(com_alloc(0xfffffff8u), 0u, "com_alloc refuses a size that would wrap");
+
+        uint32_t h = gh_alloc(64, 1, 16);
+        ASSERT_TRUE(h && gh_in_use(h), "gh_in_use: a heap block is in use");
+        ASSERT_TRUE(!gh_in_use(HEAP2_BASE + 0x1000u) || g_brk2 > HEAP2_BASE + 0x1000u,
+                    "gh_in_use: heap2 beyond its mark is not");
+        gh_free(h);
+
+        uint32_t fh = file_new(stderr);
+        ASSERT_TRUE(IS_FH(fh) && file_of(fh) == stderr, "file handles resolve");
+        ASSERT_TRUE(file_of(HEAP2_BASE + 0x10u) == NULL, "a heap2 pointer is not a file handle");
+        g_files[(fh >> 4) & 0x3F].used = 0;
+
+        ASSERT_EQ((unsigned)prim_verts(4, 10), 30u, "triangle list: 3 vertices per primitive");
+        ASSERT_EQ((unsigned)prim_verts(5, 10), 12u, "triangle strip: n + 2 vertices");
+        ASSERT_EQ(decl_size(2), 12u, "FLOAT3 attribute is 12 bytes");
+        ASSERT_TRUE(!range_committed(0xfffff000u, 0x2000u), "a range past 4 GB is not committed");
+
+        {   /* guest strings stop at the first uncommitted page (0x4a000000 is
+             * between heap1 and the COM region, so nothing else uses it) */
+            char nb[64];
+            mem_commit(0x4a000000u, 0x4000u);
+            memcpy(g_mem + 0x4a003ffcu, "abcd", 4);           /* no NUL before the page ends */
+            const char *gs = guest_cstr(0x4a003ffcu, nb, sizeof nb);
+            ASSERT_TRUE(gs && !strcmp(gs, "abcd"), "guest_cstr stops at an uncommitted page");
+            memcpy(g_mem + 0x4a000000u, "0123456789", 11);
+            gs = guest_cstr(0x4a000000u, nb, 5);
+            ASSERT_TRUE(gs && !strcmp(gs, "0123"), "guest_cstr truncates to its buffer");
+            ASSERT_TRUE(guest_cstr(0x4a004000u, nb, sizeof nb) == NULL, "guest_cstr refuses an uncommitted start");
+            ASSERT_TRUE(mem_range_committed(0x4a000000u, 0x4000u) && !mem_range_committed(0x4a003000u, 0x2000u),
+                        "mem_range_committed checks every page");
+        }
+
+        setenv("PROSTREET_SCRIPT", "key=200+999:5,key=200+205:4,\n bogus,frames=3,\ntap=28:FeMainMenu.fng,", 1);
+        parse();
+        ASSERT_EQ(g_nsteps, 3, "script: a bad second key and an unknown step are dropped");
+        ASSERT_TRUE(g_step[0].op == S_KEY && g_step[0].b == 200 && g_step[0].b2 == 205 && g_step[0].a == 4,
+                    "script: key=200+205:4 holds two keys for 4 frames");
+        unsetenv("PROSTREET_SCRIPT");
+    }
 
     /* -------------------------------------------------------------- */
     /* Test Suite 4: Window Message Filtering & Routing               */

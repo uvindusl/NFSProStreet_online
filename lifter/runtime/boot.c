@@ -35,6 +35,8 @@ static void setup_teb(void) {
     MR32(PEB_BASE + 0x08) = 0x00400000u;      /* ImageBaseAddress    */
 }
 
+void null_dead_heap_pointers(void);
+
 static void *guest_main(void *arg) {
     (void)arg;
     mem_altstack_install();
@@ -50,6 +52,27 @@ static void *guest_main(void *arg) {
     /* Initialize chunk descriptor list at 0x00ab47d4 (C++ constructor sub_0095aa70) */
     c->ecx = 0x00ab47d4u;
     guest_call(c, 0x0063da30u);
+    c->esp = STACK_HI - 0x1000u;
+
+    null_dead_heap_pointers();
+
+    /* ICE camera system: its statics were just reset to the original
+     * executable's zeros (restore_original_ranges); run its static
+     * initializer again (ICEManager constructor sub_0063b500 on 0x00ab47e0,
+     * plus its atexit registration) so its element table names this run's
+     * objects. */
+    guest_call(c, 0x0095aa40u);
+    c->esp = STACK_HI - 0x1000u;
+    /* the restored range also holds the chunk descriptor list at 0x00ab47d4
+     * built above: build it again */
+    c->ecx = 0x00ab47d4u;
+    guest_call(c, 0x0063da30u);
+    c->esp = STACK_HI - 0x1000u;
+    /* the two vector-holding statics at 0x0100e0b0 / 0x0100e358 (constructors
+     * sub_004db210 / sub_004db4d0, plus their atexit registrations) */
+    guest_call(c, 0x00959670u);
+    c->esp = STACK_HI - 0x1000u;
+    guest_call(c, 0x00959690u);
     c->esp = STACK_HI - 0x1000u;
 
     fprintf(stderr, "boot: calling entry 0x%08x  esp=0x%08x  teb=0x%08x\n",
@@ -89,6 +112,568 @@ static void overlay_clean_data(const char *pe, int argc, char **argv) {
     }
     if (mem_overlay_section(clean, ".data"))
         fprintf(stderr, "boot: .data overlay from %s failed, keeping loaded .data\n", clean);
+}
+
+/* Map the PE header page of the original game executable at the image base.
+ *
+ * SecuROM's computed calls and obfuscated constants mix image bytes into their
+ * arithmetic, and some of those bytes are in the header page (for example
+ * `mov esi,[0x19ee788]; add esi,[0x400148]`, the Fastmem size class requested
+ * by sub_00421c90).  The unpacked artifact has a rebuilt header, so those
+ * values come out wrong: that size class became 0xffb3f944 instead of 1 and
+ * the game stopped with "Out of Fastmem memory".  The running process had the
+ * headers of the on-disk executable there, so take them from it:
+ *   PROSTREET_HEADER_IMAGE=<path>, else <gamedir>/nfsps.exe. */
+static void original_exe_path(char *path, size_t n) {
+    const char *h = getenv("PROSTREET_HEADER_IMAGE");
+    if (h && *h) {
+        snprintf(path, n, "%s", h);
+        return;
+    }
+    /* The DRM-free executable is usually nfsps.exe; a retail install has the
+     * SecuROM launcher nfs.exe instead. */
+    const char *d = getenv("PROSTREET_GAMEDIR");
+    if (!d || !*d) d = "game";
+    snprintf(path, n, "%s/nfsps.exe", d);
+    if (access(path, R_OK) != 0) {
+        char alt[4096];
+        snprintf(alt, sizeof alt, "%s/nfs.exe", d);
+        if (access(alt, R_OK) == 0) snprintf(path, n, "%s", alt);
+    }
+}
+
+/* The image the boot was loaded from (argv[1]), for fallbacks when the
+ * original executable lacks a section (the retail launcher has no .data and
+ * no .rsrc of the game). */
+static const char *g_dump_path = "artifacts/nfs.exe.unpacked";
+
+/* Find section `name` in the PE file at `path`: its virtual address, file
+ * offset and the bytes that are in the file (clamped to the virtual size).
+ * Returns 0 when found and the range fits in the guest address space. */
+static int pe_find_section(const char *path, const char *name, uint32_t *va, uint32_t *raw, uint32_t *size) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    uint8_t hdr[0x1000];
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    fclose(f);
+    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x78 > n ||
+        *(uint32_t *)(hdr + peoff) != 0x00004550u) return -1;
+    unsigned nsec = *(uint16_t *)(hdr + peoff + 6), optsz = *(uint16_t *)(hdr + peoff + 20);
+    uint32_t image_base = *(uint32_t *)(hdr + peoff + 24 + 28);
+    for (unsigned i = 0; i < nsec; i++) {
+        uint64_t off = (uint64_t)peoff + 24 + optsz + 40ull * i;
+        if (off + 40 > n) break;
+        const uint8_t *sh = hdr + off;
+        if (strncmp((const char *)sh, name, 8)) continue;
+        uint32_t vsz = *(uint32_t *)(sh + 8), rsz = *(uint32_t *)(sh + 16);
+        uint64_t v = (uint64_t)image_base + *(uint32_t *)(sh + 12);
+        if (rsz > vsz) rsz = vsz;
+        if (!rsz || v + rsz > 0xffff0000ull) return -1;
+        *va = (uint32_t)v; *raw = *(uint32_t *)(sh + 20); *size = rsz;
+        return 0;
+    }
+    return -1;
+}
+
+/* Map the .rsrc section of `path` if the guest has nothing there yet.
+ * Returns 0 when copied, 1 when the guest already has it, -1 otherwise. */
+static int map_rsrc_from(const char *path) {
+    uint32_t va, raw, rsz;
+    if (pe_find_section(path, ".rsrc", &va, &raw, &rsz) || rsz > 0x4000000u) return -1;
+    if (!rsz || (uint64_t)va + rsz > 0x100000000ull) return -1;
+    mem_commit(va, rsz);
+    for (uint32_t k = 0; k < 64 && k < rsz; k++)
+        if (g_mem[va + k]) return 1;                     /* already there */
+    /* read the whole section aside first: a short read or an all-zero
+     * section (a dump may carry one) leaves the guest untouched */
+    uint8_t *buf = malloc(rsz);
+    FILE *f = buf ? fopen(path, "rb") : NULL;
+    int ok = f && !fseek(f, (long)raw, SEEK_SET) && fread(buf, 1, rsz, f) == rsz;
+    if (f) fclose(f);
+    if (ok) {
+        ok = 0;
+        for (uint32_t k = 0; k < 64 && k < rsz && !ok; k++) ok = buf[k] != 0;
+    }
+    if (ok) memcpy(g_mem + va, buf, rsz);
+    free(buf);
+    if (ok) fprintf(stderr, "boot: .rsrc (%u bytes at %08x) taken from %s\n", rsz, va, path);
+    return ok ? 0 : -1;
+}
+
+static void overlay_original_headers(void) {
+    char path[4096];
+    original_exe_path(path, sizeof path);
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "boot: no original executable at %s, keeping the artifact's PE headers "
+                        "(SecuROM constants that read the header page will be wrong)\n", path);
+        return;
+    }
+    uint8_t hdr[0x1000];
+    size_t n = fread(hdr, 1, sizeof hdr, f);
+    fclose(f);
+    uint32_t peoff = n >= 0x40 ? *(uint32_t *)(hdr + 0x3c) : 0;
+    if (n < 0x200 || hdr[0] != 'M' || hdr[1] != 'Z' || (uint64_t)peoff + 0x78 > n ||
+        *(uint32_t *)(hdr + peoff) != 0x00004550u) {
+        fprintf(stderr, "boot: %s is not a PE image, keeping the artifact's PE headers\n", path);
+        return;
+    }
+    uint8_t *opt = hdr + peoff + 24;
+    uint32_t image_base = *(uint32_t *)(opt + 28);
+    uint32_t size_hdr = *(uint32_t *)(opt + 60);
+    if (image_base != 0x400000u || !mem_is_committed(image_base)) {
+        fprintf(stderr, "boot: %s has ImageBase %08x, keeping the artifact's PE headers\n", path, image_base);
+        return;
+    }
+    if (size_hdr > n) size_hdr = (uint32_t)n;
+    memcpy(g_mem + image_base, hdr, size_hdr);
+    fprintf(stderr, "boot: PE headers (%u bytes) taken from %s\n", size_hdr, path);
+
+    /* The artifact's .rsrc is all zero (the dump did not keep the resources),
+     * and the game's 34 compiled effects are RT_RCDATA resources that
+     * D3DXCreateEffectFromResourceA reads.  Map the section from the original
+     * executable when the artifact has nothing there; an executable without
+     * the game's .rsrc (the retail launcher) leaves the image's own. */
+    if (map_rsrc_from(path) < 0 && map_rsrc_from(g_dump_path) < 0)
+        fprintf(stderr, "boot: no .rsrc in %s or %s; effects will not load\n", path, g_dump_path);
+}
+
+/* The original executable's .data, kept from repair_stale_lists() until
+ * null_dead_heap_pointers() has run. */
+static uint8_t *g_orig_data;
+static uint32_t g_orig_lo, g_orig_size;
+static uint32_t g_arena_base, g_arena_used;
+
+/* Relink the list headed at `a` to the nodes that are static objects in
+ * [lo,hi).  Returns 0 if the list was intact (or empty), 1 if it is now
+ * empty, 2 if it kept static nodes. */
+static int relink_list(uint32_t a, uint32_t lo, uint32_t hi) {
+#define IN_DATA(p) ((p) >= lo && (p) + 8u <= hi)
+    enum { MAXN = 4096 };
+    static uint32_t fwd[MAXN], bwd[MAXN];
+    if (MR32(a) == a && MR32(a + 4) == a) return 0;
+    unsigned nf = 0, nb = 0;
+    uint32_t p = MR32(a);
+    while (p != a && IN_DATA(p) && nf < MAXN) { fwd[nf++] = p; p = MR32(p); }
+    if (p == a) return 0;               /* every node is in the image: the list is intact */
+    p = MR32(a + 4);
+    while (p != a && IN_DATA(p) && nb < MAXN) {
+        unsigned k = 0;
+        while (k < nf && fwd[k] != p) k++;
+        if (k < nf) break;
+        bwd[nb++] = p; p = MR32(p + 4);
+    }
+    /* head -> fwd[0..] -> bwd[nb-1..0] -> head */
+    uint32_t prev = a;
+    for (unsigned k = 0; k < nf + nb; k++) {
+        uint32_t node = k < nf ? fwd[k] : bwd[nb - 1 - (k - nf)];
+        MR32(prev) = node;
+        MR32(node + 4) = prev;
+        prev = node;
+    }
+    MR32(prev) = a;
+    MR32(a + 4) = prev;
+    return (nf + nb) ? 2 : 1;
+#undef IN_DATA
+}
+
+/* Repair the intrusive lists whose chain leaves the image.
+ *
+ * The artifact's .data is a snapshot of a running process, so a list head
+ * there can link to nodes in that process's heap, which the image does not
+ * contain.  Walking such a list reads whatever this run has at those
+ * addresses (sub_00455110 faulted on the list at 0x00a9e04c).  The original
+ * executable tells us where the list heads are: an empty head is two
+ * pointers to itself, {X, X} at X.  For each one that is not empty in the
+ * dump, keep the nodes that are static objects in .data (they were linked by
+ * static constructors, which do not run again) and drop the rest. */
+int gh_in_use(uint32_t a);
+static int g_orig_zero;   /* no original .data: g_orig_data is all zero */
+/* Whether the saved .data covers [a, a+n). */
+static int orig_covers(uint32_t a, uint32_t n) {
+    return g_orig_data && a >= g_orig_lo && (uint64_t)a + n <= (uint64_t)g_orig_lo + g_orig_size;
+}
+
+static void repair_stale_lists(void) {
+    char path[4096];
+    original_exe_path(path, sizeof path);
+    uint32_t lo = 0, size = 0, raw = 0;
+    uint8_t *orig = NULL;
+    if (!pe_find_section(path, ".data", &lo, &raw, &size)) {
+        FILE *f = fopen(path, "rb");
+        orig = malloc(size);
+        if (!f || !orig || fseek(f, (long)raw, SEEK_SET) != 0 || fread(orig, 1, size, f) != size) {
+            free(orig); orig = NULL;
+        }
+        if (f) fclose(f);
+    }
+    if (!orig) {
+        /* The retail launcher (SecuROM, sections .ROT/.IN/.HEAVEN) has no
+         * .data.  Take the bounds from the loaded image and assume the
+         * original is zero there: every word these passes touch points into
+         * the dumped heap, and an executable on disk holds no heap pointers.
+         * Ranges that would be restored are zeroed instead. */
+        uint32_t r;
+        if (pe_find_section(g_dump_path, ".data", &lo, &r, &size) &&
+            pe_find_section(path, ".data", &lo, &r, &size)) {
+            fprintf(stderr, "boot: no .data bounds in %s or %s, skipping the .data repairs\n", path, g_dump_path);
+            return;
+        }
+        orig = calloc(1, size);
+        if (!orig) return;
+        g_orig_zero = 1;
+        /* The list heads the scan below finds in nfsps.exe (an empty head is
+         * {X, X} at X) whose dumped value is not empty: without them the
+         * tree at 0x00a6aef8 keeps its dead root (sub_0090e2c0 faults). */
+        static const uint32_t heads[] = {
+            0x00a4f398, 0x00a4f3a0, 0x00a4f3a8, 0x00a55500, 0x00a610f8, 0x00a61110, 0x00a6111c, 0x00a61138,
+            0x00a61240, 0x00a63cd0, 0x00a6aeec, 0x00a6aef8, 0x00a6af14, 0x00a79b4c, 0x00a79b80, 0x00a79ba4,
+            0x00a83a60, 0x00a84960, 0x00a84968, 0x00a84970, 0x00a84990, 0x00a9deec, 0x00a9e04c, 0x00a9e05c,
+            0x00a9e08c, 0x00a9e09c, 0x00a9e0d4, 0x00a9e18c, 0x00a9e194, 0x00a9e1a4, 0x00a9e21c, 0x00a9e578 };
+        for (unsigned i = 0; i < sizeof heads / sizeof *heads; i++)
+            if (heads[i] >= lo && heads[i] + 8u <= lo + size) {
+                memcpy(orig + (heads[i] - lo), &heads[i], 4);
+                memcpy(orig + (heads[i] - lo) + 4, &heads[i], 4);
+            }
+        fprintf(stderr, "boot: %s has no .data; repairing .data against zeros\n", path);
+    }
+    if (!mem_is_committed(lo) || !mem_is_committed(lo + size - 1)) { free(orig); return; }
+    uint32_t hi = lo + size;
+    unsigned heads = 0, emptied = 0, relinked = 0, trees = 0;
+    for (uint32_t a = lo; a + 8u <= hi; a += 4) {
+        if (*(uint32_t *)(orig + (a - lo)) != a || *(uint32_t *)(orig + (a - lo) + 4) != a) continue;
+        heads++;
+        int r = relink_list(a, lo, hi);
+        if (r == 1) emptied++; else if (r == 2) relinked++;
+        /* A red-black tree anchor looks the same when empty, {right, left} =
+         * {X, X}, and is followed by the root, the colour and the node count,
+         * all zero.  If the list part had to be emptied and the root still
+         * points into the dumped heap, clear those too: inserting into the
+         * tree at 0x00a6aef8 walked its dead root (sub_0090e2c0). */
+        if (r == 1 && a + 20u <= hi && !memcmp(orig + (a - lo) + 8, "\0\0\0\0\0\0\0\0\0\0\0\0", 12)) {
+            uint32_t root = MR32(a + 8);
+            if (root >= 0x01aa8000u && root < 0x40000000u && !(root & 3u)) {
+                MR32(a + 8) = 0; MR32(a + 12) = 0; MR32(a + 16) = 0;
+                trees++;
+            }
+        }
+    }
+    g_orig_data = orig; g_orig_lo = lo; g_orig_size = size;
+    /* the arena mark as the dump left it, before any boot code allocates */
+    if (mem_is_committed(0x00abb178)) { g_arena_base = MR32(0x00abb170); g_arena_used = MR32(0x00abb178); }
+
+    /* Heads that a static constructor links to themselves are zero in the
+     * original executable, so the scan above cannot see them.  Code can: a
+     * walk loads the head and compares the result with the head's own address
+     * (`mov r,[X]; ...; cmp r,X`).  sub_0077def0 walks the one at 0x00ffad24. */
+    unsigned heads2 = 0;
+    const uint32_t text_lo = 0x00401000u, text_hi = 0x00401000u + 0x0056507bu;
+    for (uint32_t t = text_lo; t + 32u < text_hi; t++) {
+        uint32_t x, reg, n;
+        if (MR8(t) == 0xA1) { reg = 0; x = MR32(t + 1); n = 5; }
+        else if (MR8(t) == 0x8B && (MR8(t + 1) & 0xC7) == 0x05) { reg = (MR8(t + 1) >> 3) & 7; x = MR32(t + 2); n = 6; }
+        else continue;
+        if (x < lo || x + 8u > hi || (x & 3u)) continue;
+        int cmp = 0;
+        for (uint32_t k = t + n; k < t + n + 16u && !cmp; k++) {
+            cmp = (MR8(k) == 0x81 && MR8(k + 1) == 0xF8 + reg && MR32(k + 2) == x) ||
+                  (reg == 0 && MR8(k) == 0x3D && MR32(k + 1) == x);
+        }
+        if (!cmp || MR32(x) == 0 || MR32(x) == x) continue;
+        int r = relink_list(x, lo, hi);
+        if (r) { heads2++; if (r == 1) emptied++; else relinked++; }
+    }
+    /* Arrays of heads (one list per bucket or per priority) are reached
+     * through a register, so neither scan sees their members; an empty member
+     * gives the array away.  Next to a self-linked head, a pair of pointers
+     * into the dumped heap at the same 8-byte stride is another head of that
+     * array (0x00ae3448 and 0x00ae3450, beside the empty 0x00ae3460, are walked
+     * by sub_007476d0). */
+#define STALE(v) ((v) >= 0x01aa8000u && (v) < 0x40000000u && !((v) & 3u))
+    for (uint32_t a = lo + 8u; a + 16u <= hi; a += 4) {
+        if (MR32(a) != a || MR32(a + 4) != a) continue;
+        for (int dir = -8; dir <= 8; dir += 16) {
+            for (uint32_t b = a + (uint32_t)dir; b >= lo && b + 8u <= hi; b += (uint32_t)dir) {
+                if (!STALE(MR32(b)) || !STALE(MR32(b + 4))) break;
+                int r = relink_list(b, lo, hi);
+                if (!r) break;
+                heads2++; if (r == 1) emptied++; else relinked++;
+            }
+        }
+    }
+#undef STALE
+    fprintf(stderr, "boot: %u list heads in .data, %u pointed into the dumped heap: %u emptied, "
+                    "%u relinked to their static nodes; %u were tree anchors with a dead root\n",
+            heads + heads2, emptied + relinked, emptied, relinked, trees);
+}
+
+/* Drop the elements of inline pointer vectors that point into the dumped heap.
+ *
+ * The game's fixed-capacity vector is {vtable, begin, capacity, count} with
+ * `begin` pointing at the storage that follows it.  The dump has 79 of them in
+ * .data, and some still list objects of the dumped process (render-target
+ * registrations, views): sub_004c91d0 walks the one at 0x00ace440 and faulted
+ * calling through a dead object.  Nothing has been allocated yet when this
+ * runs, so a heap-range element can only be stale.  A vector is touched only
+ * if every element is a pointer (into the image, or stale); vectors of other
+ * element types are left alone. */
+static void repair_stale_vectors(void) {
+    const uint32_t rdata_lo = 0x00967000u, data_lo = 0x00a4a000u, data_hi = 0x00a4a000u + 0x005c54dcu;
+    const uint32_t image_hi = 0x01aa8000u;
+    if (!mem_is_committed(data_lo) || !mem_is_committed(data_hi - 1)) return;
+    unsigned vectors = 0, fixed = 0, dropped = 0;
+    for (uint32_t a = data_lo; a + 16u <= data_hi; a += 4) {
+        uint32_t vt = MR32(a), begin = MR32(a + 4), cap = MR32(a + 8), count = MR32(a + 12);
+        if (vt < rdata_lo || vt >= data_lo || begin != a + 16u || !cap || cap > 4096u ||
+            count > cap || begin + 4u * cap > data_hi) continue;
+        vectors++;
+        unsigned stale = 0, other = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t e = MR32(begin + 4u * i);
+            if (e >= 0x00400000u && e < image_hi) continue;
+            if (e >= image_hi && e < 0x40000000u && !(e & 3u)) stale++; else other++;
+        }
+        if (!stale || other) continue;
+        uint32_t keep = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t e = MR32(begin + 4u * i);
+            if (e < image_hi) MR32(begin + 4u * keep++) = e;
+        }
+        for (uint32_t i = keep; i < count; i++) MR32(begin + 4u * i) = 0;
+        MR32(a + 12) = keep;
+        fixed++; dropped += stale;
+    }
+    fprintf(stderr, "boot: %u inline vectors in .data, %u listed objects of the dumped heap (%u entries dropped)\n",
+            vectors, fixed, dropped);
+}
+
+static int hex_digit(int c);
+static int parse_hex_u32(const char *s, const char **end, uint32_t *out);
+
+/* Null the words of .data that are zero in the original executable and hold
+ * an address in the dumped process's heap (singletons, caches, loaded-asset
+ * pointers): that heap is not part of the image, so the game finds "already
+ * created" objects that are all zeros.
+ *
+ * Doing this for all of .data (about 6,700 words) breaks the boot before the
+ * window opens, so it is applied to ranges known to need it, plus any given in
+ *   PROSTREET_NULL_STALE="0xLO-0xHI[,0xLO-0xHI...]"   (for experiments)
+ * A pointer is kept when its target has content (boot code that builds an
+ * object at the dumped address runs before this). */
+/* Put ranges of .data back to what the original executable has there.
+ *
+ * For a static object whose whole state is left over from the dumped process
+ * (not just a pointer or two), the original bytes are the state the game's
+ * own start-up expects.  Always restored:
+ *   0x00ab15ec-0x00ab15fc and the flag byte 0x00ab286e: the handles of the
+ *   loaded language files and "the frontend file is the one loaded".  With
+ *   the dump's values sub_00595140 skipped loading <LANGUAGE>_FRONTEND.BIN
+ *   and every menu label read "Missing string";
+ *   0x00abb510: the game-flow state, 3 ("in the frontend") in the dump.  The
+ *   boot-time language load then asked for the frontend file before the
+ *   streaming manager it needs exists (sub_00746130 walked a dead object);
+ *   0x00bfbc98-0x00bfbca0 and 0x00b4d8e8: the timer calibration (sub_00430f30
+ *   keeps the scale it computed from QueryPerformanceFrequency unless asked
+ *   for a longer range than the cached one).  The dump's scale was for a
+ *   10 MHz counter and this runtime's is 1 MHz, so game time ran ten times
+ *   too slowly: the intro video showed three frames a second;
+ *   0x00b4197c and 0x00b41dac-0x00b41dc8: the sound core's "initialised"
+ *   flag, its service voice and the head of its tick list.  With the flag set
+ *   sub_008ebd80 never created the Snd9Service voice that pumps every audio
+ *   stream, so the movie's audio queue filled up and the intro video stopped
+ *   at frame 200; with the flag alone reset, the init linked its static tick
+ *   node (0x00b3cd74) into the dump's list a second time and sub_008d4e00
+ *   looped for ever;
+ *   0x00a63d38-0x00a644b8 and its init-once flag 0x00acd8fc: the object the
+ *       main loop services in sub_00704660.  With the dump's state it skipped
+ *       its set-up and called a callback of the dumped process.
+ *   0x00ab2e70-0x00ab4950: the ICE camera system's statics, rebuilt in
+ *       guest_main by rerunning their static initializer: ICEManager at
+ *       0x00ab47e0 (element table: count +4, pointers from +0x10, all
+ *       dumped-heap objects) and the per-context index records (0x168 bytes
+ *       each) from 0x00ab2e70 that sub_00635180 appends to without clearing.
+ *       With the dump's counts the appends overran a record and sub_0063a340
+ *       indexed the table with garbage when the main menu first loaded.
+ *   0x0100e0b0-0x0100e440: two statically constructed objects holding
+ *       fixed-capacity vectors (vtables 0x009f9d38 / 0x009f9e00, 0x28 and 0xc
+ *       entries) that the dump left with live entries of its heap; rebuilt in
+ *       guest_main by their static initializers.  The first race load freed
+ *       those entries through their vtables (sub_004db2b0) and faulted.
+ *   0x00ae3320-0x00ae3350: a streaming subsystem's statics (a buffer that
+ *       sub_00743400 frees, the pool sub_00743430 creates on first use, an
+ *       array and its count): all pointers into the dumped heap and arena.
+ *       The first race load freed the buffer and the allocator asserted on a
+ *       block it never handed out (sub_00436130).
+ *   0x00bfbec4-0x00bfbef0: the tables chunk handlers register (count at
+ *       0x00bfbec4, arrays 0x00bfbec8[], counts 0x00bfbed8[]; added at
+ *       0x458f0a, removed at 0x458f54) and the pair after them.  The dead-
+ *       pointer pass nulls the dumped arrays but leaves their counts, so the
+ *       race's renderer searched a NULL table (sub_00458e80).
+ * More ranges for experiments: PROSTREET_RESTORE="0xLO-0xHI[,...]". */
+static void restore_original_ranges(void) {
+    if (!g_orig_data) return;
+    char ranges[512];
+    const char *env = getenv("PROSTREET_RESTORE");
+    snprintf(ranges, sizeof ranges, "0x00a63d38-0x00a644b8,0x00acd8fc-0x00acd900,0x00ab15ec-0x00ab15fc,0x00ab286c-0x00ab2870,0x00abb510-0x00abb514,0x00bfbc98-0x00bfbca0,0x00b4d8e8-0x00b4d8ec,0x00b4197c-0x00b41980,0x00b41dac-0x00b41dc8,0x00ab2e70-0x00ab4950,0x0100e0b0-0x0100e440,0x00ae3320-0x00ae3350,0x00bfbec4-0x00bfbef0%s%s",
+             (env && *env) ? "," : "", (env && *env) ? env : "");
+    uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+    const char *p = ranges;
+    while (*p) {
+        while (*p == ' ' || *p == ',') p++;
+        uint32_t r0 = 0, r1 = 0; const char *q = p;
+        if (!parse_hex_u32(p, &q, &r0) || *q != '-' || !parse_hex_u32(q + 1, &q, &r1)) break;
+        p = q;
+        if (r0 < lo) r0 = lo;
+        if (r1 > hi) r1 = hi;
+        if (r1 <= r0) continue;
+        if (g_orig_zero) {
+            /* no original: clear what points into the dumped heap, keep the rest */
+            for (uint32_t a = (r0 + 3u) & ~3u; a + 4u <= r1; a += 4)
+                if (MR32(a) >= 0x01aa8000u && MR32(a) < 0x40000000u) MR32(a) = 0;
+        } else {
+            memcpy(g_mem + r0, g_orig_data + (r0 - lo), r1 - r0);
+        }
+        fprintf(stderr, "boot: %08x-%08x %s\n", r0, r1,
+                g_orig_zero ? "heap pointers cleared (no original .data)" : "restored from the original executable");
+    }
+}
+
+void null_dead_heap_pointers(void) {
+    restore_original_ranges();
+    /* Always treated:
+     *   0x00ab1500-0x00ab2a00  the localisation system's globals (string tables,
+     *       fonts, the loaded language file): with the dump's pointers there,
+     *       loading a language walks dead objects (sub_005b3700);
+     *   0x00abae00-0x00abb000  the attribute-database loader's globals: the dump
+     *       says the frontend database is loaded (0x00abaf3c), so sub_006d53f0
+     *       "unloads" frontend.bin/.vlt, which this run never registered, and
+     *       erases the end marker of the file tree at 0x00a61138; the next
+     *       lookup then loops forever;
+     *   0x00a59000-0x00a5a000  the static manager at 0x00a590e0 and its
+     *       neighbours: its item list still names heap nodes of the dumped
+     *       process (sub_0062c1c0 walked into a freed-memory fill pattern);
+     *   0x00b00000-0x00c00000  mostly middleware statics.  The input library
+     *       keeps lazily created singletons here (0x00b345ac, 0x00b36f78, ...):
+     *       with the dump's pointers the frontend got a device handle with no
+     *       device behind it (sub_005a97f0).  Nulling the whole megabyte (465
+     *       words) was checked not to change anything else in the boot;
+     *   0x00a70000-0x00a80000  audio statics: the buffer object at 0x00a77dd4
+     *       still owned a block of the dumped heap, which sub_00500580 freed
+     *       (the allocator's bad-block assert in sub_00436130);
+     *   0x00aee800-0x00aeea00  the track streamer / scenery statics: the
+     *       current-section pointer 0x00aee830 (the handler for
+     *       STREAML6R_FE.BUN's chunks walked a dead section, sub_0079fb20) and
+     *       0x00aee8a8, the object whose presence makes the scenery init
+     *       sub_0079b280 skip creating the collection at 0x00bfc1c0.  Not the
+     *       whole 0x00ae0000 block: nulling that stops the boot at sub_0074c2c0. */
+    char ranges[512];
+    const char *env = getenv("PROSTREET_NULL_STALE");
+    snprintf(ranges, sizeof ranges, "0x00ab1500-0x00ab2a00,0x00abae00-0x00abb000,0x00a59000-0x00a5a000,0x00b00000-0x00c00000,0x00a70000-0x00a80000,0x00aee800-0x00aeea00%s%s", (env && *env) ? "," : "", (env && *env) ? env : "");
+    const char *v = ranges;
+    if (g_orig_data && v && *v) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        const char *p = v;
+        while (*p) {
+            while (*p == ' ' || *p == ',') p++;
+            uint32_t r0 = 0, r1 = 0; const char *q = p;
+            if (!parse_hex_u32(p, &q, &r0) || *q != '-' || !parse_hex_u32(q + 1, &q, &r1)) break;
+            p = q;
+            if (r0 < lo) r0 = lo;
+            if (r1 > hi) r1 = hi;
+            unsigned nulled = 0, kept = 0;
+            for (uint32_t a = (r0 + 3u) & ~3u; a + 4u <= r1; a += 4) {
+                uint32_t w = MR32(a);
+                if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
+                if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
+                /* memory this run's own boot code has allocated is not dead */
+                if (gh_in_use(w)) { kept++; continue; }
+                int live = 0;
+                for (uint32_t k = 0; k < 64u && !live; k += 4)
+                    live = mem_is_committed(w + k) && MR32(w + k) != 0;
+                if (live) { kept++; continue; }
+                MR32(a) = 0;
+                nulled++;
+            }
+            fprintf(stderr, "boot: %08x-%08x: %u dead heap pointers nulled, %u kept\n",
+                    r0, r1, nulled, kept);
+        }
+    }
+    /* The game's Fastmem pool (0x00abb060) still describes the dumped
+     * process's arena: base at +0x110, bytes handed out at +0x118.  The pool
+     * goes on allocating above that mark, so everything below it is an object
+     * of the dumped process that no longer exists.  A word of .data that is
+     * zero in the original and points there is dead wherever it is.
+     * Off by default (PROSTREET_NULL_ARENA=1 turns it on): it nulls 130 words
+     * and the boot then stops early in sub_0063a340, so some of those dead
+     * objects are still relied on.  0x00ac6ec0-0x00ac6ed0 is left alone:
+     * boot code builds the display device at the dumped address it holds. */
+    if (g_orig_data && getenv("PROSTREET_NULL_ARENA") && mem_is_committed(0x00abb178)) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        uint32_t base = g_arena_base, used = g_arena_used;
+        unsigned nulled = 0;
+        if (base >= 0x01aa8000u && used && used < 0x01000000u) {
+            for (uint32_t a = lo; a + 4u <= hi; a += 4) {
+                if (a >= 0x00ac6ec0u && a < 0x00ac6ed0u) continue;
+                uint32_t w = MR32(a);
+                if (w < base || w >= base + used) continue;
+                if (*(uint32_t *)(g_orig_data + (a - lo)) != 0) continue;
+                MR32(a) = 0;
+                nulled++;
+            }
+        }
+        fprintf(stderr, "boot: %u pointers into the dead part of the Fastmem arena [%08x,%08x) nulled\n",
+                nulled, base, base + used);
+    }
+    /* Lazily created singletons.  The game creates many objects on first use:
+     *     cmp dword [X], 0 ; jne skip ; ... ; mov [X], eax
+     *     mov eax, [X] ; test eax, eax ; jne skip ; ... ; mov [X], eax
+     * In the dump X already holds the dumped process's object, so the creator
+     * never runs and the first user walks dead memory (the slot pool at
+     * 0x00aeb850 made by sub_0075feb0 was the case that showed it:
+     * sub_0077baa0 got no slot and sub_004a64a0 wrote through null).  Find
+     * every X guarded like that in the code and null it when the original
+     * executable has 0 there and the dump has a pointer outside the image, so
+     * the game's own creator runs again.  PROSTREET_KEEP_LAZY=1 skips this;
+     * PROSTREET_LAZY_LOG=1 lists the addresses. */
+    if (g_orig_data && !getenv("PROSTREET_KEEP_LAZY")) {
+        uint32_t lo = g_orig_lo, hi = g_orig_lo + g_orig_size;
+        int verbose = getenv("PROSTREET_LAZY_LOG") != NULL;
+        unsigned nulled = 0;
+        for (uint32_t pc = 0x00401000u; pc + 16u < lo; pc++) {
+            if (!(pc & 0xfffu) && !mem_is_committed(pc)) { pc += 0xfffu; continue; }
+            const uint8_t *b = g_mem + pc;
+            uint32_t x, after;
+            if (b[0] == 0x83 && b[1] == 0x3d && b[6] == 0x00) { memcpy(&x, b + 2, 4); after = pc + 7; }
+            else if (b[0] == 0xa1 && b[5] == 0x85 && b[6] == 0xc0) { memcpy(&x, b + 1, 4); after = pc + 7; }
+            else if (b[0] == 0x8b && (b[1] & 0xc7) == 0x05 && b[6] == 0x85 &&
+                     b[7] == (uint8_t)(0xc0 | (b[1] & 0x38) | ((b[1] >> 3) & 7))) { memcpy(&x, b + 2, 4); after = pc + 8; }
+            else continue;
+            if (x < lo || x + 4u > hi || (x & 3u)) continue;
+            uint8_t j = g_mem[after];
+            if (j != 0x75 && !(j == 0x0f && g_mem[after + 1] == 0x85)) continue;
+            uint32_t w = MR32(x);
+            if (w < 0x01aa8000u || w >= 0x30000000u || (w & 3u)) continue;
+            if (*(uint32_t *)(g_orig_data + (x - lo)) != 0) continue;
+            if (gh_in_use(w)) continue;
+            int stored = 0;
+            for (uint32_t q = after; q < after + 0x100u && q + 6u < lo && !stored; q++) {
+                const uint8_t *c = g_mem + q;
+                uint32_t y;
+                if (c[0] == 0xa3) memcpy(&y, c + 1, 4);
+                else if (c[0] == 0x89 && (c[1] & 0xc7) == 0x05) memcpy(&y, c + 2, 4);
+                else continue;
+                stored = (y == x);
+            }
+            if (!stored) continue;
+            if (verbose) fprintf(stderr, "boot: lazy singleton %08x (was %08x, guard at %08x)\n", x, w, pc);
+            MR32(x) = 0;
+            nulled++;
+        }
+        fprintf(stderr, "boot: %u lazily created singletons reset\n", nulled);
+    }
+    free(g_orig_data);
+    g_orig_data = NULL;
 }
 
 static int hex_digit(int c) {
@@ -213,12 +798,16 @@ static void apply_watch_env(void) {
 
 int main(int argc, char **argv) {
     const char *pe = argc > 1 ? argv[1] : "artifacts/nfs.exe.unpacked";
+    g_dump_path = pe;
 
     mem_init();
     mem_fault_handler_install();
     mem_altstack_install();
     if (mem_load_pe(pe)) return 1;
     overlay_clean_data(pe, argc, argv);
+    overlay_original_headers();
+    repair_stale_lists();
+    repair_stale_vectors();
     apply_zero_env();
 
     /* Initialize Pool descriptor circular sentinels to clean empty state */
@@ -400,10 +989,13 @@ int main(int argc, char **argv) {
     if (mem_is_committed(0x00bfbea4)) MR32(0x00bfbea4) = 0;
     if (mem_is_committed(0x00a7a474)) MR32(0x00a7a474) = 0;
 
-    /* Stale streaming manager state from process dump */
+    /* Stale streaming manager state from process dump.  0x00a84990 is the
+     * head of the manager's loaded-section list ({X, X} in the original
+     * executable): it must stay an empty list, not null, or the first section
+     * linked into it writes through a null prev pointer (sub_007902e0). */
     if (mem_is_committed(0x00a84938)) {
-        MR32(0x00a84990) = 0;
-        MR32(0x00a84994) = 0;
+        MR32(0x00a84990) = 0x00a84990;
+        MR32(0x00a84994) = 0x00a84990;
         MR32(0x00a84998) = 0;
         MR32(0x00a8499c) = 0;
         MR32(0x00a849a0) = 0;
@@ -481,10 +1073,129 @@ int main(int argc, char **argv) {
         MR32(0x00a61244) = 0x00a61240;
     }
 
+    /* Stale render command queue from process dump (0x00ffc9f0: queued count,
+     * executed count, enabled, capacity, base, write ptr, read ptr).  The dump
+     * was taken mid-frame with commands still pending, so the render thread
+     * would replay draws against buffers this run has not created yet.  Mark
+     * the queue empty. */
+    if (mem_is_committed(0x00ffc9f0)) {
+        uint32_t base = MR32(0x00ffca00);
+        MR32(0x00ffc9f0) = 0;
+        MR32(0x00ffc9f4) = 0;
+        MR32(0x00ffca04) = base;
+        MR32(0x00ffca08) = base;
+    }
+
+    /* Stale singleton pointers from process dump, found one fault at a time
+     * during render init (sub_004b4090).  Each is tested for null before use,
+     * so null is the state the game's own start-up expects.  (Nulling every
+     * pointer into the dumped heap, about 6,700 words of .data, was tried and
+     * breaks the boot long before the window opens: much of that state is
+     * relied on.)
+     *   0x00ab27dc  object whose vtable+0x74 sub_00597140 calls
+     *   0x00a83bcc  geometry of the static model at 0x00a83bc0 (sub_004be090)
+     *   0x00ab27d8  object sub_0062cce0 reads at +0x108 while a frame is built
+     *   0x00bfbcac  node pool behind sub_004313f0, created on first use when null
+     *   0x00aba54c  instance count of the input system (1 in the dump): its
+     *               constructor sub_006c7d90 skips the set-up when it is not 0
+     *   0x00b34598  input device manager returned by sub_0089bfcd when not null
+     *   0x00ad07bc  singleton returned by the factory sub_00742d40 (found by
+     *               name hash from sub_004cfd30) and 0x00acfa6c, its use count */
+    /* The current language (0x00a54ee8) is English in the dump, so the game's
+     * LoadLanguage(English) (sub_005c3730) returns without loading anything
+     * and every string lookup fails.  The original executable has -1 there. */
+    if (mem_is_committed(0x00a54ee8)) MR32(0x00a54ee8) = 0xffffffffu;
+    /* The input system's device tables (0x00aba2d0-0x00aba500, all zero in the
+     * original executable) still describe the dumped process's devices: the
+     * main loop's first poll (sub_006c0d10) found a device count and called
+     * through a dead device object. */
+    if (mem_is_committed(0x00aba2d0)) memset(g_mem + 0x00aba2d0, 0, 0x00aba500 - 0x00aba2d0);
+    /* "Built once" flag of the table that sub_0056a670 fills through
+     * sub_0055ff80: set in the dump, so the table at +0x38 of the new object
+     * stayed empty and sub_0050b920 read through its null pointer. */
+    if (mem_is_committed(0x00ab0f91)) MR8(0x00ab0f91) = 0;
+    /* 0x00aad020: the object chunk 0x37220's handler keeps between loads
+     * (set by sub_004e9e00 at 0x4e9fb5; sub_004e0620 destroys it through its
+     * vtable).  Zero in the original; the dump's pointer names memory this
+     * run hands out again, so the first race load called a "destructor" of
+     * whatever lives there, the chunk loader's stack came back 4 bytes off and
+     * it asserted on a chunk it read from the wrong slot (sub_006d2c70). */
+    if (mem_is_committed(0x00aad020)) MR32(0x00aad020) = 0;
+    /* Track streamer statics (0x00ae3350-0x00ae6100) as the dump left them:
+     * its loaded-section slots (0x00ae34b4[], a 0x1c-byte node per loaded
+     * section), the section table pointer and count (0x00ae33a0/a4), buffers,
+     * and the free list of section nodes (circular, sentinel 0x00ae607c/80,
+     * in-use count 0x00ae6074; sub_0074c3e0 takes nodes from it, sub_0074ba60
+     * and sub_007479a0 give them back).  Every node lived in the dumped heap,
+     * which this run hands out again, so loading a race linked a node
+     * through a dead pointer.  The words that differ from the original and
+     * point outside the image are cleared, no section is loaded, and the
+     * free list gets 512 fresh nodes in this run's memory.  The self-linked
+     * static heads at 0x00ae3460-0x00ae3494 and the code pointers stay. */
+    if (orig_covers(0x00ae3350u, 0x00ae6100u - 0x00ae3350u) && mem_is_committed(0x00ae6084)) {
+        unsigned cleared = 0;
+        for (uint32_t a = 0x00ae3350u; a < 0x00ae6100u; a += 4) {
+            uint32_t w = MR32(a), o = *(uint32_t *)(g_orig_data + (a - g_orig_lo));
+            if (w != o && w >= 0x01aa8000u && w < 0x30000000u) { MR32(a) = o; cleared++; }
+        }
+        MR32(0x00ae33a4) = 0;
+        MR32(0x00ae6074) = 0;
+        enum { NODES = 512, NODE = 0x1c };
+        uint32_t pool = gh_alloc(NODES * NODE, 1, 16), prev = 0x00ae607cu;
+        if (pool) {
+            MR32(0x00ae607c) = pool;                       /* sentinel.next = first */
+            for (uint32_t i = 0; i < NODES; i++) {
+                uint32_t n = pool + i * NODE;
+                MR32(n + 4) = prev;                        /* node.prev */
+                MR32(n) = i + 1 < NODES ? n + NODE : 0x00ae607cu;   /* node.next */
+                prev = n;
+            }
+            MR32(0x00ae6080) = prev;                       /* sentinel.prev = last */
+        } else {
+            MR32(0x00ae607c) = MR32(0x00ae6080) = 0x00ae607cu;
+        }
+        fprintf(stderr, "boot: track streamer: %u dumped pointers cleared, %u fresh section nodes at %#x\n",
+                cleared, pool ? NODES : 0, pool);
+    }
+    {
+        static const uint32_t dead[] = { 0x00ab27dcu, 0x00a83bccu, 0x00ab27d8u, 0x00bfbcacu,
+                                         0x00aba54cu, 0x00b34598u, 0x00ad07bcu, 0x00acfa6cu };
+        for (unsigned i = 0; i < sizeof dead / sizeof *dead; i++)
+            if (mem_is_committed(dead[i])) MR32(dead[i]) = 0;
+    }
+    /* Two frontend std::vectors {begin, end, capacity} at 0x00ab2a00 and
+     * 0x00ab2a58 (zero in the original executable; filled by sub_0060b070 /
+     * sub_0060b030, walked by sub_005aae20 through obj+0xac).  The dump's
+     * pointers name its heap at 0x033xxxxx, which this run's allocator hands
+     * out again, so the generic pass above keeps them as live; accepting the
+     * title screen then called through garbage (sub_005ab1b0). */
+    if (mem_is_committed(0x00ab2a00)) {
+        memset(g_mem + 0x00ab2a00, 0, 12);
+        memset(g_mem + 0x00ab2a58, 0, 12);
+    }
+
     apply_set_env();
 
     mem_commit(STACK_LO, STACK_HI - STACK_LO);
     win32_init();
+
+    /* Stale std::list head nodes from process dump (four lists in a row,
+     * {alloc, head, size} at 0x00ff25e8, 0x00ff25f4, 0x00ff2600, 0x00ff260c).
+     * The head nodes lived in the dumped process heap, which is not part of
+     * the image, so the first insert linked through a null prev pointer
+     * (sub_00507ed4 fills the last list with its 100 entries; sub_004a34e0
+     * uses the first one each frame).  Give each list a fresh empty head. */
+    if (mem_is_committed(0x00ff2600)) {
+        static const uint32_t lists[] = { 0x00ff25e8, 0x00ff25f4, 0x00ff2600, 0x00ff260c };
+        for (unsigned i = 0; i < sizeof lists / sizeof *lists; i++) {
+            uint32_t head = gh_alloc(0x20, 1, 16);
+            if (!head) break;
+            MR32(head) = head;
+            MR32(head + 4) = head;
+            MR32(lists[i] + 4) = head;
+            MR32(lists[i] + 8) = 0;
+        }
+    }
 
     /* Initialize DisplayDevice and RenderParams singletons */
     if (mem_is_committed(0x00ac6ed4)) {

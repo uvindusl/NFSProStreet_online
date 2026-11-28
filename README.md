@@ -4,7 +4,7 @@ An experimental, from-scratch **static recompilation** of the 2007 PC game *Need
 
 The game's x86 code is translated to C ahead of time. That C is compiled into a native binary (and, as a second target, to WebAssembly), and a hand-written Win32 / Direct3D 9 / D3DX high-level emulation layer stands in for Windows. The long-term goal is to run the game in a browser using WebGPU and Web Audio.
 
-> **Status: early. The game does not run yet.** The code lifts and loads, CRT initialization completes, the engine enters `WinMain`, and the asset loader actively mounts archives and parses databases. Current work focuses on secondary asset loading and engine scene initialization, then presenting the first frames. See [Status](#status) for exactly what has been verified.
+> **Status: early, native only.** The natively built game boots from a process dump of the executable, plays the intro movies, creates a profile, shows the main menu and plays a Race Day race (no sound, no window: frames are checked offline). The browser build does not run the game yet. See [Status](#status) for exactly what has been verified.
 
 **Bring your own copy of the game.** This repository contains no game code, game data, shaders, or Microsoft DLLs. Everything derived from the game (lifted C, images, shader blobs) is generated locally and is git-ignored.
 
@@ -50,13 +50,14 @@ Each row is only marked ✅ when there is a command that reproduces it on the cu
 | WebGPU test triangle in Chrome | ✅ interpolated triangle verified by pixel sampling | `analysis/webgpu-test/` |
 | A real ProStreet shader rendered correctly in WebGPU | ❌ not yet; output does not match expected colour | in progress |
 | Game files: archive streaming | 🟡 loads `GLOBALA.BUN`, `GlobalMemoryFile.bin`, parses `ATTRIBUTES.BIN` | `grep 'GLOBAL' out/boot.log` |
-| Audio, input, menus, racing | ❌ not started | — |
+| Input, menus, a race (native) | ✅ scripted run: profile, main menu, Race Day event, into the race | `PROSTREET_SCRIPT_LOG=1 PROSTREET_FRAMEDUMP=999999 PROSTREET_SCRIPT=...` (script in [`docs/native-runs.md`](docs/native-runs.md)); the log shows `game flow 6` and `swrast: frame N: 986 draws` for the race frame |
+| Audio | ❌ EA's AEMS sound modules are skipped | — |
 
 The full milestone table is in [`docs/milestones.md`](docs/milestones.md). The roadmap to a playable game is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Known issues
 
-- **Secondary asset loading & game loop initialization.** With attribute tree validation (`sub_00530f60`/`sub_005310e0`) and the initial window message pump resolved, execution advances into secondary asset processing and engine scene initialization.
+- **Native build runs a race.** Intro movies, title, profile creation and loading, main menu, a Race Day event: the race starts and the car drives (the script in `docs/native-runs.md` ends on the race frame). Frames are checked offline with `PROSTREET_FRAMEDUMP`, and scripted runs use `PROSTREET_SCRIPT`; see [`docs/native-runs.md`](docs/native-runs.md). The attribute database loads through the lifted code once the process dump's stale state is repaired. Main's earlier attribute-tree stand-ins are an opt-in (`PROSTREET_ATTR_GUARD=1`). Not done: EA's AEMS audio modules (skipped), the web build of this work.
 - **"Valid WGSL" is not "correct WGSL".** `naga` confirms the output is well-formed. It does not confirm it computes the right result. An earlier version silently skipped unsupported opcodes (`dsx`/`dsy`); those are now emitted, but other opcodes may still be unhandled. Each shader family needs a rendered-output comparison against a reference.
 - **Shader coverage is still per-opcode.** `cmp` and `lrp` match D3D9 in one synthetic CPU-interpreter case (`bash lifter/tools/cpu_shader_semantics_test.sh`); there is no corpus-wide or GPU differential for them, and other opcodes have not all been exercised numerically.
 - **Performance and memory are unknown.** A 2007 game's code and assets inside a browser's 4 GB WebAssembly limit has not been tested.

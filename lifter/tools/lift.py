@@ -392,6 +392,7 @@ class Lifter:
     def __init__(self, pe_path, comments=True, trap=False, hooks=None, watch=False):
         self.comments=comments; self.trap=trap; self.traps=0; self.trap_kinds=collections.Counter()
         self.hooks=set(hooks or ()); self.watch=watch
+        self.hookret=set()   # sites where guest_hook_ret may return from the function (genall.py, HOOKRET)
         self.cov=False
         pe = pefile.PE(pe_path); self.IB = pe.OPTIONAL_HEADER.ImageBase
         self.secs=[]
@@ -503,24 +504,59 @@ class Lifter:
     # anything else still takes the dispatcher, so the semantics do not change.
     # instructions that may sit between the cmp and the ja, and before the jmp:
     # they write no flags, and the check below makes sure not the index either
-    _JT_PASS = frozenset(('mov', 'movzx', 'movsx', 'push', 'pop', 'lea', 'nop'))
+    # (the SSE moves too: 0x634c4c is `cmp eax,4; movss [..],xmm0 x4; ja; jmp [eax*4+table]`)
+    _JT_PASS = frozenset(('mov', 'movzx', 'movsx', 'push', 'pop', 'lea', 'nop',
+                          'movss', 'movsd', 'movaps', 'movups', 'movd', 'movq', 'movdqa', 'movdqu',
+                          'movlps', 'movhps',
+                          # x87 and SSE arithmetic leave EFLAGS alone too (0x5bdfe2:
+                          # `cmp eax,0xb; fstp; fld; ...; fabs; fstp; ja; movzx; jmp [eax*4+table]`)
+                          'fld', 'fst', 'fstp', 'fild', 'fist', 'fistp', 'fabs', 'fchs', 'fxch',
+                          'fld1', 'fldz', 'fadd', 'faddp', 'fsub', 'fsubp', 'fsubr', 'fsubrp',
+                          'fmul', 'fmulp', 'fdiv', 'fdivp', 'fdivr', 'fdivrp',
+                          'xorps', 'addss', 'subss', 'mulss', 'divss', 'cvtss2sd', 'cvtsd2ss'))
     def _jt_writes(self, i, fam):
         """does i write any part of the register family fam ('eax', ...)?"""
         try: return any((R32.get(r) or R16.get(r) or R8L.get(r) or R8H.get(r)) == fam for r in i.regs_access()[1])
         except Exception: return True
 
     def _jt_bound(self, ins):
-        """(reg, n, the block the bound holds in) for a block ending in 'cmp r32, n; [...]; ja/jbe'"""
+        """(reg, n, the block the bound holds in) for a block ending in 'cmp r32, n; [...]; ja/jbe'.
+        n may also sit in a register loaded earlier in the block, 'mov r2, n; ...; cmp r32, r2'
+        (the CRT's printf state machine at 0x43273b does that)."""
         j = ins[-1]
         if j.mnemonic not in ('ja', 'jbe') or j.operands[0].type != X86_OP_IMM: return None
         between = []
-        for k in reversed(ins[:-1]):
+        for pos in range(len(ins) - 2, -1, -1):
+            k = ins[pos]
             if k.mnemonic == 'cmp':
                 o = k.operands
-                if len(o) != 2 or o[0].type != X86_OP_REG or o[0].reg not in R32 or o[1].type != X86_OP_IMM: return None
+                if len(o) == 2 and o[0].type == X86_OP_MEM and o[0].size == 4 and o[1].type == X86_OP_IMM \
+                   and o[0].mem.base in (X86_REG_EBP, X86_REG_ESP) and not o[0].mem.index and not o[0].mem.segment:
+                    # unoptimised code keeps the index in a local: `cmp dword [ebp-8], n; ja`,
+                    # then `mov r, [ebp-8]; jmp [r*4+table]` (0x553dec).  The bound is on the
+                    # local; _jt_table ties it to the register.
+                    if any(x.mnemonic != 'nop' for x in between): return None
+                    held = j.address + j.size if j.mnemonic == 'ja' else j.operands[0].imm
+                    return ('mem', o[0].mem.base, o[0].mem.disp), o[1].imm & 0xffffffff, held
+                if len(o) != 2 or o[0].type != X86_OP_REG or o[0].reg not in R32: return None
                 if any(self._jt_writes(x, R32[o[0].reg]) for x in between): return None
+                if o[1].type == X86_OP_IMM:
+                    n = o[1].imm & 0xffffffff
+                elif o[1].type == X86_OP_REG and o[1].reg in R32:
+                    n = None
+                    for e in reversed(ins[:pos]):       # the last write to the bound register
+                        eo = e.operands
+                        if e.mnemonic == 'mov' and len(eo) == 2 and eo[0].type == X86_OP_REG \
+                           and eo[0].reg == o[1].reg and eo[1].type == X86_OP_IMM:
+                            n = eo[1].imm & 0xffffffff; break
+                        if self._jt_writes(e, R32[o[1].reg]): break
+                    # loaded in an earlier block (0x516608: `cmp eax, ebp`): the size is
+                    # then read off the table itself, see _jt_table
+                    if n is None: n = -1
+                else:
+                    return None
                 held = j.address + j.size if j.mnemonic == 'ja' else j.operands[0].imm
-                return o[0].reg, o[1].imm & 0xffffffff, held
+                return o[0].reg, n, held
             if k.mnemonic not in self._JT_PASS: return None
             between.append(k)
         return None
@@ -532,12 +568,27 @@ class Lifter:
         alone; else None"""
         reg, n = bound
         if not ins or n > 1023: return None
-        for k in ins[:-1]:
+        unknown = n == -1
+        pre = ins[:-1]
+        if isinstance(reg, tuple):
+            # the bound is on a stack local: the block must load it into the index register
+            _, mb, md_ = reg; reg = None
+            for q, k in enumerate(pre):
+                ko = k.operands
+                if k.mnemonic == 'mov' and len(ko) == 2 and ko[0].type == X86_OP_REG and ko[0].reg in R32 \
+                   and ko[1].type == X86_OP_MEM and ko[1].size == 4 and ko[1].mem.base == mb \
+                   and ko[1].mem.disp == md_ and not ko[1].mem.index:
+                    reg = ko[0].reg; pre = pre[q + 1:]
+                elif k.mnemonic not in self._JT_PASS and reg is None:
+                    return None
+            if reg is None: return None
+        for k in pre:
             if k.mnemonic == 'movzx' and len(k.operands) == 2 and k.operands[1].type == X86_OP_MEM and k.operands[1].size == 1 \
                and k.operands[0].type == X86_OP_REG and k.operands[0].reg in R32:
                 m = k.operands[1].mem
                 if not m.segment and ((m.base == reg and not m.index) or (not m.base and m.index == reg and m.scale == 1)):
                     bd = m.disp & 0xffffffff
+                    if unknown: return None
                     if not (self.in_text(bd) and self.in_text(bd + n)): return None
                     n = max(self.fetch(bd, n + 1)); reg = k.operands[0].reg
                     continue
@@ -547,8 +598,23 @@ class Lifter:
         m = i.operands[0].mem
         if m.segment or m.base or m.index != reg or m.scale != 4: return None
         d = m.disp & 0xffffffff
+        if unknown:
+            # Bound not known statically: take the entries that point at code near
+            # the jump.  Reading one table too many only adds cases the guest's own
+            # bound check never reaches (each case still tests its table entry).
+            cnt = 0
+            while cnt < 256 and self.in_text(d + 4 * cnt + 3):
+                b = self.fetch(d + 4 * cnt, 4)
+                if len(b) < 4: break                     # region ends inside the entry
+                t = struct.unpack_from('<I', b)[0]
+                if not self.in_text(t) or abs(t - i.address) > 0x4000: break
+                cnt += 1
+            if cnt < 2: return None
+            n = cnt - 1
         if not (self.in_text(d) and self.in_text(d + 4 * n + 3)): return None
-        ents = list(struct.unpack_from(f'<{n + 1}I', self.fetch(d, 4 * n + 4)))
+        b = self.fetch(d, 4 * n + 4)
+        if len(b) < 4 * n + 4: return None               # table runs past its region
+        ents = list(struct.unpack_from(f'<{n + 1}I', b))
         return (reg, d, ents) if all(self.in_text(t) for t in ents) else None
 
     # ---------- function discovery (CFG) ----------
@@ -638,12 +704,18 @@ class Lifter:
         (RawLifter / tests), conservatively all of them."""
         return "0x%02xu" % getattr(self, 'cur_fmask', F_ALL)
 
+    def _cc(self, i):
+        """CALLCHK=1: after a call, notice a callee that returned somewhere else"""
+        import os as _os
+        if _os.environ.get('CALLCHK', '0') != '1': return []
+        return [f"CALLCHK(c, 0x{i.address+i.size:x}u);"]
+
     def insn(self, i, targets):
         self.cur_ip = i.address
         m=i.mnemonic; ops=i.operands; o=ops
         # Capstone folds the LOCK prefix into the mnemonic ("lock xadd"), but
-        # xadd/cmpxchg/add are already lifted.  Atomicity is dropped: the
-        # native port runs the guest on one thread (see docs/phase3-lifter.md).
+        # xadd/cmpxchg/add are already lifted.  lift() wraps the result in
+        # GUEST_LOCK()/GUEST_UNLOCK() to keep the sequence atomic.
         if m.startswith('lock '): m = m[5:]
         E=lambda k: self.rd(o[k]); W=lambda k,v: self.wr(o[k],v)
         bits = (o[0].size*8) if o else 32
@@ -771,9 +843,9 @@ class Lifter:
                     # function's own return address is gone too; return as well
                     return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);",
                             f"if (c->eip != 0x{i.address+i.size:x}u) return;"]
-                return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);"]
+                return [f"PUSH32(0x{i.address+i.size:x}u); sub_{t:08x}(c);"] + self._cc(i)
             # x86: the call target is read BEFORE the return address is pushed (call [esp+N]!)
-            return [f"{{ uint32_t _ct = {E(0)}; PUSH32(0x{i.address+i.size:x}u); DISPATCH_CALL(c, _ct); }}"]
+            return [f"{{ uint32_t _ct = {E(0)}; PUSH32(0x{i.address+i.size:x}u); DISPATCH_CALL(c, _ct); }}"] + self._cc(i)
         if m.split()[-1] in ('ret','retf'):
             n = o[0].imm if o else 0
             # RETEIP=0: the return address is not written to c->eip (only popped off the stack).
@@ -781,6 +853,92 @@ class Lifter:
             # that reads c->eip (genexec) now uses the address it pushed.  The
             # callees of tools/retpast.txt always write it: their callers compare it.
             import os as _os
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM's obfuscated call: `push A; push B; ret` is a call to B
+                # that continues at A.  Keeping the literal stack semantics returns
+                # to the lifted caller with B never run, so run B here and then A
+                # (A is its own function; its ret goes back to our caller).
+                pb = self.fetch(i.address - 10, 11)
+                if len(pb) == 11 and pb[0] == 0x68 and pb[5] == 0x68 and pb[10] == 0xC3:
+                    a_ = int.from_bytes(pb[1:5], 'little')
+                    b_ = int.from_bytes(pb[6:10], 'little')
+                    if self.in_text(a_) and self.in_text(b_):
+                        return ["POP32(c->eip);",
+                                f"dispatch_indirect(c, 0x{b_:x}u);",
+                                f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
+                                "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # `push A; push dword [slot]; ret`: the same obfuscated call with the
+                # target read from a pointer, in practice an import (0x17c2299 calls
+                # memmove this way).  Run the popped target, then A.
+                pm = self.fetch(i.address - 11, 12)
+                if len(pm) == 12 and pm[0] == 0x68 and pm[5] == 0xFF and pm[6] == 0x35 and pm[11] == 0xC3:
+                    a_ = int.from_bytes(pm[1:5], 'little')
+                    if self.in_text(a_):
+                        return ["POP32(c->eip);",
+                                "dispatch_indirect(c, c->eip);",
+                                f"if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);",
+                                "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM computed call: `... xchg [esp],eax; add dword [esp+4], K; ret`
+                # pops a computed target T and leaves R (= entry + K) on the stack top,
+                # i.e. `call T` returning to R.  Run T, then R (seeded by boot_seeds.py).
+                # Filler may sit between the add and the ret (`sar eax,0`, nop,
+                # `xchg r,r`): 0x16bf400 is `add dword [esp+4],0x1d; sar eax,0; ret`,
+                # the form used to call SecuROM's trigger handler (`push T` instead
+                # of the xchg, since the register is not preserved).
+                end_ = i.address
+                for _ in range(3):
+                    f3 = self.fetch(end_ - 3, 3); f2 = f3[1:]
+                    if len(f3) == 3 and f3[0] == 0xC1 and (f3[1] & 0xC0) == 0xC0 and f3[2] == 0: end_ -= 3
+                    elif len(f2) == 2 and f2[0] in (0x87, 0x89, 0x8B) and (f2[1] & 0xC0) == 0xC0 \
+                            and ((f2[1] >> 3) & 7) == (f2[1] & 7): end_ -= 2
+                    elif len(f3) == 3 and f3[2] == 0x90: end_ -= 1
+                    else: break
+                pb8 = self.fetch(end_ - 8, 8)
+                pb5 = self.fetch(end_ - 5, 5)
+                if ((len(pb8) == 8 and pb8[:4] == bytes([0x81, 0x44, 0x24, 0x04]))
+                        or (len(pb5) == 5 and pb5[:4] == bytes([0x83, 0x44, 0x24, 0x04]))):
+                    return ["POP32(c->eip);",
+                            "{ uint32_t _t = c->eip, _r = MR32(c->esp);",
+                            "  dispatch_indirect(c, _t);",
+                            "  if (c->eip == _r) dispatch_indirect(c, _r); }",
+                            "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # The same call with the return address fixed up before the target
+                # is pushed: `add dword [esp], K; push R; (nop); ret` (0x1a11479,
+                # which calls the trigger handler 0x10f8d70 from sub_01a11420).
+                end_ = i.address
+                while self.fetch(end_ - 1, 1) == b'\x90': end_ -= 1
+                p1 = self.fetch(end_ - 1, 1)
+                q5 = self.fetch(end_ - 5, 4); q8 = self.fetch(end_ - 8, 3)
+                if len(p1) == 1 and 0x50 <= p1[0] <= 0x57 and p1[0] != 0x54 and (
+                        (len(q5) == 4 and q5[:3] == bytes([0x83, 0x04, 0x24]))
+                        or (len(q8) == 3 and q8 == bytes([0x81, 0x04, 0x24]))):
+                    return ["POP32(c->eip);",
+                            "{ uint32_t _t = c->eip, _r = MR32(c->esp);",
+                            "  dispatch_indirect(c, _t);",
+                            "  if (c->eip == _r) dispatch_indirect(c, _r); }",
+                            "return;"]
+            if _os.environ.get('PUSHRET','0') == '1' and not o:
+                # SecuROM computed jump: `push R; <compute R>; xchg [esp],R; ret` puts a
+                # computed target where R was saved and "returns" to it, i.e. `jmp T`
+                # with R restored.  Variants: `xchg [esp+4],R; popfd; ret` (flags saved
+                # around the arithmetic) and the swap written as three xors.  A ret that
+                # directly follows such a swap is never a return: run T as a tail call,
+                # or the rest of the function is skipped and its frame stays on the
+                # stack (sub_00455100 jumps into its body through one at 0x430e02).
+                b3 = self.fetch(i.address - 3, 3)
+                b5 = self.fetch(i.address - 5, 5)
+                b9 = self.fetch(i.address - 9, 9)
+                swap = (len(b3) == 3 and b3[0] == 0x87 and (b3[1] & 0xC7) == 0x04 and b3[2] == 0x24) \
+                    or (len(b5) == 5 and b5[0] == 0x87 and (b5[1] & 0xC7) == 0x44 and b5[2:] == bytes([0x24, 0x04, 0x9D])) \
+                    or (len(b9) == 9 and b9[0] == 0x33 and (b9[1] & 0xC7) == 0x04 and b9[2] == 0x24
+                        and b9[3:6] == bytes([0x31, b9[1], 0x24]) and b9[6:] == b9[:3])
+                if swap:
+                    return ["POP32(c->eip);",
+                            "dispatch_indirect(c, c->eip);   /* computed jump */",
+                            "return;"]
             if _os.environ.get('RETEIP','1') == '0' and self.entry not in self.retpast:
                 return [f"c->esp += {4 + n}u; return;"]
             return [f"POP32(c->eip);" + (f" c->esp += {n}u;" if n else "") + " return;"]
@@ -1297,12 +1455,29 @@ class Lifter:
                         f" for(int _k=0;_k<16;_k++)"
                         f" if(c->xmm[{XM[o[1].reg]}].b[_k] & 0x80u) _r|=1u<<_k;"
                         f" {W(0,'_r')} }}"]
+        if m in ('psrldq', 'pslldq') and is_xm(0) and o[1].type == X86_OP_IMM:
+            # byte shift of the whole 128-bit register (the VP6 decoder's SSE2
+            # filters at 0x91e1ac use it; skipped, the video came out as garbage)
+            n_ = min(o[1].imm & 0xff, 16); di = XM[o[0].reg]
+            idx = f"_k+{n_}" if m == 'psrldq' else f"_k-{n_}"
+            ok = f"_k+{n_}<16" if m == 'psrldq' else f"_k>={n_}"
+            return [f"{{ uint8_t _t[16]; for(int _k=0;_k<16;_k++) _t[_k] = ({ok}) ? c->xmm[{di}].b[{idx}] : 0;"
+                    f" memcpy(&c->xmm[{di}], _t, 16); }}"]
+        if m in ('punpcklqdq', 'punpckhqdq') and is_xm(0):
+            di = XM[o[0].reg]
+            if m == 'punpcklqdq':
+                return [f"c->xmm[{di}].u64[1] = ({qwords(1, 0)});"]
+            return [f"{{ uint64_t _b=({qwords(1, 1)}); c->xmm[{di}].u64[0] = c->xmm[{di}].u64[1]; c->xmm[{di}].u64[1] = _b; }}"]
         if m == 'pshufd' and is_xm(0):
             imm = o[2].imm & 0xff
             sel = [(imm>>0)&3,(imm>>2)&3,(imm>>4)&3,(imm>>6)&3]
+            di = XM[o[0].reg]
+            if is_mem(1):
+                ea5 = self.ea(o[1].mem)
+                return [f"{{ uint32_t _t[4]; memcpy(_t, g_mem + (uint32_t){ea5}, 16); " +
+                        " ".join(f"c->xmm[{di}].u32[{k}]=_t[{sel[k]}];" for k in range(4)) + " }"]
             src = (f"c->xmm[{XM[o[1].reg]}]" if is_xm(1) else None)
             if src is None: raise Unsupported(m)
-            di = XM[o[0].reg]
             return [f"{{ uint32_t _t[4]; " +
                     " ".join(f"_t[{k}]={src}.u32[{sel[k]}];" for k in range(4)) +
                     " " + " ".join(f"c->xmm[{di}].u32[{k}]=_t[{k}];" for k in range(4)) + " }"]
@@ -1894,6 +2069,13 @@ class Lifter:
                     body.append(f"    WCHK(0x{i.address:x}u);")
                 if self.comments:
                     body.append(f"    /* {i.address:08x}  {i.mnemonic} {i.op_str} */")
+                if i.address in self.hookret:
+                    # the hook may finish the function itself (a stand-in for
+                    # this one call path): it returns nonzero after popping
+                    # the return address, and the lifted body returns
+                    if x87opt and xb.active:
+                        body += ["    "+l for l in xb.close()]
+                    body.append(f"    if (guest_hook_ret(c, 0x{i.address:x}u)) return;")
                 if i.address in self.hooks:
                     # a hook reads and may change ST(0) (widescreen FOV) or
                     # other x87 state: the open X87OPT region is written back
@@ -1903,6 +2085,30 @@ class Lifter:
                     body.append(f"    guest_hook(c, 0x{i.address:x}u);")
                 if m=='jmp':
                     o0=i.operands[0]
+                    if (os.environ.get('PUSHRET','0')=='1' and o0.type==X86_OP_IMM and self.in_text(o0.imm)
+                            and k>0 and ins[k-1].mnemonic=='push' and ins[k-1].operands
+                            and ins[k-1].operands[0].type==X86_OP_IMM and ins[k-1].address+ins[k-1].size==i.address
+                            and self.in_text(ins[k-1].operands[0].imm & 0xffffffff)
+                            and (ins[k-1].operands[0].imm & 0xffffffff) != i.address+i.size):
+                        # `push A; jmp B`: a call to B written as a jump, continuing at A
+                        a_=ins[k-1].operands[0].imm & 0xffffffff
+                        body.append(f"    dispatch_indirect(c, 0x{o0.imm & 0xffffffff:x}u);")
+                        body.append(f"    if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);")
+                        body.append("    return;")
+                        continue
+                    if (os.environ.get('PUSHRET','0')=='1' and o0.type==X86_OP_MEM and o0.size==4
+                            and not o0.mem.base and not o0.mem.index and not o0.mem.segment
+                            and k>0 and ins[k-1].mnemonic=='push' and ins[k-1].operands
+                            and ins[k-1].operands[0].type==X86_OP_IMM and ins[k-1].address+ins[k-1].size==i.address
+                            and self.in_text(ins[k-1].operands[0].imm & 0xffffffff)):
+                        # `push A; jmp dword [slot]`: the same call through a pointer, in
+                        # practice an import (0x19f4e92 calls memmove this way).  Without
+                        # the continuation the rest of the caller never runs.
+                        a_=ins[k-1].operands[0].imm & 0xffffffff
+                        body.append(f"    dispatch_indirect(c, MR32(0x{o0.mem.disp & 0xffffffff:x}u));")
+                        body.append(f"    if (c->eip == 0x{a_:x}u) dispatch_indirect(c, 0x{a_:x}u);")
+                        body.append("    return;")
+                        continue
                     if o0.type==X86_OP_IMM and self.in_text(o0.imm):
                         body.append(f"    goto L_{o0.imm:08x};"); continue
                     if o0.type==X86_OP_IMM:
@@ -1964,6 +2170,15 @@ class Lifter:
                 self.cur_fmask = self.fafter.get(i.address, F_ALL)
                 try:
                     lines = self.insn(i, targets)
+                    # LOCK-prefixed read-modify-write (and xchg with memory, which is
+                    # locked implicitly): the guest's interlocked refcounts and
+                    # spinlocks run on several host threads, so the sequence must not
+                    # interleave with another one.  One process-wide lock (cpu.h).
+                    # Not the stack-relative xchg of the SecuROM call idioms.
+                    if m.startswith('lock ') or (m == 'xchg' and any(
+                            x.type == X86_OP_MEM and x.mem.base != X86_REG_ESP for x in i.operands)):
+                        if not any(('return' in l or 'goto ' in l) for l in lines):
+                            lines = ["GUEST_LOCK();"] + lines + ["GUEST_UNLOCK();"]
                     if x87opt:
                         if m[:1]=='f' or X86_GRP_FPU in i.groups:
                             new_lines = xb.translate(lines)

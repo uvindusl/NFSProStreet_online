@@ -1,4 +1,6 @@
 # Game files: never in git (bring your own copy)
+savedata/
+savedata.*/
 game
 artifacts
 *.exe

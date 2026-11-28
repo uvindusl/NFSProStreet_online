@@ -100,7 +100,7 @@ const ImpEnt g_imp[] = {
   {0x00967178u,"KERNEL32.dll","QueryPerformanceCounter",1},
   {0x0096717cu,"KERNEL32.dll","CreateThread",6},
   {0x00967180u,"KERNEL32.dll","GetFileSizeEx",2},
-  {0x00967184u,"KERNEL32.dll","SetFilePointerEx",4},
+  {0x00967184u,"KERNEL32.dll","SetFilePointerEx",5},
   {0x00967188u,"KERNEL32.dll","RaiseException",4},
   {0x0096718cu,"KERNEL32.dll","ReleaseSemaphore",3},
   {0x00967190u,"KERNEL32.dll","InterlockedDecrement",1},

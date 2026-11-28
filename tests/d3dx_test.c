@@ -203,14 +203,15 @@ void test_matrix_inverse() {
     D3DXMatrixMultiply(&result, &SCALE_MAT, &inv_scale);
     ASSERT_MATRIX_EQ(&result, &IDENTITY, "S * S^-1 = I");
     
-    /* Singular matrix (zero determinant) */
+    /* Singular matrix (zero determinant): like d3dx9 (Wine's reference
+     * D3DXMatrixInverse), return NULL, report det 0 and leave pOut untouched. */
     D3DXMATRIX singular = {0};
-    D3DXMatrixInverse(&result, &det, &singular);
+    D3DXMATRIX before = IDENTITY;
+    result = before;
+    D3DXMATRIX *ret = D3DXMatrixInverse(&result, &det, &singular);
+    ASSERT_TRUE(ret == NULL, "singular inverse returns NULL");
     ASSERT_FLOAT_EQ(det, 0.0f, "det(singular) = 0");
-    /* Result should be zero matrix */
-    for (int i = 0; i < 16; i++) {
-        ASSERT_FLOAT_EQ(((float*)&result)[i], 0.0f, "singular inverse = zero");
-    }
+    ASSERT_MATRIX_EQ(&result, &before, "singular inverse leaves pOut untouched");
 }
 
 void test_vec3_transform() {

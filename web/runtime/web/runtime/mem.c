@@ -18,6 +18,9 @@ CPU *g_cur_cpu = 0;
 #ifndef __wasm__
 uint8_t *g_mem = 0;
 #endif
+/* LOCK-prefixed instructions spin on this (GUEST_LOCK in lifter/runtime/cpu.h);
+ * the native runtime defines it in lifter/runtime/mem.c. */
+volatile unsigned char g_guest_lock = 0;
 uint32_t g_image_base = 0x400000u, g_res_dir_va = 0, g_res_dir_size = 0;
 
 /* watch state: must be defined in every build (debug.c is optional) */
