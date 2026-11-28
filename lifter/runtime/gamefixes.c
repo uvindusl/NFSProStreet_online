@@ -52,6 +52,16 @@ int gamefix_hook(CPU *c, uint32_t ip) {
         c->esi = 0;
         return 1;
     }
+    /* Not a fix: the pool allocator's out-of-memory report (sub_00435eb0
+     * prints it through sub_004324e0 and then asserts); the game's own
+     * output goes nowhere here, so print it. */
+    case HOOK_SITE(0x004360fc): {
+        uint32_t sp = c->esp;   /* fmt, pool name, 0, what, size... pushed in reverse */
+        const char *pool = mem_is_committed(MR32(sp + 4)) ? (const char *)g_mem + MR32(sp + 4) : "?";
+        fprintf(stderr, "pool: ERROR out of memory in pool %.40s: args %#x %#x %#x %#x (total? %u)\n",
+                pool, MR32(sp + 8), MR32(sp + 12), MR32(sp + 16), MR32(sp + 20), MR32(sp + 24));
+        return 1;
+    }
     /* Not a fix: the chunk loader (sub_006d2c70) asserts with mov [0],0 when
      * no handler accepts a chunk; say which chunk before it does. */
     case HOOK_SITE(0x006d2d23):
