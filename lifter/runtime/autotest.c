@@ -13,7 +13,8 @@
  *                            (default 6), then wait as long again
  *   tap=28:FeMainMenu.fng[:T] tap scan code 28 every 60 frames until that
  *                            package has control (a dialog that ignores
- *                            accept while it is still busy); T as for wait
+ *                            accept while it is still busy); T as for wait;
+ *                            tap=28:!PKG taps until PKG no longer has control
  *   text=PLAYER              type it (WM_CHAR, PROSTREET_TEXT's path)
  *   frames=N                 wait N frames
  *   dialog[:T]               until the open dialog (DialogInstance
@@ -144,7 +145,7 @@ void autotest_tick(long frame) {
         break;
     }
     case S_TAP:
-        if (!strcasecmp(top_package(), s->s)) { g_script_key = -1; fprintf(stderr, "script: frame %ld: %s has control\n", frame, s->s); done = 1; }
+        if (s->s[0] == '!' ? strcasecmp(top_package(), s->s + 1) != 0 : !strcasecmp(top_package(), s->s)) { g_script_key = -1; fprintf(stderr, "script: frame %ld: %s has control\n", frame, s->s); done = 1; }
         else if (el > s->a) { g_script_key = -1; fprintf(stderr, "script: frame %ld: gave up tapping for %s (control: %s); script stopped\n", frame, s->s, top_package()); g_cur = g_nsteps; return; }
         else g_script_key = (el % 60) < 6 ? (int)s->b : -1;
         break;
