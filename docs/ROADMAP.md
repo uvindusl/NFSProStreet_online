@@ -51,13 +51,15 @@ In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime start
 | Fix NULL dereference in `sub_00530f60` (`0x00531064`) | `lifter/runtime/dispatch.c` | Registered `sub_005310e0_impl` safe override in `g_dtab` to cleanly complete collection iteration. All 251 attributes complete validation cleanly. |
 | Verify secondary asset chunks | `scripts/run_boot.sh` | Confirm remaining BUN files (`BOOT.BUN`, `IN_GAME.BUN`) mount cleanly |
 
-### 1.4 Window Message Pump & D3D9 Present (DONE)
+### 1.4 Window Message Pump & D3D9 Present (IMPLEMENTED, NOT BOOT-VERIFIED)
 
 | Task | File(s) | Details |
 |---|---|---|
 | Implement `CreateWindowExA` & window handle | `lifter/runtime/win32.c` | Return valid HWND, enqueues startup window messages (`WM_SHOWWINDOW`, `WM_ACTIVATEAPP`, `WM_ACTIVATE`, `WM_SETFOCUS`, `WM_PAINT`) |
 | Implement message loop pumping (`PeekMessageA`, `GetMessageA`, `DispatchMessageA`) | `lifter/runtime/win32.c` | Drain OS messages to prevent game thread stall, dispatch to guest wndproc with re-entry guard |
 | Implement `IDirect3DDevice9::Present` & scene lifecycle | `lifter/runtime/com.c` | `BeginScene`, `EndScene`, `Present`, `Clear`, `Reset`, and `TestCooperativeLevel` implemented |
+
+**Evidence so far:** `docs/milestones.md` (B4) records DisplayDevice/IDirect3D initialization, and `debug/prostreet-regression.md` covers a standalone D3D9 `Present` harness. There is not yet a boot log showing the game main loop reaching `Present()`.
 
 **Done when:** `./out/prostreet` loads assets, opens a window, and ticks the main loop through `Present()`.
 
@@ -174,8 +176,8 @@ In the unpacked memory image (`artifacts/nfs.exe.unpacked`), the C runtime start
 flowchart LR
     A["Fix CRT Boot\n(Done ✅)"] --> B["Reach WinMain()\n(Done ✅)"]
     B --> C["Attribute Tree Fix\n(Phase 1.3 ✅)"]
-    C --> D["Window Message Pump\n(Phase 1.4 ✅)"]
-    D --> E["Secondary Assets\n(next task 🟡)"]
+    C --> D["Window Message Pump\n(implemented, not boot-proven)"]
+    D --> E["Prove Present + Secondary Assets\n(next task 🟡)"]
     E --> F["D3DX Effects + Rendering\n(Phase 2)"]
     F --> G["Game Systems\n(Phase 3)"]
     F --> H["WebGPU Port\n(Phase 4)"]
@@ -183,4 +185,4 @@ flowchart LR
     H --> J["Playable in Browser\n🌐"]
 ```
 
-> **Current status**: Phase 1.3 (attribute tree validation via `sub_005310e0_impl` safe override in `g_dtab`) and Phase 1.4 (Win32 window message pump and D3D9/D3DX scene lifecycle) are resolved. Next task: secondary asset processing and engine scene initialization.
+> **Current status**: Phase 1.3 (attribute tree validation via `sub_005310e0_impl` safe override in `g_dtab`) is resolved. Phase 1.4 HLE is implemented (Win32 window message pump and D3D9/D3DX scene lifecycle), but the end-to-end `Done when` gate — the game main loop reaching `Present()` in a boot log — is not yet proven. Next task: boot-verify `Present()`, then secondary asset processing and engine scene initialization.

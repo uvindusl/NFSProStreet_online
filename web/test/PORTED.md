@@ -23,6 +23,7 @@ or roam features.
 | File | Reason |
 |------|--------|
 | cpu-semantics.test.mjs | Synthetic CPU shader semantics checks for `cmp`/`lrp`; no NFSU2 counterpart |
+| docs-inventory.test.mjs | Guards debug-note links and this test inventory against drift |
 
 ## Deliberately excluded files
 
