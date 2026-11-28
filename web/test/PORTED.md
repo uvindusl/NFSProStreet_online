@@ -15,8 +15,14 @@ or roam features.
 | memcmp.test.mjs | Tests `runtime/web/memcmp.c` via wasi-sdk; target exists |
 | memcmp_unit.c | C unit source for memcmp/bcmp wasm test |
 | runtime-unit.test.mjs | Native runtime unit tests (macOS/clang only, skipped on Linux) |
-| unit-tests.mjs | Test runner: discovers `web/test/*.test.mjs` and runs under `node --test` |
 | wasi-run.mjs | Wasm runner helper required by memcmp.test.mjs |
+| `web/tools/unit-tests.mjs` | Test runner: discovers `web/test/*.test.mjs` and runs under `node --test` |
+
+## New in this port
+
+| File | Reason |
+|------|--------|
+| cpu-semantics.test.mjs | Synthetic CPU shader semantics checks for `cmp`/`lrp`; no NFSU2 counterpart |
 
 ## Deliberately excluded files
 

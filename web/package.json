@@ -1,9 +1,9 @@
 {
-  "name": "nfsu2-web",
+  "name": "prostreet-web",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "NFS Underground 2 in the browser: the recompiled game as WebAssembly, WebGPU renderer, Web Audio, your own game files",
+  "description": "Need for Speed: ProStreet in the browser: the recompiled game as WebAssembly, WebGPU renderer, Web Audio, your own game files",
   "scripts": {
     "start": "bash ./start.sh",
     "build": "node build.mjs",
