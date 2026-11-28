@@ -402,6 +402,37 @@ int main(void) {
     ASSERT_TRUE(mem_is_committed(patched_child2 + 0x22u), "Stack-return patched sentinel safe at offset 0x22");
 
     /* -------------------------------------------------------------- */
+    /* Test Suite 3b: Effect preshader (PRES) interpreter             */
+    /* -------------------------------------------------------------- */
+    printf("\n--- Test Suite 3b: Effect preshader (PRES) interpreter ---\n");
+    {
+        /* inputs c0 = (1,2,3), c1 = (4,5,6); literals 2.0, 0.5 */
+        static uint32_t code[] = {
+            0x20500001u, 2, 0,2,0,  0,1,0,  0,4,0,              /* mul   o0.x   = i0.x * lit0          */
+            0x20400003u, 2, 0,2,4,  0,2,0,  0,7,0,              /* add   t0.xyz = i1.xyz + i0.xyz      */
+            0x50000003u, 2, 0,7,0,  0,2,4,  0,4,4,              /* dot   o1.x   = dot3(t0, i1)         */
+            0xa0500003u, 2, 0,1,1,  0,2,0,  0,4,8,              /* mul   o2.xyz = lit1 (scalar) * i0   */
+            0x30000001u, 3, 0,2,0,  0,1,0,  0,1,1,  0,4,12,     /* cmp   o3.x   = i0.x >= 0 ? lit0 : lit1 */
+            0x10100001u, 1, 1,1,1,2,0,      0,4,16,             /* neg   o4.x   = -i[round(lit1)*4].x  */
+        };
+        static float lit[] = { 2.0f, 0.5f };
+        FxPres pr = { 0 };
+        pr.lit = lit; pr.nlit = 2; pr.code = code; pr.ncode = (int)(sizeof code / 4); pr.nins = 6;
+        PresRegs *r = calloc(1, sizeof *r);
+        r->in[0] = 1; r->in[1] = 2; r->in[2] = 3; r->in[4] = 4; r->in[5] = 5; r->in[6] = 6;
+        ASSERT_TRUE(pres_run(&pr, r), "preshader program runs");
+        ASSERT_TRUE(fabsf(r->out[0] - 2.0f) < 1e-6f, "mul: o0.x = 1 * 2");
+        ASSERT_TRUE(fabsf(r->out[4] - 109.0f) < 1e-4f, "add then dot3: (5,7,9).(4,5,6) = 109");
+        ASSERT_TRUE(fabsf(r->out[8] - 0.5f) < 1e-6f && fabsf(r->out[9] - 1.0f) < 1e-6f && fabsf(r->out[10] - 1.5f) < 1e-6f,
+                    "scalar mul: 0.5 * (1,2,3)");
+        ASSERT_TRUE(fabsf(r->out[12] - 2.0f) < 1e-6f, "cmp: 1 >= 0 picks the first literal");
+        ASSERT_TRUE(fabsf(r->out[16] + 1.0f) < 1e-6f, "relative addressing: index lit1 (0.5) rounds to register 0");
+        ASSERT_TRUE(r->written[0] && r->written[1] && r->written[2] && r->written[3] && r->written[4] && !r->written[5],
+                    "written registers are o0-o4");
+        free(r);
+    }
+
+    /* -------------------------------------------------------------- */
     /* Test Suite 4: Window Message Filtering & Routing               */
     /* -------------------------------------------------------------- */
     printf("\n--- Test Suite 4: Window Message Filtering & Routing ---\n");
